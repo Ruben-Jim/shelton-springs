@@ -78,3 +78,28 @@ if (fs.existsSync(privacyPolicyPath)) {
 } else {
   console.log('⚠️ privacy-policy.html not found in project root');
 }
+<<<<<<< HEAD
+=======
+
+// Copy terms-of-service.html to dist folder
+const termsOfServicePath = path.join(__dirname, '../terms-of-service.html');
+const distTermsOfServicePath = path.join(distDir, 'terms-of-service.html');
+
+if (fs.existsSync(termsOfServicePath)) {
+  fs.copyFileSync(termsOfServicePath, distTermsOfServicePath);
+  console.log('✅ Terms of Service copied to dist folder');
+} else {
+  console.log('⚠️ terms-of-service.html not found in project root');
+}
+
+// Copy contact.html to dist folder
+const contactPath = path.join(__dirname, '../contact.html');
+const distContactPath = path.join(distDir, 'contact.html');
+
+if (fs.existsSync(contactPath)) {
+  fs.copyFileSync(contactPath, distContactPath);
+  console.log('✅ Contact page copied to dist folder');
+} else {
+  console.log('⚠️ contact.html not found in project root');
+}
+>>>>>>> 7cb713f (adding contact, privacy-policy, and terms of service)
