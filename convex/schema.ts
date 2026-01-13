@@ -84,6 +84,7 @@ export default defineSchema({
       v.literal("Lost & Found")
     ),
     images: v.optional(v.array(v.string())), // Array of image URLs
+    link: v.optional(v.string()), // Optional link URL
     likes: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -142,11 +143,17 @@ export default defineSchema({
       v.literal("Overdue")
     ),
     paymentMethod: v.union(
-      v.literal("Venmo")
+      v.literal("Venmo"),
+      v.literal("Check"),
+      v.literal("Cash")
     ),
-      transactionId: v.string(),             // Venmo transaction ID
-    venmoUsername: v.optional(v.string()), // User's Venmo username
-    venmoTransactionId: v.optional(v.string()), // User-provided Venmo transaction ID
+    transactionId: v.string(),             // Payment reference ID (Venmo transaction, check number, etc.)
+    venmoUsername: v.optional(v.string()), // User's Venmo username (Venmo payments only)
+    venmoTransactionId: v.optional(v.string()), // User-provided Venmo transaction ID (Venmo payments only)
+    checkNumber: v.optional(v.string()),   // Check number (Check payments only)
+    notes: v.optional(v.string()),         // Admin notes
+    receiptImage: v.optional(v.string()),  // Storage ID for receipt screenshot
+    adminNotes: v.optional(v.string()),   // Admin notes when verifying/rejecting
     verificationStatus: v.optional(v.union(
       v.literal("Pending"),
       v.literal("Verified"),
@@ -233,4 +240,15 @@ export default defineSchema({
     content: v.string(), // Message text
     createdAt: v.number(),
   }).index("by_conversation", ["conversationId"]),
+
+  userNotifications: defineTable({
+    userId: v.string(), // Recipient user ID
+    type: v.string(), // Notification type (community_post, poll, payment_pending, etc.)
+    title: v.string(), // Notification title
+    body: v.string(), // Notification body
+    data: v.optional(v.any()), // Additional notification data
+    isRead: v.boolean(), // Whether user has seen/read the notification
+    createdAt: v.number(), // Timestamp
+  }).index("by_user", ["userId"])
+    .index("by_user_unread", ["userId", "isRead"]),
 }); 

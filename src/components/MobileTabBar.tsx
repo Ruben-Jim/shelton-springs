@@ -23,6 +23,7 @@ import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
 import CustomAlert from './CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
+import { confirmAlert } from '../utils/webCompatibleAlert';
 import ProfileImage from './ProfileImage';
 import { getUploadReadyImage } from '../utils/imageUpload';
 
@@ -52,16 +53,16 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
   // Get user's profile image from residents table
   const residents = useQuery(api.residents.getAll) ?? [];
   const currentUser = residents.find(resident => resident.email === user?.email);
-  const currentUserImageUrl = useQuery(
-    api.storage.getUrl,
-    currentUser?.profileImage && !currentUser.profileImage.startsWith('http') ? { storageId: currentUser.profileImage as any } : "skip"
-  );
-  const displayImageUrl = currentUser?.profileImage?.startsWith('http') ? currentUser.profileImage : currentUserImageUrl;
+  const displayImageUrl = currentUser?.profileImageUrl;
   
   // Convex mutations
   const updateResident = useMutation(api.residents.update);
   const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
   const deleteStorageFile = useMutation(api.storage.deleteStorageFile);
+  const deleteResident = useMutation(api.residents.remove);
+  
+  // Account deletion state
+  const [deleting, setDeleting] = useState(false);
   
   const isMenuOpen = externalIsMenuOpen !== undefined ? externalIsMenuOpen : internalMenuOpen;
   
@@ -125,8 +126,8 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
     // { name: 'ResidentNotifications', icon: 'home', label: 'Residents', color: '#6b7280' },
     { name: 'Covenants', icon: 'document-text', label: 'Covenants', color: '#6b7280' },
     { name: 'Documents', icon: 'folder', label: 'Documents', color: '#6b7280' },
-    // Hide fees tab for renters and regular residents (only show for board members and dev users)
-    ...(isBoardMember || isDev ? [{ name: 'Fees', icon: 'card', label: 'Fees', color: '#6b7280' }] : []),
+    // Hide fees tab for renters and regular residents (only show for board members and homeowners)
+    ...(isBoardMember || !isRenter ? [{ name: 'Fees', icon: 'card', label: 'Fees', color: '#6b7280' }] : []),
     ...(isBoardMember || isDev ? [{ name: 'Admin', icon: 'settings', label: 'Admin', color: '#6b7280' }] : []),
   ];
 
@@ -374,15 +375,103 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
     }
   };
 
+  const performSignOut = async () => {
+    try {
+      // Close profile modal first
+      setShowProfileModal(false);
+      await signOut();
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
+  };
+
   const handleSignOut = () => {
+    if (Platform.OS === 'web') {
+      // Use CustomAlert on web
+      showAlert({
+        title: 'Sign Out',
+        message: 'Are you sure you want to sign out?',
+        type: 'warning',
+        buttons: [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Sign Out', style: 'destructive', onPress: performSignOut }
+        ]
+      });
+    } else {
+      // Use webCompatibleAlert (which uses Alert.alert) on mobile
+      confirmAlert(
+        'Are you sure you want to sign out?',
+        'Sign Out',
+        performSignOut
+      );
+    }
+  };
+  
+const handleDeleteAccount = () => {
+  if (Platform.OS === 'web') {
+    // Use CustomAlert on web
     showAlert({
-      title: 'Sign Out',
-      message: 'Are you sure you want to sign out?',
+      title: 'Delete Account',
+      message: 'Are you sure you want to permanently delete your account? This action cannot be undone and all your data will be lost.',
+      type: 'error',
       buttons: [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Sign Out', style: 'destructive', onPress: signOut }
+        {
+          text: 'Delete Account',
+          style: 'destructive',
+          onPress: confirmDeleteAccount,
+        }
       ]
     });
+  } else {
+    // Use webCompatibleAlert (which uses Alert.alert) on mobile
+    confirmAlert(
+      'Are you sure you want to permanently delete your account? This action cannot be undone and all your data will be lost.',
+      'Delete Account',
+      confirmDeleteAccount
+    );
+  }
+};
+
+  const confirmDeleteAccount = async () => {
+    if (!currentUser) {
+      Alert.alert('Error', 'Unable to find your account. Please try again.');
+      return;
+    }
+
+    try {
+      setDeleting(true);
+      
+      // Close the profile modal first
+      setShowProfileModal(false);
+      setProfileImage(null);
+      
+      // Delete profile image from storage if exists
+      if (currentUser.profileImage && !currentUser.profileImage.startsWith('http')) {
+        try {
+          await deleteStorageFile({ storageId: currentUser.profileImage as any });
+        } catch (error) {
+          console.log('Error deleting profile image (continuing with account deletion):', error);
+        }
+      }
+      
+      // Delete the resident from Convex
+      await deleteResident({ id: currentUser._id as any });
+      
+      // Sign out and clear local storage
+      await signOut();
+      
+      // Show success message using native Alert
+      Alert.alert('Account Deleted', 'Your account has been permanently deleted.');
+    } catch (error: any) {
+      console.error('Error deleting account:', error);
+      Alert.alert(
+        'Error',
+        error?.message || 'Failed to delete account. Please try again or contact support.'
+      );
+    } finally {
+      setDeleting(false);
+    }
   };
 
   return (
@@ -467,7 +556,7 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
               <View style={styles.userSection} pointerEvents="box-none">
                 <View style={styles.userInfo} pointerEvents="box-none">
                   <ProfileImage 
-                    source={currentUser?.profileImage} 
+                    source={currentUser?.profileImageUrl} 
                     size={40}
                     style={{ marginRight: 12 }}
                   />
@@ -571,11 +660,16 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
                 </TouchableOpacity>
               </View>
 
-              <ScrollView style={styles.profileModalBody} showsVerticalScrollIndicator={false}>
+              <ScrollView 
+                style={styles.profileModalBody} 
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.profileModalBodyContent}
+                bounces={true}
+              >
                 {/* Large Profile Image Display */}
                 <View style={styles.profileImageDisplayContainer}>
                   <ProfileImage 
-                    source={profileImage ? profileImage : currentUser?.profileImage} 
+                    source={profileImage ? profileImage : currentUser?.profileImageUrl} 
                     size={120}
                     style={styles.largeProfileImage}
                     initials={currentUser ? `${currentUser.firstName?.[0] || ''}${currentUser.lastName?.[0] || ''}` : undefined}
@@ -648,22 +742,36 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
                   </View>
                 )}
 
-                {/* Logout Button */}
-                <TouchableOpacity
-                  style={styles.logoutButton}
-                  onPress={handleSignOut}
-                  disabled={uploading || removing}
-                >
-                  <Ionicons name="log-out-outline" size={20} color="#ef4444" />
-                  <Text style={styles.logoutButtonText}>Sign Out</Text>
-                </TouchableOpacity>
+                {/* Account Actions Section (always visible) */}
+                <View style={styles.accountActionsSection}>
+                  
+                  {/* Sign Out Button */}
+                  <TouchableOpacity
+                    style={styles.logoutButton}
+                    onPress={handleSignOut}
+                    disabled={uploading || removing || deleting}
+                  >
+                    <Ionicons name="log-out-outline" size={20} color="#ef4444" />
+                    <Text style={styles.logoutButtonText}>Sign Out</Text>
+                  </TouchableOpacity>
+
+                  {/* Delete Account Button */}
+                  <TouchableOpacity
+                    style={styles.deleteAccountButton}
+                    onPress={handleDeleteAccount}
+                    disabled={uploading || removing || deleting}
+                  >
+                    <Ionicons name="trash-outline" size={20} color="#dc2626" />
+                    <Text style={styles.deleteAccountButtonText}>Delete Account</Text>
+                  </TouchableOpacity>
+                </View>
               </ScrollView>
               </Animated.View>
             </View>
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* Custom Alert */}
+      {/* Custom Alert - kept for other potential uses */}
       <CustomAlert
         visible={alertState.visible}
         title={alertState.title}
@@ -831,19 +939,17 @@ const styles = StyleSheet.create({
   },
   profileModalContent: {
     backgroundColor: '#ffffff',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
+    borderRadius: 24,
     padding: 0,
     width: '90%',
     maxHeight: '90%',
-    minHeight: '70%',
+    minHeight: '76%',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.3,
     shadowRadius: 20,
     elevation: 15,
+    overflow: 'hidden',
   },
   profileModalHeader: {
     flexDirection: 'row',
@@ -868,9 +974,12 @@ const styles = StyleSheet.create({
   },
   profileModalBody: {
     flex: 1,
+  },
+  profileModalBodyContent: {
     paddingHorizontal: 24,
-    paddingVertical: 20,
-    paddingBottom: 20,
+    paddingTop: 20,
+    paddingBottom: 40,
+    flexGrow: 1,
   },
   profileImageDisplayContainer: {
     alignItems: 'center',
@@ -1009,6 +1118,22 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  accountActionsSection: {
+    marginTop: 24,
+    paddingTop: 20,
+    paddingBottom: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+    gap: 12,
+  },
+  accountActionsSectionTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6b7280',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
   logoutButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1017,12 +1142,27 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     gap: 8,
-    marginTop: 20,
     borderWidth: 1,
     borderColor: '#fecaca',
   },
   logoutButtonText: {
     color: '#ef4444',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  deleteAccountButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fef2f2',
+    borderRadius: 12,
+    padding: 16,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#ef4444',
+  },
+  deleteAccountButtonText: {
+    color: '#dc2626',
     fontSize: 16,
     fontWeight: '600',
   },

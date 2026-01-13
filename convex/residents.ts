@@ -5,7 +5,19 @@ import { v } from "convex/values";
 export const getAll = query({
   args: {},
   handler: async (ctx) => {
-    return await ctx.db.query("residents").collect();
+    const residents = await ctx.db.query("residents").collect();
+
+    // Resolve profile image URLs
+    const residentsWithUrls = await Promise.all(residents.map(async (resident) => ({
+      ...resident,
+      profileImageUrl: resident.profileImage
+        ? (resident.profileImage.startsWith('http')
+            ? resident.profileImage  // Already a URL, use directly
+            : await ctx.storage.getUrl(resident.profileImage))  // Resolve storage ID
+        : null
+    })));
+
+    return residentsWithUrls;
   },
 });
 
@@ -155,10 +167,22 @@ export const authenticate = query({
 export const getActive = query({
   args: {},
   handler: async (ctx) => {
-    return await ctx.db
+    const residents = await ctx.db
       .query("residents")
       .filter((q) => q.eq(q.field("isActive"), true))
       .collect();
+
+    // Resolve profile image URLs
+    const residentsWithUrls = await Promise.all(residents.map(async (resident) => ({
+      ...resident,
+      profileImageUrl: resident.profileImage
+        ? (resident.profileImage.startsWith('http')
+            ? resident.profileImage  // Already a URL, use directly
+            : await ctx.storage.getUrl(resident.profileImage))  // Resolve storage ID
+        : null
+    })));
+
+    return residentsWithUrls;
   },
 });
 

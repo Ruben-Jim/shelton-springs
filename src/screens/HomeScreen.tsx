@@ -307,12 +307,12 @@ const HomeScreen = () => {
           {
         opacity: fadeAnim,
           },
-          Platform.OS === 'ios' && styles.headerContainerIOS
+          styles.headerContainerIOS
         ]}
       >
         <ImageBackground
           source={require('../../assets/hoa-4k.jpg')}
-          style={styles.header}
+          style={[styles.header, !isBoardMember && styles.headerNonMember]}
           imageStyle={styles.headerImage}
           resizeMode="stretch"
         >
@@ -330,9 +330,12 @@ const HomeScreen = () => {
           
           <View style={styles.headerLeft}>
             <Text style={styles.welcomeText}>Welcome to</Text>
-            <Text style={styles.hoaName}>{hoaInfo?.name ?? 'Shelton Springs'}</Text>
+            <Text style={styles.hoaName}>{hoaInfo?.name ?? 'HOA'}</Text>
             <Text style={styles.subtitle}>Your Community Connection</Text>
           </View>
+
+          {/* Spacer for non-board members to center the text */}
+          {!isBoardMember && <View style={styles.headerSpacer} />}
 
           {/* Messaging Button - Board Members Only */}
           {isBoardMember && (
@@ -357,34 +360,6 @@ const HomeScreen = () => {
           </View>
         )}
         </ImageBackground>
-      </Animated.View>
-
-      {/* Beta Notice Banner */}
-      <Animated.View style={[
-        styles.betaBanner,
-        {
-          opacity: fadeAnim,
-        }
-      ]}>
-        <View style={styles.betaBannerContent}>
-          <View style={styles.betaBadge}>
-            <Ionicons name="construct" size={16} color="#ffffff" />
-            <Text style={styles.betaBadgeText}>BETA</Text>
-          </View>
-          <View style={styles.betaTextContainer}>
-            <Text style={styles.betaTitle}>App is Currently in Beta</Text>
-            <Text style={styles.betaMessage}>
-              You'll see frequent updates as we continue to improve. If you encounter any problems or have feedback, please contact the developer.
-            </Text>
-            <TouchableOpacity
-              style={styles.betaContactButton}
-              onPress={() => Linking.openURL('mailto:ruben.jim.co@gmail.com')}
-            >
-              <Ionicons name="mail" size={16} color="#2563eb" />
-              <Text style={styles.betaContactText}>Contact Developer</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
       </Animated.View>
 
       {/* Custom Tab Bar - Only when screen is wide enough */}
@@ -457,24 +432,33 @@ const HomeScreen = () => {
         </View>
         {(communityPosts?.filter((post: any) => post.category !== 'Complaint') || []).slice(0, 2).map((post: any, index: number) => {
           return (
-            <Animated.View 
-              key={post._id} 
-              style={[
-                styles.postCard,
-                {
-                  opacity: postsAnim,
-                  transform: [{
-                    translateY: postsAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [30 + (index * 20), 0],
-                    })
-                  }]
-                }
-              ]}
+            <TouchableOpacity
+              key={post._id}
+              activeOpacity={0.8}
+              onPress={() => {
+                navigation.navigate('Community' as never, {
+                  activeSubTab: 'posts',
+                  selectedPostId: post._id
+                });
+              }}
             >
+              <Animated.View
+                style={[
+                  styles.postCard,
+                  {
+                    opacity: postsAnim,
+                    transform: [{
+                      translateY: postsAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [30 + (index * 20), 0],
+                      })
+                    }]
+                  }
+                ]}
+              >
               <View style={styles.postHeader}>
                 <View style={styles.postAuthorInfo}>
-                  <ProfileImage source={post.authorProfileImage} size={40} style={{ marginRight: 8 }} />
+                  <ProfileImage source={post.authorProfileImageUrl} size={40} style={{ marginRight: 8 }} />
                   <Text style={styles.postAuthor}>{post.author}</Text>
                 </View>
                 <Text style={styles.postCategory}>{post.category}</Text>
@@ -493,7 +477,8 @@ const HomeScreen = () => {
                   <Text style={styles.postStatsText}>{post.comments?.length ?? 0}</Text>
                 </View>
               </View>
-            </Animated.View>
+              </Animated.View>
+            </TouchableOpacity>
           );
         })}
         
@@ -813,6 +798,9 @@ const styles = StyleSheet.create({
     width: Dimensions.get('window').width,
     alignSelf: 'stretch',
     overflow: 'hidden',
+    marginLeft: 0,
+    marginRight: 0,
+    marginHorizontal: 0,
   },
   header: {
     height: 240,
@@ -824,13 +812,23 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'stretch',
   },
+  headerNonMember: {
+    height: 215,
+    padding: 20,
+    paddingTop: 40,
+    paddingBottom: 20,
+    position: 'relative',
+    justifyContent: 'space-between',
+    width: '100%',
+    alignSelf: 'stretch',
+  },
   headerImage: {
     borderRadius: 0,
-    width: Platform.OS === 'ios' ? Dimensions.get('window').width + 40 : '100%',
+    width: Dimensions.get('window').width,
     height: 240,
     position: 'absolute',
-    left: Platform.OS === 'ios' ? -20 : 0,
-    right: Platform.OS === 'ios' ? -20 : 0,
+    left: 0,
+    right: 0,
     top: 0,
     bottom: 0,
   },
@@ -853,6 +851,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 1,
+  },
+  headerSpacer: {
+    width: 44, // Same width as MessagingButton (icon + padding)
   },
   menuButton: {
     padding: 8,
@@ -910,21 +911,21 @@ const styles = StyleSheet.create({
     textShadow: '2px 2px 4px rgba(0, 0, 0, 0.9)' as any,
     textAlign: 'center',
   } as any),
-  quickActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    padding: 20,
-    backgroundColor: '#ffffff',
-    margin: 15,
-    borderRadius: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 4,
-    borderWidth: 1,
-    borderColor: '#f1f5f9',
-  },
+  // quickActions: {
+  //   flexDirection: 'row',
+  //   justifyContent: 'space-around',
+  //   padding: 20,
+  //   backgroundColor: '#ffffff',
+  //   margin: 15,
+  //   borderRadius: 16,
+  //   shadowColor: '#000',
+  //   shadowOffset: { width: 0, height: 4 },
+  //   shadowOpacity: 0.08,
+  //   shadowRadius: 12,
+  //   elevation: 4,
+  //   borderWidth: 1,
+  //   borderColor: '#f1f5f9',
+  // },
   actionButton: {
     alignItems: 'center',
     padding: 15,
@@ -1215,73 +1216,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 8,
-  },
-  betaBanner: {
-    marginHorizontal: 20,
-    marginTop: 16,
-    marginBottom: 8,
-    backgroundColor: '#fef3c7',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#fbbf24',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  betaBannerContent: {
-    flexDirection: 'row',
-    padding: 16,
-    alignItems: 'flex-start',
-  },
-  betaBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f59e0b',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    marginRight: 12,
-  },
-  betaBadgeText: {
-    color: '#ffffff',
-    fontSize: 11,
-    fontWeight: '700',
-    marginLeft: 4,
-    letterSpacing: 0.5,
-  },
-  betaTextContainer: {
-    flex: 1,
-  },
-  betaTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#92400e',
-    marginBottom: 6,
-  },
-  betaMessage: {
-    fontSize: 13,
-    color: '#78350f',
-    lineHeight: 18,
-    marginBottom: 10,
-  },
-  betaContactButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    backgroundColor: '#ffffff',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#fbbf24',
-  },
-  betaContactText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#2563eb',
-    marginLeft: 6,
   },
   infoCard: {
     backgroundColor: '#ffffff',

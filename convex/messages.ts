@@ -41,6 +41,14 @@ export const getUserConversations = query({
           );
         }
 
+        // Resolve profile image URL if exists
+        let profileImageUrl = null;
+        if (otherParticipant?.profileImage) {
+          profileImageUrl = otherParticipant.profileImage.startsWith('http')
+            ? otherParticipant.profileImage  // Already a URL, use directly
+            : await ctx.storage.getUrl(otherParticipant.profileImage);  // Resolve storage ID
+        }
+
         return {
           ...conv,
           latestMessage,
@@ -49,7 +57,7 @@ export const getUserConversations = query({
                 id: otherParticipant._id,
                 name: `${otherParticipant.firstName} ${otherParticipant.lastName}`,
                 email: otherParticipant.email,
-                profileImage: otherParticipant.profileImage,
+                profileImageUrl,
                 isBoardMember: otherParticipant.isBoardMember,
               }
             : null,

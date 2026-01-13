@@ -10,13 +10,18 @@
     },
     "preview": {
       "distribution": "internal",
-      "ios": { "simulator": false }
+      "android": {
+        "buildType": "apk"
+      },
+      "ios": { 
+        "simulator": false 
+      }
     },
     "production": {
       "autoIncrement": true,
       "android": {
         "buildType": "app-bundle",
-        "gradleCommand": ":app:bundleRelease"
+        "resourceClass": "large"
       },
       "ios": {
         "buildConfiguration": "Release"
@@ -27,7 +32,8 @@
   "submit": {
     "production": {
       "android": {
-        "track": "internal"
+        "track": "internal",
+        "serviceAccountKeyPath": "./credentials/shelton-springs-35b0fbc3c527.json"
       },
       "ios": {
         "appleId": "ruben0574846@icloud.com",

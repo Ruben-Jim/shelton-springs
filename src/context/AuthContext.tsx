@@ -49,7 +49,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const userData = await AsyncStorage.getItem('user');
       if (userData) {
         const user = JSON.parse(userData);
-        console.log('🔄 Restored user from storage:', user.email);
         setAuthState({
           user,
           isAuthenticated: true,
@@ -143,9 +142,27 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const signOut = async () => {
     try {
-      // Clear user from AsyncStorage
-      await AsyncStorage.removeItem('user');
-      console.log('👋 User logged out and removed from storage');
+      const userId = authState.user?._id;
+      
+      // Clear all user-related data from AsyncStorage
+      const keysToRemove = [
+        'user',
+        'notificationSettings',
+        'webNotificationSettings',
+        'latestNotificationSettings',
+        'latestWebNotificationSettings',
+        // User-specific keys
+        ...(userId ? [`onboarding_seen_${userId}`] : []),
+      ];
+      
+      // Remove all keys in parallel for better performance
+      await Promise.all(keysToRemove.map(key => 
+        AsyncStorage.removeItem(key).catch(err => 
+          console.log(`Failed to remove ${key}:`, err)
+        )
+      ));
+      
+      console.log('👋 User logged out and all data removed from storage');
       
       setAuthState({
         user: null,
@@ -154,6 +171,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       });
     } catch (error) {
       console.log('❌ Error during logout:', error);
+      // Still clear the auth state even if storage cleanup fails
       setAuthState({
         user: null,
         isAuthenticated: false,

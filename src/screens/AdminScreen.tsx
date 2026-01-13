@@ -34,6 +34,11 @@ import MobileTabBar from '../components/MobileTabBar';
 import ProfileImage from '../components/ProfileImage';
 import OptimizedImage from '../components/OptimizedImage';
 import { getUploadReadyImage } from '../utils/imageUpload';
+import {
+  notifyNewFine,
+  notifyNewPoll,
+  notifyBoardUpdate
+} from '../utils/notificationHelpers';
 
 const AdminScreen = () => {
   const { user } = useAuth();
@@ -78,6 +83,7 @@ const AdminScreen = () => {
   const pollsData = useQuery(api.polls.getPaginated, { limit: pollsLimit, offset: 0 });
   const polls = pollsData?.items ?? [];
   const pendingVenmoPayments = useQuery(api.payments.getPendingVenmoPayments) ?? [];
+  const allPayments = useQuery(api.payments.getAllPayments) ?? [];
   const pets = useQuery(api.pets.getAll) ?? [];
   const hoaInfo = useQuery(api.hoaInfo.get) ?? null;
 
@@ -121,17 +127,48 @@ const AdminScreen = () => {
     };
   }, [residents]);
 
-  // Fees grouped by userId for quick lookup
+
+  // Fees grouped by userId for quick lookup (includes fees by address for households)
   const feesByUserId = useMemo(() => {
     const map = new Map<string, any[]>();
+    
+    // First, build address map for homeowners
+    const addressMap = new Map<string, string[]>();
+    homeownersList.forEach((homeowner: any) => {
+      const addressKey = `${homeowner.address}${homeowner.unitNumber ? ` Unit ${homeowner.unitNumber}` : ''}`;
+      if (!addressMap.has(addressKey)) {
+        addressMap.set(addressKey, []);
+      }
+      addressMap.get(addressKey)!.push(homeowner._id);
+    });
+    
     allFeesFromDatabase.forEach((fee: any) => {
+      // Track which homeowner IDs have already received this fee
+      const homeownerIdsWithFee = new Set<string>();
+      
+      // If fee has an address, add it to all homeowners at that address
+      if (fee.address) {
+        const homeownerIds = addressMap.get(fee.address) || [];
+        homeownerIds.forEach((homeownerId: string) => {
+          const userIdString = String(homeownerId);
+          const existing = map.get(userIdString) || [];
+          map.set(userIdString, [...existing, fee]);
+          homeownerIdsWithFee.add(userIdString);
+        });
+      }
+      
+      // Also add by userId for backward compatibility (if not already added via address)
       if (fee.userId) {
-        const existing = map.get(fee.userId) || [];
-        map.set(fee.userId, [...existing, fee]);
+        const userIdString = String(fee.userId);
+        if (!homeownerIdsWithFee.has(userIdString)) {
+          const existing = map.get(userIdString) || [];
+          map.set(userIdString, [...existing, fee]);
+        }
       }
     });
+    
     return map;
-  }, [allFeesFromDatabase]);
+  }, [allFeesFromDatabase, homeownersList]);
 
   // Fines grouped by residentId for quick lookup
   const finesByResidentId = useMemo(() => {
@@ -144,6 +181,72 @@ const AdminScreen = () => {
     });
     return map;
   }, [allFinesFromDatabase]);
+
+  // Payments grouped by userId for quick lookup (to show payment method)
+  const paymentsByUserId = useMemo(() => {
+    const map = new Map<string, any[]>();
+    allPayments.forEach((payment: any) => {
+      if (payment.userId) {
+        const userIdString = String(payment.userId);
+        const existing = map.get(userIdString) || [];
+        map.set(userIdString, [...existing, payment]);
+      }
+    });
+    return map;
+  }, [allPayments]);
+
+  // Group homeowners by address for residents sub-tab (similar to fees tab)
+  const homeownersGroupedByAddressForTable = useMemo(() => {
+    const addressMap = new Map<string, any[]>();
+    
+    homeownersList.forEach((homeowner: any) => {
+      // Create address key: address + unitNumber (if present)
+      const addressKey = `${homeowner.address}${homeowner.unitNumber ? ` Unit ${homeowner.unitNumber}` : ''}`;
+      
+      if (!addressMap.has(addressKey)) {
+        addressMap.set(addressKey, []);
+      }
+      addressMap.get(addressKey)!.push(homeowner);
+    });
+    
+    // Convert map to array of grouped addresses with aggregated fees and payments
+    return Array.from(addressMap.entries()).map(([addressKey, homeowners]) => {
+      // Aggregate fees for all homeowners at this address
+      const allFees: any[] = [];
+      const allPayments: any[] = [];
+      
+      homeowners.forEach((homeowner: any) => {
+        const homeownerFees = feesByUserId.get(String(homeowner._id)) || [];
+        const homeownerPayments = paymentsByUserId.get(String(homeowner._id)) || [];
+        
+        allFees.push(...homeownerFees);
+        allPayments.push(...homeownerPayments);
+      });
+      
+      // Get the most recent paid payment method across all homeowners
+      const paidPayments = allPayments.filter((p: any) => p.status === 'Paid' && p.verificationStatus === 'Verified');
+      const latestPayment = paidPayments.length > 0 
+        ? paidPayments.sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0] 
+        : null;
+      
+      const totalAmount = allFees.reduce((sum: number, fee: any) => sum + fee.amount, 0);
+      const unpaidCount = allFees.filter((fee: any) => fee.status !== 'Paid').length;
+      const allFeesPaid = allFees.length > 0 && allFees.every((f: any) => f.status === 'Paid');
+      
+      return {
+        addressKey,
+        address: homeowners[0].address,
+        unitNumber: homeowners[0].unitNumber,
+        homeowners,
+        fees: allFees,
+        payments: allPayments,
+        latestPayment,
+        totalAmount,
+        unpaidCount,
+        allFeesPaid,
+      };
+    });
+  }, [homeownersList, feesByUserId, paymentsByUserId]);
 
   // Filtered fees arrays - cached to avoid repeated filtering
   const unpaidAnnualFees = useMemo(() => {
@@ -176,6 +279,60 @@ const AdminScreen = () => {
       return hasFees || hasFines;
     });
   }, [homeownersPaymentStatus, feesByUserId, finesByResidentId]);
+
+  // Group homeowners by address (including unit number)
+  const homeownersGroupedByAddress = useMemo(() => {
+    const addressMap = new Map<string, any[]>();
+    
+    homeownersPaymentStatus.forEach((homeowner: any) => {
+      // Create address key: address + unitNumber (if present)
+      const addressKey = `${homeowner.address}${homeowner.unitNumber ? ` Unit ${homeowner.unitNumber}` : ''}`;
+      
+      if (!addressMap.has(addressKey)) {
+        addressMap.set(addressKey, []);
+      }
+      addressMap.get(addressKey)!.push(homeowner);
+    });
+    
+    // Convert map to array of grouped addresses
+    return Array.from(addressMap.entries()).map(([addressKey, homeowners]) => {
+      // Aggregate fees for all homeowners at this address
+      const allFees: any[] = [];
+      const allFines: any[] = [];
+      const allPayments: any[] = [];
+      
+      homeowners.forEach((homeowner: any) => {
+        const homeownerFees = feesByUserId.get(String(homeowner._id)) || [];
+        const homeownerFines = finesByResidentId.get(homeowner._id) || [];
+        const homeownerPayments = paymentsByUserId.get(String(homeowner._id)) || [];
+        
+        allFees.push(...homeownerFees);
+        allFines.push(...homeownerFines);
+        allPayments.push(...homeownerPayments);
+      });
+      
+      // Get the most recent paid payment method across all homeowners
+      const paidPayments = allPayments.filter((p: any) => p.status === 'Paid' && p.verificationStatus === 'Verified');
+      const latestPayment = paidPayments.length > 0 
+        ? paidPayments.sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0] 
+        : null;
+      
+      return {
+        addressKey,
+        address: homeowners[0].address,
+        unitNumber: homeowners[0].unitNumber,
+        homeowners,
+        fees: allFees,
+        fines: allFines,
+        payments: allPayments,
+        latestPayment,
+        // Combined payment status: paid only if all fees are paid
+        allFeesPaid: allFees.length > 0 && allFees.every((f: any) => f.status === 'Paid'),
+        // Total fee amount
+        totalFeeAmount: allFees.reduce((sum: number, fee: any) => sum + fee.amount, 0),
+      };
+    });
+  }, [homeownersPaymentStatus, feesByUserId, finesByResidentId, paymentsByUserId]);
 
   // Fee statistics - cached counts
   const feeStats = useMemo(() => {
@@ -227,6 +384,7 @@ const AdminScreen = () => {
   
   // Payment management mutations
   const verifyVenmoPayment = useMutation(api.payments.verifyVenmoPayment);
+  const recordCheckOrCashPayment = useMutation(api.payments.recordCheckOrCashPayment);
   
   // Pet management mutations
   const deletePet = useMutation(api.pets.remove);
@@ -262,6 +420,36 @@ const AdminScreen = () => {
     termEnd: '',
   });
   const [boardMemberImage, setBoardMemberImage] = useState<string | null>(null);
+  const [paymentSearchQuery, setPaymentSearchQuery] = useState('');
+  const [selectedPaymentForVerification, setSelectedPaymentForVerification] = useState<any>(null);
+  const [showVerificationModal, setShowVerificationModal] = useState(false);
+  const [verificationNotes, setVerificationNotes] = useState('');
+  const [selectedReceiptImage, setSelectedReceiptImage] = useState<string | null>(null);
+  const [showReceiptViewer, setShowReceiptViewer] = useState(false);
+  
+  // Filtered pending payments (client-side filtering) - moved after state declarations
+  const filteredPendingPayments = useMemo(() => {
+    if (!paymentSearchQuery.trim()) {
+      return pendingVenmoPayments;
+    }
+    const query = paymentSearchQuery.toLowerCase();
+    return pendingVenmoPayments.filter((payment: any) => {
+      const resident = residentsMap.get(payment.userId);
+      const residentName = resident ? `${resident.firstName} ${resident.lastName}`.toLowerCase() : '';
+      const address = resident ? `${resident.address}${resident.unitNumber ? ` #${resident.unitNumber}` : ''}`.toLowerCase() : '';
+      const feeType = payment.feeType?.toLowerCase() || '';
+      const venmoUsername = payment.venmoUsername?.toLowerCase() || '';
+      const transactionId = (payment.transactionId || payment.venmoTransactionId || '').toLowerCase();
+      const amount = payment.amount.toString();
+      
+      return residentName.includes(query) ||
+             address.includes(query) ||
+             feeType.includes(query) ||
+             venmoUsername.includes(query) ||
+             transactionId.includes(query) ||
+             amount.includes(query);
+    });
+  }, [pendingVenmoPayments, paymentSearchQuery, residentsMap]);
   
   // Fee management modal state
   const [showYearFeeModal, setShowYearFeeModal] = useState(false);
@@ -289,7 +477,23 @@ const AdminScreen = () => {
     description: '',
     dueDate: '',
   });
-  
+  const [showRecordPaymentModal, setShowRecordPaymentModal] = useState(false);
+  const [paymentForm, setPaymentForm] = useState({
+    homeownerId: '',
+    homeownerName: '',
+    feeId: '',
+    fineId: '',
+    amount: '',
+    paymentMethod: 'Check' as 'Check' | 'Cash',
+    paymentDate: new Date().toISOString().split('T')[0],
+    checkNumber: '',
+    notes: '',
+  });
+
+  // Search state for modals
+  const [fineSearchQuery, setFineSearchQuery] = useState('');
+  const [pastDueSearchQuery, setPastDueSearchQuery] = useState('');
+
   // Covenant modal state
   const [showCovenantModal, setShowCovenantModal] = useState(false);
   const [isEditingCovenant, setIsEditingCovenant] = useState(false);
@@ -344,6 +548,8 @@ const AdminScreen = () => {
   const covenantModalTranslateY = useRef(new Animated.Value(300)).current;
   const pollModalOpacity = useRef(new Animated.Value(0)).current;
   const pollModalTranslateY = useRef(new Animated.Value(300)).current;
+  const recordPaymentModalOpacity = useRef(new Animated.Value(0)).current;
+  const recordPaymentModalTranslateY = useRef(new Animated.Value(300)).current;
   const categoryDropdownOpacity = useRef(new Animated.Value(0)).current;
   const categoryDropdownScale = useRef(new Animated.Value(0.95)).current;
   const overlayOpacity = useRef(new Animated.Value(0)).current;
@@ -376,24 +582,26 @@ const AdminScreen = () => {
   const isBoardMember = user?.isBoardMember && user?.isActive;
 
   // Modern animation functions
-  const animateIn = (modalType: 'block' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll') => {
-    const opacity = modalType === 'block' ? blockModalOpacity : 
+  const animateIn = (modalType: 'block' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll' | 'recordPayment') => {
+    const opacity = modalType === 'block' ? blockModalOpacity :
                    modalType === 'delete' ? deleteModalOpacity :
-                   modalType === 'boardMember' ? boardMemberModalOpacity : 
-                   modalType === 'yearFee' ? yearFeeModalOpacity : 
+                   modalType === 'boardMember' ? boardMemberModalOpacity :
+                   modalType === 'yearFee' ? yearFeeModalOpacity :
                    modalType === 'addFine' ? addFineModalOpacity :
                    modalType === 'updateDues' ? updateDuesModalOpacity :
                    modalType === 'pastDue' ? pastDueModalOpacity :
                    modalType === 'covenant' ? covenantModalOpacity :
+                   modalType === 'recordPayment' ? recordPaymentModalOpacity :
                    pollModalOpacity;
-    const translateY = modalType === 'block' ? blockModalTranslateY : 
+    const translateY = modalType === 'block' ? blockModalTranslateY :
                       modalType === 'delete' ? deleteModalTranslateY:
-                      modalType === 'boardMember' ? boardMemberModalTranslateY : 
-                      modalType === 'yearFee' ? yearFeeModalTranslateY : 
+                      modalType === 'boardMember' ? boardMemberModalTranslateY :
+                      modalType === 'yearFee' ? yearFeeModalTranslateY :
                       modalType === 'addFine' ? addFineModalTranslateY :
                       modalType === 'updateDues' ? updateDuesModalTranslateY :
                       modalType === 'pastDue' ? pastDueModalTranslateY :
                       modalType === 'covenant' ? covenantModalTranslateY :
+                      modalType === 'recordPayment' ? recordPaymentModalTranslateY :
                       pollModalTranslateY;
     
     Animated.parallel([
@@ -416,22 +624,26 @@ const AdminScreen = () => {
     ]).start();
   };
 
-  const animateOut = (modalType: 'block' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll', callback: () => void) => {
-    const opacity = modalType === 'block' ? blockModalOpacity : 
+  const animateOut = (modalType: 'block' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll' | 'recordPayment', callback: () => void) => {
+    const opacity = modalType === 'block' ? blockModalOpacity :
                    modalType === 'delete' ? deleteModalOpacity :
-                   modalType === 'boardMember' ? boardMemberModalOpacity : 
-                   modalType === 'yearFee' ? yearFeeModalOpacity : 
+                   modalType === 'boardMember' ? boardMemberModalOpacity :
+                   modalType === 'yearFee' ? yearFeeModalOpacity :
                    modalType === 'addFine' ? addFineModalOpacity :
                    modalType === 'updateDues' ? updateDuesModalOpacity :
                    modalType === 'pastDue' ? pastDueModalOpacity :
                    modalType === 'covenant' ? covenantModalOpacity :
+                   modalType === 'recordPayment' ? recordPaymentModalOpacity :
                    pollModalOpacity;
-    const translateY = modalType === 'block' ? blockModalTranslateY : 
+    const translateY = modalType === 'block' ? blockModalTranslateY :
                       modalType === 'delete' ? deleteModalTranslateY :
-                      modalType === 'boardMember' ? boardMemberModalTranslateY : 
-                      modalType === 'yearFee' ? yearFeeModalTranslateY : 
+                      modalType === 'boardMember' ? boardMemberModalTranslateY :
+                      modalType === 'yearFee' ? yearFeeModalTranslateY :
                       modalType === 'addFine' ? addFineModalTranslateY :
+                      modalType === 'updateDues' ? updateDuesModalTranslateY :
+                      modalType === 'pastDue' ? pastDueModalTranslateY :
                       modalType === 'covenant' ? covenantModalTranslateY :
+                      modalType === 'recordPayment' ? recordPaymentModalTranslateY :
                       pollModalTranslateY;
     
     Animated.parallel([
@@ -605,6 +817,9 @@ const AdminScreen = () => {
         eventText: hoaInfoForm.eventText.trim() || undefined,
       });
 
+      // Send notification for HOA info update
+      await notifyBoardUpdate('HOA Information Updated', 'HOA contact information has been updated');
+
       Alert.alert('Success', 'HOA information updated successfully.');
     } catch (error) {
       console.error('Error saving HOA info:', error);
@@ -655,9 +870,7 @@ const AdminScreen = () => {
       
       // Upload image if selected
       if (boardMemberImage) {
-        console.log('📸 Uploading board member image...');
         imageUrl = await uploadImage(boardMemberImage);
-        console.log('✅ Board member image uploaded:', imageUrl);
       }
 
       const memberData = {
@@ -670,9 +883,13 @@ const AdminScreen = () => {
           id: selectedItem._id,
           ...memberData,
         });
+        // Send notification for board member update
+        await notifyBoardUpdate('Board Member Updated', `${memberData.name} - ${memberData.position}`);
         Alert.alert('Success', 'Board member updated successfully.');
       } else {
         await createBoardMember(memberData);
+        // Send notification for new board member
+        await notifyBoardUpdate('New Board Member', `${memberData.name} - ${memberData.position}`);
         Alert.alert('Success', 'Board member added successfully.');
       }
       
@@ -778,6 +995,10 @@ const AdminScreen = () => {
       });
 
       if (result.success) {
+        // Send notification for new fine
+        const dueDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString(); // 30 days from now
+        await notifyNewFine(fineForm.reason, amount, dueDate);
+        
         Alert.alert(
           'Fine Added', 
           result.message
@@ -790,12 +1011,70 @@ const AdminScreen = () => {
           reason: '',
           description: '',
         });
+        setFineSearchQuery('');
       } else {
         Alert.alert('Error', 'Failed to add fine. Please try again.');
       }
     } catch (error) {
       console.error('Error adding fine:', error);
       Alert.alert('Error', 'Failed to add fine. Please try again.');
+    }
+  };
+
+  const handleRecordPayment = async () => {
+    try {
+      // Validation
+      if (!paymentForm.homeownerId) {
+        Alert.alert('Error', 'Please select a homeowner.');
+        return;
+      }
+
+      const amount = parseFloat(paymentForm.amount);
+      if (!amount || amount <= 0) {
+        Alert.alert('Error', 'Please enter a valid amount.');
+        return;
+      }
+
+      if (!paymentForm.paymentDate) {
+        Alert.alert('Error', 'Please enter a payment date.');
+        return;
+      }
+
+      // For now, we'll record a general payment without linking to specific fees
+      // In a future enhancement, we could add fee selection
+      const result = await recordCheckOrCashPayment({
+        userId: paymentForm.homeownerId,
+        feeType: 'Manual Payment', // General payment type
+        amount: amount,
+        paymentMethod: paymentForm.paymentMethod,
+        paymentDate: paymentForm.paymentDate,
+        checkNumber: paymentForm.checkNumber || undefined,
+        notes: paymentForm.notes || undefined,
+        feeId: undefined, // Not linking to specific fees for now
+        fineId: undefined,
+      });
+
+      if (result.success) {
+        Alert.alert('Success', result.message);
+        setShowRecordPaymentModal(false);
+        setPaymentSearchQuery('');
+        setPaymentForm({
+          homeownerId: '',
+          homeownerName: '',
+          feeId: '',
+          fineId: '',
+          amount: '',
+          paymentMethod: 'Check',
+          paymentDate: new Date().toISOString().split('T')[0],
+          checkNumber: '',
+          notes: '',
+        });
+      } else {
+        Alert.alert('Error', 'Failed to record payment.');
+      }
+    } catch (error) {
+      console.error('Error recording payment:', error);
+      Alert.alert('Error', 'Failed to record payment. Please try again.');
     }
   };
 
@@ -851,8 +1130,9 @@ const AdminScreen = () => {
 
       if (result.success) {
         Alert.alert('Success', result.message);
-        
+
         setShowPastDueModal(false);
+        setPastDueSearchQuery('');
         setPastDueForm({
           selectedResidentId: '',
           amount: '',
@@ -1008,6 +1288,9 @@ const AdminScreen = () => {
         expiresAt: pollForm.expiresAt ? new Date(pollForm.expiresAt).getTime() : undefined,
         createdBy: user ? `${user.firstName} ${user.lastName}` : 'Admin',
       });
+
+      // Send notification for new poll
+      await notifyNewPoll(pollForm.title, user ? `${user.firstName} ${user.lastName}` : 'Admin', convex);
 
       Alert.alert('Success', 'Poll created successfully!');
       
@@ -1393,7 +1676,7 @@ const AdminScreen = () => {
                   <Text style={styles.roleStatNumber}>
                     {residentRoleCounts.homeowners}
                   </Text>
-                  <Text style={styles.roleStatLabel}>Homeowners</Text>
+                  <Text style={styles.roleStatLabel}>Homeowner</Text>
                 </View>
                 
                 <View style={styles.roleStatCard}>
@@ -1483,7 +1766,7 @@ const AdminScreen = () => {
                           {/* Main Info Row - Avatar Left, Details Right */}
                           <View style={styles.residentGridMainInfo}>
                             <ProfileImage 
-                              source={item.profileImage} 
+                              source={item.profileImageUrl} 
                               size={40}
                               initials={`${item.firstName.charAt(0)}${item.lastName.charAt(0)}`}
                               style={{ marginRight: 6 }}
@@ -1492,7 +1775,7 @@ const AdminScreen = () => {
                             <View style={styles.residentGridDetails}>
                               {/* Name and Role Row */}
                               <View style={styles.residentGridNameRow}>
-                                <Text style={styles.residentGridName} numberOfLines={1}>
+                                <Text style={styles.residentGridName} numberOfLines={2}>
                                   {item.firstName} {item.lastName}
                                 </Text>
                                 <View style={styles.residentGridRoleBadgesContainer}>
@@ -1997,7 +2280,7 @@ const AdminScreen = () => {
                             {/* Main Info Row - Icon Left, Details Right */}
                             <View style={styles.residentGridMainInfo}>
                               <ProfileImage 
-                                source={item.authorProfileImage} 
+                                source={item.authorProfileImageUrl} 
                                 size={48}
                                 style={{ marginRight: 12 }}
                               />
@@ -2072,7 +2355,7 @@ const AdminScreen = () => {
                           {/* Main Info Row - Icon Left, Details Right */}
                           <View style={styles.residentGridMainInfo}>
                             <ProfileImage 
-                              source={item.authorProfileImage} 
+                              source={item.authorProfileImageUrl} 
                               size={48}
                               style={{ marginRight: 12 }}
                             />
@@ -2382,7 +2665,7 @@ const AdminScreen = () => {
                             {/* Main Info Row - Icon Left, Details Right */}
                             <View style={styles.residentGridMainInfo}>
                               <ProfileImage 
-                                source={item.authorProfileImage} 
+                                source={item.authorProfileImageUrl} 
                                 size={48}
                                 style={{ marginRight: 12 }}
                               />
@@ -2495,6 +2778,19 @@ const AdminScreen = () => {
                     <Text style={styles.adminFeeButtonText}>Add Fine</Text>
                   </TouchableOpacity>
                 </Animated.View>
+                <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
+                  <TouchableOpacity
+                    style={[styles.adminFeeButton, { backgroundColor: '#059669' }]}
+                    onPress={() => {
+                      animateButtonPress();
+                      setShowRecordPaymentModal(true);
+                      animateIn('recordPayment');
+                    }}
+                  >
+                    <Ionicons name="cash" size={16} color="#ffffff" />
+                    <Text style={styles.adminFeeButtonText}>Record Payment</Text>
+                  </TouchableOpacity>
+                </Animated.View>
               </View>
             
                {/* Fee Statistics */}
@@ -2546,13 +2842,36 @@ const AdminScreen = () => {
             {pendingVenmoPayments.length > 0 && (
               <View style={styles.pendingPaymentsSection}>
                 <View style={styles.pendingPaymentsHeader}>
-                  <Ionicons name="cash" size={20} color="#f59e0b" />
-                  <Text style={styles.pendingPaymentsTitle}>
-                    Pending Venmo Payments ({pendingVenmoPayments.length})
-                  </Text>
+                  <View style={styles.pendingPaymentsHeaderLeft}>
+                    <Ionicons name="cash" size={20} color="#f59e0b" />
+                    <Text style={styles.pendingPaymentsTitle}>
+                      Pending Venmo Payments ({filteredPendingPayments.length})
+                    </Text>
+                  </View>
                 </View>
+                
+                {/* Search Input */}
+                <View style={styles.paymentSearchContainer}>
+                  <Ionicons name="search" size={20} color="#6b7280" style={styles.paymentSearchIcon} />
+                  <TextInput
+                    style={styles.paymentSearchInput}
+                    placeholder="Search by name, address, fee type, transaction ID..."
+                    value={paymentSearchQuery}
+                    onChangeText={setPaymentSearchQuery}
+                    placeholderTextColor="#9ca3af"
+                  />
+                  {paymentSearchQuery.length > 0 && (
+                    <TouchableOpacity
+                      onPress={() => setPaymentSearchQuery('')}
+                      style={styles.paymentSearchClear}
+                    >
+                      <Ionicons name="close-circle" size={20} color="#6b7280" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+                
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  {pendingVenmoPayments.map((payment: any) => {
+                  {filteredPendingPayments.map((payment: any) => {
                     const resident = residentsMap.get(payment.userId);
                     const paymentDate = new Date(payment.createdAt).toLocaleDateString();
                     
@@ -2567,6 +2886,11 @@ const AdminScreen = () => {
                           </Text>
                         </View>
                         <Text style={styles.compactPaymentFee}>{payment.feeType}</Text>
+                        {resident && (
+                          <Text style={styles.compactPaymentAddress} numberOfLines={1}>
+                            {resident.address}{resident.unitNumber ? ` #${resident.unitNumber}` : ''}
+                          </Text>
+                        )}
                         <Text style={styles.compactPaymentVenmo}>
                           @{payment.venmoUsername}
                         </Text>
@@ -2578,22 +2902,28 @@ const AdminScreen = () => {
                             ID: {payment.transactionId || payment.venmoTransactionId}
                           </Text>
                         )}
+                        
+                        {/* Receipt Image Button */}
+                        {payment.receiptImageUrl && (
+                          <TouchableOpacity
+                            style={styles.viewReceiptButton}
+                            onPress={() => {
+                              setSelectedReceiptImage(payment.receiptImageUrl);
+                              setShowReceiptViewer(true);
+                            }}
+                          >
+                            <Ionicons name="image-outline" size={14} color="#2563eb" />
+                            <Text style={styles.viewReceiptText}>View Receipt</Text>
+                          </TouchableOpacity>
+                        )}
+                        
                         <View style={styles.compactPaymentActions}>
                           <TouchableOpacity
                             style={styles.compactRejectButton}
-                            onPress={async () => {
-                              try {
-                                await verifyVenmoPayment({
-                                  paymentId: payment._id,
-                                  status: "Overdue",
-                                  verificationStatus: "Rejected",
-                                });
-                                Alert.alert('Success', 'Payment rejected.');
-                                // Refresh data to update homeowner grid
-                                await handleRefresh();
-                              } catch (error) {
-                                Alert.alert('Error', 'Failed to reject payment.');
-                              }
+                            onPress={() => {
+                              setSelectedPaymentForVerification(payment);
+                              setVerificationNotes('');
+                              setShowVerificationModal(true);
                             }}
                           >
                             <Ionicons name="close-circle" size={14} color="#ef4444" />
@@ -2601,19 +2931,10 @@ const AdminScreen = () => {
                           </TouchableOpacity>
                           <TouchableOpacity
                             style={styles.compactVerifyButton}
-                            onPress={async () => {
-                              try {
-                                await verifyVenmoPayment({
-                                  paymentId: payment._id,
-                                  status: "Paid",
-                                  verificationStatus: "Verified",
-                                });
-                                Alert.alert('Success', 'Payment verified successfully!');
-                                // Refresh data to update homeowner grid
-                                await handleRefresh();
-                              } catch (error) {
-                                Alert.alert('Error', 'Failed to verify payment.');
-                              }
+                            onPress={() => {
+                              setSelectedPaymentForVerification(payment);
+                              setVerificationNotes('');
+                              setShowVerificationModal(true);
                             }}
                           >
                             <Ionicons name="checkmark-circle" size={14} color="#10b981" />
@@ -2629,7 +2950,7 @@ const AdminScreen = () => {
             
             {/* Fees and Fines Status Grid */}
             <View style={isMobileDevice || screenWidth < 768 ? styles.feesGridContainerMobile : {}}>
-              {homeownersWithFeesOrFines.length === 0 ? (
+              {homeownersGroupedByAddress.length === 0 ? (
                 <View style={styles.emptyState}>
                   <Ionicons name="card" size={48} color="#9ca3af" />
                   <Text style={styles.emptyStateText}>No homeowners found</Text>
@@ -2639,20 +2960,47 @@ const AdminScreen = () => {
                 </View>
               ) : (
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-                  {homeownersWithFeesOrFines.map((homeowner: any) => {
-                    // Get fees and fines for this homeowner from cached maps
-                    const homeownerFees = feesByUserId.get(homeowner._id) || [];
-                    const homeownerFines = finesByResidentId.get(homeowner._id) || [];
-                    const isSingleColumn = isMobileDevice || screenWidth < 768;
-                    const numColumns = isSingleColumn ? 1 : (screenWidth >= 1024 ? 4 : 2);
+                  {homeownersGroupedByAddress.map((addressGroup: any) => {
+                    const { homeowners, fees: homeownerFees, fines: homeownerFines, latestPayment, allFeesPaid, totalFeeAmount } = addressGroup;
+                    const paymentMethod = latestPayment?.paymentMethod;
+                    // Responsive breakpoints: sm (< 640px), md (640-1023px), lg (1024-1279px), xl (>= 1280px)
+                    const isSingleColumn = isMobileDevice || screenWidth < 640;
+                    const numColumns = isSingleColumn 
+                      ? 1 
+                      : screenWidth >= 1280 
+                        ? 4  // xl: 4 columns
+                        : screenWidth >= 1024 
+                          ? 3  // lg: 3 columns
+                          : 2; // md: 2 columns
                     const itemWidth = isSingleColumn ? ('100%' as const) : (`${100 / numColumns}%` as const);
+                    
+                    // Create display name for multiple residents
+                    // Format: "John & Jane" for 2, "John, Jane & Bob" for 3+, or one per line
+                    const residentsDisplay = homeowners.length === 1
+                      ? `${homeowners[0].firstName} ${homeowners[0].lastName}`
+                      : homeowners.length === 2
+                      ? homeowners.map((h: any) => `${h.firstName} ${h.lastName}`).join(' & ')
+                      : homeowners.map((h: any, idx: number) => {
+                          if (idx === homeowners.length - 1) {
+                            return `& ${h.firstName} ${h.lastName}`;
+                          }
+                          return `${h.firstName} ${h.lastName}`;
+                        }).join(', ');
+                    
+                    // Get profile images for display (limit to 2 to keep costs low)
+                    // Note: profileImage is a storage ID, ProfileImage component handles resolution
+                    const profileImagesToShow = homeowners.slice(0, 2).map((h: any) => ({
+                      imageUrl: h.profileImage, // Use profileImage (storage ID) directly
+                      initials: `${h.firstName.charAt(0)}${h.lastName.charAt(0)}`
+                    }));
                     
                     return (
                       <View 
-                        key={homeowner._id} 
+                        key={addressGroup.addressKey} 
                         style={{ 
                           width: itemWidth as any,
-                          padding: isSingleColumn ? 0 : 8 
+                          padding: isSingleColumn ? 0 : 8,
+                          minWidth: 0, // Allow flex shrinking
                         }}
                       >
                     <Animated.View 
@@ -2669,6 +3017,9 @@ const AdminScreen = () => {
                           maxWidth: '100%',
                           alignSelf: 'center',
                           width: screenWidth < 400 ? screenWidth - 32 : Math.min(screenWidth - 40, 600),
+                        },
+                        !isSingleColumn && {
+                          width: '100%', // Fill the container on desktop
                         },
                         {
                           opacity: fadeAnim,
@@ -2693,21 +3044,43 @@ const AdminScreen = () => {
                             marginBottom: 16,
                           }
                         ]}>
-                          <ProfileImage 
-                            source={homeowner.profileImage} 
-                            size={56}
-                            initials={`${homeowner.firstName.charAt(0)}${homeowner.lastName.charAt(0)}`}
-                            style={{ marginRight: 8 }}
-                          />
+                          {/* Multiple profile images for households with 2+ residents */}
+                          {homeowners.length > 1 ? (
+                            <View style={styles.multipleProfileImagesContainer}>
+                              {profileImagesToShow.map((profile, index) => (
+                                <ProfileImage
+                                  key={index}
+                                  source={profile.imageUrl}
+                                  size={48}
+                                  initials={profile.initials}
+                                  style={[
+                                    styles.multipleProfileImage,
+                                    index > 0 && styles.multipleProfileImageOverlap
+                                  ]}
+                                />
+                              ))}
+                            </View>
+                          ) : (
+                            <ProfileImage 
+                              source={profileImagesToShow[0]?.imageUrl} 
+                              size={56}
+                              initials={profileImagesToShow[0]?.initials}
+                              style={{ marginRight: 8 }}
+                            />
+                          )}
                           <View style={styles.gridProfileInfo}>
                             <Text style={[
                               styles.gridName,
                               isSingleColumn && {
                                 fontSize: 16,
                                 marginBottom: 4,
+                              },
+                              homeowners.length > 2 && {
+                                fontSize: isSingleColumn ? 14 : 13,
+                                lineHeight: isSingleColumn ? 20 : 18,
                               }
-                            ]} numberOfLines={1}>
-                              {homeowner.firstName} {homeowner.lastName}
+                            ]} numberOfLines={homeowners.length === 1 ? 1 : homeowners.length === 2 ? 2 : 4}>
+                              {residentsDisplay}
                             </Text>
                             <Text style={[
                               styles.gridRole,
@@ -2716,7 +3089,9 @@ const AdminScreen = () => {
                                 marginBottom: 4,
                               }
                             ]} numberOfLines={1}>
-                              {homeowner.userType === 'board-member' ? 'Board Member' : 'Homeowner'}
+                              {homeowners.length === 1 
+                                ? (homeowners[0].userType === 'board-member' ? 'Board Member' : 'Homeowner')
+                                : `${homeowners.length} Residents`}
                             </Text>
                             <Text style={[
                               styles.gridAddress,
@@ -2724,12 +3099,12 @@ const AdminScreen = () => {
                                 fontSize: 12,
                               }
                             ]} numberOfLines={2}>
-                              {homeowner.address} {homeowner.unitNumber && `Unit ${homeowner.unitNumber}`}
+                              {addressGroup.address} {addressGroup.unitNumber && `Unit ${addressGroup.unitNumber}`}
                             </Text>
                           </View>
                         </View>
                         
-                        {/* Show fees for this homeowner */}
+                        {/* Show fees for this address group */}
                         {homeownerFees.length > 0 ? (
                           <View style={[
                             styles.gridFeeSection,
@@ -2745,7 +3120,7 @@ const AdminScreen = () => {
                                 marginBottom: 4,
                               }
                             ]}>
-                              ${homeownerFees.reduce((sum: number, fee: any) => sum + fee.amount, 0).toFixed(2)}
+                              ${totalFeeAmount.toFixed(2)}
                             </Text>
                             <Text style={[
                               styles.gridFeeLabel,
@@ -2758,7 +3133,7 @@ const AdminScreen = () => {
                             </Text>
                             <View style={[
                               styles.gridStatusBadge,
-                              homeownerFees.every((f: any) => f.status === 'Paid') 
+                              allFeesPaid
                                 ? styles.gridPaidBadge 
                                 : styles.gridPendingBadge,
                               isSingleColumn && {
@@ -2767,22 +3142,40 @@ const AdminScreen = () => {
                               }
                             ]}>
                               <Ionicons 
-                                name={homeownerFees.every((f: any) => f.status === 'Paid') ? "checkmark-circle" : "time"} 
+                                name={allFeesPaid ? "checkmark-circle" : "time"} 
                                 size={isSingleColumn ? 16 : 14} 
-                                color={homeownerFees.every((f: any) => f.status === 'Paid') ? "#10b981" : "#f59e0b"} 
+                                color={allFeesPaid ? "#10b981" : "#f59e0b"} 
                               />
                               <Text style={[
                                 styles.gridStatusText,
                                 { 
-                                  color: homeownerFees.every((f: any) => f.status === 'Paid') ? "#10b981" : "#f59e0b" 
+                                  color: allFeesPaid ? "#10b981" : "#f59e0b" 
                                 },
                                 isSingleColumn && {
                                   fontSize: 12,
                                 }
                               ]}>
-                                {homeownerFees.every((f: any) => f.status === 'Paid') ? 'Paid' : 'Pending'}
+                                {allFeesPaid ? 'Paid' : 'Pending'}
                               </Text>
                             </View>
+                            
+                            {/* Show payment method if paid */}
+                            {allFeesPaid && paymentMethod && (
+                              <View style={[
+                                styles.paymentMethodBadge,
+                                isSingleColumn && { marginTop: 6 }
+                              ]}>
+                                <Ionicons 
+                                  name={paymentMethod === 'Venmo' ? 'logo-venmo' : paymentMethod === 'Check' ? 'document-text' : 'cash'} 
+                                  size={isSingleColumn ? 12 : 10} 
+                                  color="#6b7280" 
+                                />
+                                <Text style={styles.paymentMethodBadgeText}>
+                                  via {paymentMethod}
+                                </Text>
+                              </View>
+                            )}
+
                           </View>
                         ) : (
                           <View style={[
@@ -2994,7 +3387,7 @@ const AdminScreen = () => {
                         <View style={styles.residentsSectionTitleRow}>
                           <Text style={styles.residentsSectionTitle}>All Residents</Text>
                           <View style={styles.residentsSectionBadge}>
-                            <Text style={styles.residentsSectionBadgeText}>{homeownersList.length}</Text>
+                            <Text style={styles.residentsSectionBadgeText}>{homeownersGroupedByAddressForTable.length}</Text>
                           </View>
                         </View>
                         <Text style={styles.residentsSectionSubtitle}>
@@ -3015,7 +3408,7 @@ const AdminScreen = () => {
                   {/* Accordion Content */}
                   {isResidentsSectionExpanded && (
                     <View style={styles.residentsAccordionSectionContent}>
-                      {homeownersList.length > 0 ? (
+                      {homeownersGroupedByAddressForTable.length > 0 ? (
                         <ScrollView 
                           horizontal 
                           showsHorizontalScrollIndicator={false}
@@ -3040,6 +3433,9 @@ const AdminScreen = () => {
                             <View style={[styles.residentsTableHeaderCell, styles.residentsTableCellStatus]}>
                               <Text style={styles.residentsTableHeaderText}>Status</Text>
                             </View>
+                            <View style={[styles.residentsTableHeaderCell, styles.residentsTableCellPaymentMethod]}>
+                              <Text style={styles.residentsTableHeaderText}>Payment Method</Text>
+                            </View>
                             <View style={[styles.residentsTableHeaderCell, styles.residentsTableCellAmount]}>
                               <Text style={styles.residentsTableHeaderText}>Amount</Text>
                             </View>
@@ -3049,15 +3445,32 @@ const AdminScreen = () => {
                           </View>
 
                           {/* Table Rows */}
-                          {homeownersList.map((resident: any, index: number) => {
-                            const residentFees = feesByUserId.get(resident._id) || [];
-                            const totalAmount = residentFees.reduce((sum: number, fee: any) => sum + fee.amount, 0);
-                            const unpaidCount = residentFees.filter((fee: any) => fee.status !== 'Paid').length;
+                          {homeownersGroupedByAddressForTable.map((addressGroup: any, index: number) => {
+                            const { homeowners, fees: allFees, latestPayment, totalAmount, unpaidCount, allFeesPaid } = addressGroup;
                             const hasOutstanding = unpaidCount > 0;
+                            const residentPaymentMethod = latestPayment?.paymentMethod;
+                            
+                            // Create display name for multiple residents
+                            const residentsDisplay = homeowners.length === 1
+                              ? `${homeowners[0].firstName} ${homeowners[0].lastName}`
+                              : homeowners.length === 2
+                              ? homeowners.map((h: any) => `${h.firstName} ${h.lastName}`).join(' & ')
+                              : homeowners.map((h: any, idx: number) => {
+                                  if (idx === homeowners.length - 1) {
+                                    return `& ${h.firstName} ${h.lastName}`;
+                                  }
+                                  return `${h.firstName} ${h.lastName}`;
+                                }).join(', ');
+                            
+                            // Get profile images for display (limit to 2 to keep costs low)
+                            const profileImagesToShow = homeowners.slice(0, 2).map((h: any) => ({
+                              imageUrl: h.profileImage, // Use profileImage (storage ID) directly
+                              initials: `${h.firstName.charAt(0)}${h.lastName.charAt(0)}`
+                            }));
                             
                             return (
                               <View 
-                                key={resident._id}
+                                key={addressGroup.addressKey}
                                 style={[
                                   styles.residentsTableRow,
                                   index % 2 === 0 && styles.residentsTableRowEven
@@ -3066,16 +3479,39 @@ const AdminScreen = () => {
                                 {/* Name Column */}
                                 <View style={[styles.residentsTableCell, styles.residentsTableCellName]}>
                                   <View style={styles.residentsTableNameContent}>
-                                    <ProfileImage 
-                                      source={resident.profileImage} 
-                                      size={36}
-                                      initials={`${resident.firstName.charAt(0)}${resident.lastName.charAt(0)}`}
-                                      style={styles.residentsTableProfileImage}
-                                    />
+                                    {/* Multiple profile images for households with 2+ residents */}
+                                    {homeowners.length > 1 ? (
+                                      <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 8 }}>
+                                        {profileImagesToShow.map((profile, imgIndex) => (
+                                          <ProfileImage
+                                            key={imgIndex}
+                                            source={profile.imageUrl}
+                                            size={32}
+                                            initials={profile.initials}
+                                            style={[
+                                              { borderWidth: 2, borderColor: '#ffffff' },
+                                              imgIndex > 0 && { marginLeft: -8 }
+                                            ]}
+                                          />
+                                        ))}
+                                      </View>
+                                    ) : (
+                                      <ProfileImage 
+                                        source={profileImagesToShow[0]?.imageUrl} 
+                                        size={36}
+                                        initials={profileImagesToShow[0]?.initials}
+                                        style={styles.residentsTableProfileImage}
+                                      />
+                                    )}
                                     <View style={styles.residentsTableNameText}>
-                                      <Text style={styles.residentsTableName} numberOfLines={1}>
-                                        {resident.firstName} {resident.lastName}
+                                      <Text style={styles.residentsTableName} numberOfLines={homeowners.length === 1 ? 1 : 2}>
+                                        {residentsDisplay}
                                       </Text>
+                                      {homeowners.length > 1 && (
+                                        <Text style={[styles.residentsTableAddress, { fontSize: 11, marginTop: 2 }]} numberOfLines={1}>
+                                          {homeowners.length} Residents
+                                        </Text>
+                                      )}
                                     </View>
                                   </View>
                                 </View>
@@ -3083,7 +3519,7 @@ const AdminScreen = () => {
                                 {/* Address Column */}
                                 <View style={[styles.residentsTableCell, styles.residentsTableCellAddress]}>
                                   <Text style={styles.residentsTableAddress} numberOfLines={1}>
-                                    {resident.address}{resident.unitNumber ? ` Unit ${resident.unitNumber}` : ''}
+                                    {addressGroup.address}{addressGroup.unitNumber ? ` Unit ${addressGroup.unitNumber}` : ''}
                                   </Text>
                                 </View>
 
@@ -3106,6 +3542,27 @@ const AdminScreen = () => {
                                   )}
                                 </View>
 
+                                {/* Payment Method Column */}
+                                <View style={[styles.residentsTableCell, styles.residentsTableCellPaymentMethod]}>
+                                  {!hasOutstanding && residentPaymentMethod ? (
+                                    <View style={styles.residentsTablePaymentMethodContent}>
+                                      <Ionicons 
+                                        name={residentPaymentMethod === 'Venmo' ? 'logo-venmo' : residentPaymentMethod === 'Check' ? 'document-text' : 'cash'} 
+                                        size={14} 
+                                        color={residentPaymentMethod === 'Venmo' ? '#008CFF' : residentPaymentMethod === 'Check' ? '#6366f1' : '#10b981'} 
+                                      />
+                                      <Text style={[
+                                        styles.residentsTablePaymentMethodText,
+                                        { color: residentPaymentMethod === 'Venmo' ? '#008CFF' : residentPaymentMethod === 'Check' ? '#6366f1' : '#10b981' }
+                                      ]}>
+                                        {residentPaymentMethod}
+                                      </Text>
+                                    </View>
+                                  ) : (
+                                    <Text style={styles.residentsTablePaymentMethodText}>—</Text>
+                                  )}
+                                </View>
+
                                 {/* Amount Column */}
                                 <View style={[styles.residentsTableCell, styles.residentsTableCellAmount]}>
                                   <Text style={styles.residentsTableAmount}>
@@ -3118,8 +3575,9 @@ const AdminScreen = () => {
                                   <TouchableOpacity
                                     style={styles.residentsTableActionButton}
                                     onPress={() => {
+                                      // Use the first homeowner's ID for past due form (for backward compatibility)
                                       setPastDueForm({
-                                        selectedResidentId: resident._id,
+                                        selectedResidentId: homeowners[0]._id,
                                         amount: '',
                                         description: '',
                                         dueDate: new Date().toISOString().split('T')[0],
@@ -3207,7 +3665,7 @@ const AdminScreen = () => {
           })}
         >
           {/* Header with ImageBackground */}
-          <View style={Platform.OS === 'ios' ? styles.headerContainerIOS : undefined}>
+          <View style={styles.headerContainerIOS}>
             <ImageBackground
               source={require('../../assets/hoa-4k.jpg')}
               style={styles.header}
@@ -3717,8 +4175,21 @@ const AdminScreen = () => {
               >
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>Select Property Address *</Text>
+                  <TextInput
+                    style={styles.modalSearchInput}
+                    placeholder="Search by address or homeowner name..."
+                    value={fineSearchQuery}
+                    onChangeText={setFineSearchQuery}
+                  />
                   <ScrollView style={styles.addressSelector} nestedScrollEnabled>
-                    {getUniqueAddresses().map((address, index) => (
+                    {getUniqueAddresses()
+                      .filter(address => {
+                        const query = fineSearchQuery.toLowerCase();
+                        return query === '' ||
+                          address.address.toLowerCase().includes(query) ||
+                          address.homeownerName.toLowerCase().includes(query);
+                      })
+                      .map((address, index) => (
                       <TouchableOpacity
                         key={index}
                         style={[
@@ -3893,9 +4364,23 @@ const AdminScreen = () => {
                 showsVerticalScrollIndicator={false}
               >
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Select Resident *</Text>
+                  <Text style={styles.inputLabel}>Select Homeowner *</Text>
+                  <TextInput
+                    style={styles.modalSearchInput}
+                    placeholder="Search by name or address..."
+                    value={pastDueSearchQuery}
+                    onChangeText={setPastDueSearchQuery}
+                  />
                   <ScrollView style={styles.addressSelector} nestedScrollEnabled>
-                    {homeownersList.map((resident: any) => (
+                    {homeownersList
+                      .filter(resident => {
+                        const query = pastDueSearchQuery.toLowerCase();
+                        return query === '' ||
+                          resident.firstName.toLowerCase().includes(query) ||
+                          resident.lastName.toLowerCase().includes(query) ||
+                          resident.address.toLowerCase().includes(query);
+                      })
+                      .map((resident: any) => (
                       <TouchableOpacity
                         key={resident._id}
                         style={[
@@ -3965,6 +4450,186 @@ const AdminScreen = () => {
                     onPress={handleAddPastDue}
                   >
                     <Text style={styles.confirmButtonText}>Add Past Due</Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            </Animated.View>
+          </Animated.View>
+        </Modal>
+
+        {/* Record Payment Modal */}
+        <Modal
+          visible={showRecordPaymentModal}
+          transparent={true}
+          animationType="none"
+          onRequestClose={() => animateOut('recordPayment', () => setShowRecordPaymentModal(false))}
+        >
+          <Animated.View style={[styles.modalOverlay, { opacity: overlayOpacity }]}>
+            <Animated.View style={[
+              styles.formModalContent,
+              {
+                opacity: recordPaymentModalOpacity,
+                transform: [{ translateY: recordPaymentModalTranslateY }],
+              }
+            ]}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Record Check/Cash Payment</Text>
+                <TouchableOpacity
+                  style={styles.closeButton}
+                  onPress={() => animateOut('recordPayment', () => setShowRecordPaymentModal(false))}
+                >
+                  <Ionicons name="close" size={24} color="#6b7280" />
+                </TouchableOpacity>
+              </View>
+              
+              <ScrollView 
+                style={styles.modalForm} 
+                contentContainerStyle={styles.modalFormContent}
+                showsVerticalScrollIndicator={false}
+              >
+                {/* Homeowner Selection */}
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Select Homeowner *</Text>
+                  <TextInput
+                    style={styles.modalSearchInput}
+                    placeholder="Search by name or address..."
+                    value={paymentSearchQuery}
+                    onChangeText={setPaymentSearchQuery}
+                  />
+                  <ScrollView style={styles.addressSelector} nestedScrollEnabled>
+                    {homeownersPaymentStatus
+                      .filter(homeowner => {
+                        const query = paymentSearchQuery.toLowerCase();
+                        return query === '' ||
+                          homeowner.firstName.toLowerCase().includes(query) ||
+                          homeowner.lastName.toLowerCase().includes(query) ||
+                          homeowner.address.toLowerCase().includes(query);
+                      })
+                      .map((homeowner: any) => (
+                      <TouchableOpacity
+                        key={homeowner._id}
+                        style={[
+                          styles.addressOption,
+                          paymentForm.homeownerId === homeowner._id && styles.addressOptionSelected
+                        ]}
+                        onPress={() => setPaymentForm(prev => ({
+                          ...prev,
+                          homeownerId: homeowner._id,
+                          homeownerName: `${homeowner.firstName} ${homeowner.lastName}`,
+                        }))}
+                      >
+                        <Text style={[
+                          styles.addressOptionText,
+                          paymentForm.homeownerId === homeowner._id && styles.addressOptionTextSelected
+                        ]}>
+                          {homeowner.firstName} {homeowner.lastName}
+                        </Text>
+                        <Text style={[
+                          styles.addressOptionSubtext,
+                          paymentForm.homeownerId === homeowner._id && styles.addressOptionSubtextSelected
+                        ]}>
+                          {homeowner.address}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+
+                {/* Amount */}
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Amount ($) *</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={paymentForm.amount}
+                    onChangeText={(text) => setPaymentForm(prev => ({ ...prev, amount: text }))}
+                    placeholder="Enter amount"
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+
+                {/* Payment Method */}
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Payment Method *</Text>
+                  <View style={styles.paymentMethodContainer}>
+                    <TouchableOpacity
+                      style={[
+                        styles.paymentMethodOption,
+                        paymentForm.paymentMethod === 'Check' && styles.paymentMethodSelected
+                      ]}
+                      onPress={() => setPaymentForm(prev => ({ ...prev, paymentMethod: 'Check' }))}
+                    >
+                      <Ionicons name="document-text" size={20} color={paymentForm.paymentMethod === 'Check' ? '#ffffff' : '#6b7280'} />
+                      <Text style={[
+                        styles.paymentMethodText,
+                        paymentForm.paymentMethod === 'Check' && styles.paymentMethodTextSelected
+                      ]}>Check</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.paymentMethodOption,
+                        paymentForm.paymentMethod === 'Cash' && styles.paymentMethodSelected
+                      ]}
+                      onPress={() => setPaymentForm(prev => ({ ...prev, paymentMethod: 'Cash' }))}
+                    >
+                      <Ionicons name="cash" size={20} color={paymentForm.paymentMethod === 'Cash' ? '#ffffff' : '#6b7280'} />
+                      <Text style={[
+                        styles.paymentMethodText,
+                        paymentForm.paymentMethod === 'Cash' && styles.paymentMethodTextSelected
+                      ]}>Cash</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Check Number (only show for check payments) */}
+                {paymentForm.paymentMethod === 'Check' && (
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Check Number (Optional)</Text>
+                    <TextInput
+                      style={styles.textInput}
+                      value={paymentForm.checkNumber}
+                      onChangeText={(text) => setPaymentForm(prev => ({ ...prev, checkNumber: text }))}
+                      placeholder="Enter check number"
+                    />
+                  </View>
+                )}
+
+                {/* Payment Date */}
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Payment Date *</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={paymentForm.paymentDate}
+                    onChangeText={(text) => setPaymentForm(prev => ({ ...prev, paymentDate: text }))}
+                    placeholder="YYYY-MM-DD"
+                  />
+                </View>
+
+                {/* Notes */}
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Notes (Optional)</Text>
+                  <TextInput
+                    style={[styles.textInput, styles.textArea]}
+                    value={paymentForm.notes}
+                    onChangeText={(text) => setPaymentForm(prev => ({ ...prev, notes: text }))}
+                    placeholder="Additional notes..."
+                    multiline
+                    numberOfLines={3}
+                    textAlignVertical="top"
+                  />
+                </View>
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    style={styles.cancelButton}
+                    onPress={() => animateOut('recordPayment', () => setShowRecordPaymentModal(false))}
+                  >
+                    <Text style={styles.cancelButtonText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.confirmButton}
+                    onPress={handleRecordPayment}
+                  >
+                    <Text style={styles.confirmButtonText}>Record Payment</Text>
                   </TouchableOpacity>
                 </View>
               </ScrollView>
@@ -4271,6 +4936,149 @@ const AdminScreen = () => {
           <View style={styles.spacer} />
         </ScrollView>
       </View>
+
+      {/* Payment Verification Modal */}
+      <Modal
+        visible={showVerificationModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowVerificationModal(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {selectedPaymentForVerification ? 'Verify Payment' : ''}
+              </Text>
+              <TouchableOpacity onPress={() => setShowVerificationModal(false)}>
+                <Ionicons name="close" size={24} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
+            {selectedPaymentForVerification && (
+              <ScrollView style={styles.modalScrollView}>
+                <View style={styles.verificationPaymentInfo}>
+                  <Text style={styles.verificationPaymentLabel}>Resident:</Text>
+                  <Text style={styles.verificationPaymentValue}>
+                    {(() => {
+                      const resident = residentsMap.get(selectedPaymentForVerification.userId);
+                      return resident ? `${resident.firstName} ${resident.lastName}` : 'Unknown';
+                    })()}
+                  </Text>
+                </View>
+                <View style={styles.verificationPaymentInfo}>
+                  <Text style={styles.verificationPaymentLabel}>Amount:</Text>
+                  <Text style={styles.verificationPaymentValue}>
+                    ${selectedPaymentForVerification.amount.toFixed(2)}
+                  </Text>
+                </View>
+                <View style={styles.verificationPaymentInfo}>
+                  <Text style={styles.verificationPaymentLabel}>Fee Type:</Text>
+                  <Text style={styles.verificationPaymentValue}>
+                    {selectedPaymentForVerification.feeType}
+                  </Text>
+                </View>
+                <View style={styles.verificationPaymentInfo}>
+                  <Text style={styles.verificationPaymentLabel}>Transaction ID:</Text>
+                  <Text style={styles.verificationPaymentValue}>
+                    {selectedPaymentForVerification.venmoTransactionId || selectedPaymentForVerification.transactionId}
+                  </Text>
+                </View>
+                
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Admin Notes (Optional)</Text>
+                  <TextInput
+                    style={[styles.textInput, styles.textArea]}
+                    placeholder="Add notes about verification decision..."
+                    value={verificationNotes}
+                    onChangeText={setVerificationNotes}
+                    multiline
+                    numberOfLines={3}
+                    textAlignVertical="top"
+                  />
+                </View>
+
+                <View style={styles.verificationActions}>
+                  <TouchableOpacity
+                    style={styles.rejectButton}
+                    onPress={async () => {
+                      try {
+                        await verifyVenmoPayment({
+                          paymentId: selectedPaymentForVerification._id,
+                          status: "Overdue",
+                          verificationStatus: "Rejected",
+                          adminNotes: verificationNotes.trim() || undefined,
+                        });
+                        Alert.alert('Success', 'Payment rejected.');
+                        setShowVerificationModal(false);
+                        setSelectedPaymentForVerification(null);
+                        setVerificationNotes('');
+                        await handleRefresh();
+                      } catch (error) {
+                        Alert.alert('Error', 'Failed to reject payment.');
+                      }
+                    }}
+                  >
+                    <Ionicons name="close-circle" size={20} color="#ffffff" />
+                    <Text style={styles.rejectButtonText}>Reject Payment</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.verifyButton}
+                    onPress={async () => {
+                      try {
+                        await verifyVenmoPayment({
+                          paymentId: selectedPaymentForVerification._id,
+                          status: "Paid",
+                          verificationStatus: "Verified",
+                          adminNotes: verificationNotes.trim() || undefined,
+                        });
+                        Alert.alert('Success', 'Payment verified successfully!');
+                        setShowVerificationModal(false);
+                        setSelectedPaymentForVerification(null);
+                        setVerificationNotes('');
+                        await handleRefresh();
+                      } catch (error) {
+                        Alert.alert('Error', 'Failed to verify payment.');
+                      }
+                    }}
+                  >
+                    <Ionicons name="checkmark-circle" size={20} color="#ffffff" />
+                    <Text style={styles.verifyButtonText}>Verify Payment</Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            )}
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Receipt Image Viewer Modal */}
+      <Modal
+        visible={showReceiptViewer}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowReceiptViewer(false)}
+      >
+        <View style={styles.receiptViewerOverlay}>
+          <View style={styles.receiptViewerHeader}>
+            <Text style={styles.receiptViewerTitle}>Receipt Screenshot</Text>
+            <TouchableOpacity onPress={() => setShowReceiptViewer(false)}>
+              <Ionicons name="close" size={24} color="#ffffff" />
+            </TouchableOpacity>
+          </View>
+          {selectedReceiptImage && (
+            <View style={styles.receiptViewerContent}>
+              <Image
+                source={{ uri: selectedReceiptImage }}
+                style={styles.receiptViewerImage}
+                resizeMode="contain"
+              />
+            </View>
+          )}
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -4332,9 +5140,12 @@ const styles = StyleSheet.create({
     width: Dimensions.get('window').width,
     alignSelf: 'stretch',
     overflow: 'hidden',
+    marginLeft: 0,
+    marginRight: 0,
+    marginHorizontal: 0,
   },
   header: {
-    height: 240,
+    height: 180,
     padding: 20,
     paddingTop: 40,
     paddingBottom: 20,
@@ -4346,11 +5157,11 @@ const styles = StyleSheet.create({
   headerImage: {
     borderRadius: 0,
     resizeMode: 'stretch',
-    width: Platform.OS === 'ios' ? Dimensions.get('window').width + 40 : '100%',
+    width: Dimensions.get('window').width,
     height: 240,
     position: 'absolute',
-    left: Platform.OS === 'ios' ? -20 : 0,
-    right: Platform.OS === 'ios' ? -20 : 0,
+    left: 0,
+    right: 0,
     top: 0,
     bottom: 0,
   },
@@ -4694,24 +5505,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
     marginRight: 12,
   },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    backgroundColor: '#ffffff',
-    borderRadius: 20,
-    padding: 20,
-    width: '90%',
-    maxHeight: '80%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.25,
-    shadowRadius: 20,
-    elevation: 10,
-  },
   modalTitle: {
     fontSize: 20,
     fontWeight: 'bold',
@@ -4855,6 +5648,10 @@ const styles = StyleSheet.create({
     marginBottom: 5,
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
+  },
+  sectionHeaderTextContainer: {
+    flex: 1,
+    marginLeft: 12,
   },
   sectionTitle: {
     fontSize: 18,
@@ -5240,7 +6037,7 @@ const styles = StyleSheet.create({
           flex: 1,
           margin: 6, 
           borderRadius: 12,
-          maxWidth: '47%',
+          width: '100%', // Fill the container width
         }
       : {
           flex: 1,
@@ -5260,6 +6057,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
+  multipleProfileImagesContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 8,
+    height: 56, // Match single profile image height
+    justifyContent: 'center',
+  },
+  multipleProfileImage: {
+    borderWidth: 2,
+    borderColor: '#ffffff',
+  },
+  multipleProfileImageOverlap: {
+    marginLeft: -12, // Overlap by 12px to show both images
+  },
   gridProfileInfo: {
     flex: 1,
   },
@@ -5268,6 +6079,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#1f2937',
     marginBottom: 2,
+    lineHeight: 18,
   },
   gridRole: {
     fontSize: 11,
@@ -5317,6 +6129,17 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginLeft: 4,
   },
+  paymentMethodBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    gap: 4,
+  },
+  paymentMethodBadgeText: {
+    fontSize: 10,
+    color: '#6b7280',
+    fontStyle: 'italic',
+  },
   // Admin fee management buttons
   feesSubTabContent: {
     marginTop: 0,
@@ -5330,6 +6153,7 @@ const styles = StyleSheet.create({
     gap: 12,
     marginTop: 16,
     paddingHorizontal: 20,
+    justifyContent: Platform.OS === 'web' ? 'flex-start' : 'center',
   },
   adminFeeButton: {
     flexDirection: 'row',
@@ -5355,6 +6179,47 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 12,
     fontWeight: '600',
+  },
+  paymentMethodContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+  },
+  paymentMethodOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f3f4f6',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 8,
+    flex: 1,
+    justifyContent: 'center',
+  },
+  paymentMethodSelected: {
+    backgroundColor: '#059669',
+  },
+  paymentMethodText: {
+    color: '#6b7280',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  paymentMethodTextSelected: {
+    color: '#ffffff',
+  },
+  notesInput: {
+    height: 80,
+    textAlignVertical: 'top',
+  },
+  modalSearchInput: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 8,
+    fontSize: 14,
+    backgroundColor: '#f9fafb',
   },
   // Address selector styles for fine modal
   addressSelector: {
@@ -5863,28 +6728,28 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   residentGridNameRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
+    flexDirection: Platform.OS === 'web' ? 'row' : 'column',
+    alignItems: Platform.OS === 'web' ? 'flex-start' : 'stretch',
+    justifyContent: Platform.OS === 'web' ? 'space-between' : 'flex-start',
     marginBottom: 3,
-    flexWrap: 'wrap',
+    flexWrap: Platform.OS === 'web' ? 'wrap' : 'nowrap',
   },
   residentGridName: {
     fontSize: Platform.OS === 'web' ? 13 : 14,
     fontWeight: '600',
     color: '#1f2937',
-    flex: 1,
-    marginRight: Platform.OS === 'web' ? 8 : 6,
-    lineHeight: Platform.OS === 'web' ? 15 : 16,
-    minWidth: 0, // Allow text to shrink on mobile
+    flex: Platform.OS === 'web' ? 1 : undefined,
+    marginRight: Platform.OS === 'web' ? 8 : 0,
+    marginBottom: Platform.OS === 'web' ? 0 : 4,
+    lineHeight: Platform.OS === 'web' ? 15 : 18,
   },
   residentGridRoleBadgesContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
     gap: Platform.OS === 'web' ? 4 : 3,
-    marginTop: Platform.OS !== 'web' ? 2 : 0,
-    maxWidth: '100%', // Prevent overflow on mobile
+    marginTop: 0,
+    alignSelf: Platform.OS === 'web' ? 'flex-start' : 'flex-start',
   },
   residentGridRoleBadge: {
     flexDirection: 'row',
@@ -5958,7 +6823,6 @@ const styles = StyleSheet.create({
     lineHeight: Platform.OS === 'web' ? 18 : 20,
     marginTop: 4,
     marginBottom: 8,
-    flexShrink: 1,
     flexShrink: 1,
   },
   residentGridActions: {
@@ -6355,42 +7219,6 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 8,
   },
-  rejectButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#fee2e2',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#fecaca',
-  },
-  rejectButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#ef4444',
-    marginLeft: 6,
-  },
-  verifyButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#d1fae5',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#a7f3d0',
-  },
-  verifyButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#10b981',
-    marginLeft: 6,
-  },
   // Compact payment styles for Fees tab
   pendingPaymentsSection: {
     backgroundColor: '#ffffff',
@@ -6717,6 +7545,20 @@ const styles = StyleSheet.create({
     flex: 1.2,
     minWidth: 100,
   },
+  residentsTableCellPaymentMethod: {
+    flex: 1.2,
+    minWidth: 110,
+  },
+  residentsTablePaymentMethodContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  residentsTablePaymentMethodText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#6b7280',
+  },
   residentsTableCellAmount: {
     flex: 1,
     minWidth: 90,
@@ -7038,6 +7880,167 @@ const styles = StyleSheet.create({
     color: '#2563eb',
     fontSize: 14,
     fontWeight: '600',
+  },
+  paymentSearchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    paddingHorizontal: 12,
+    marginBottom: 12,
+    marginHorizontal: 16,
+  },
+  paymentSearchIcon: {
+    marginRight: 8,
+  },
+  paymentSearchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#1f2937',
+    paddingVertical: 10,
+  },
+  paymentSearchClear: {
+    marginLeft: 8,
+  },
+  pendingPaymentsHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  compactPaymentAddress: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  viewReceiptButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#eff6ff',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    marginTop: 8,
+    marginBottom: 8,
+    gap: 6,
+  },
+  viewReceiptText: {
+    fontSize: 12,
+    color: '#2563eb',
+    fontWeight: '500',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    width: '100%',
+    maxWidth: 500,
+    maxHeight: '80%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  modalScrollView: {
+    padding: 20,
+  },
+  verificationPaymentInfo: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  verificationPaymentLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#6b7280',
+  },
+  verificationPaymentValue: {
+    fontSize: 14,
+    color: '#1f2937',
+    fontWeight: '500',
+  },
+  verificationActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 20,
+  },
+  rejectButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ef4444',
+    paddingVertical: 14,
+    borderRadius: 8,
+    gap: 8,
+  },
+  rejectButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  verifyButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#10b981',
+    paddingVertical: 14,
+    borderRadius: 8,
+    gap: 8,
+  },
+  verifyButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  receiptViewerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  receiptViewerHeader: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    paddingTop: 60,
+    zIndex: 1,
+  },
+  receiptViewerTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  receiptViewerContent: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  receiptViewerImage: {
+    width: '100%',
+    height: '100%',
+    maxWidth: 800,
+    maxHeight: 800,
   },
   residentsAddPastDueButton: {
     flexDirection: 'row',

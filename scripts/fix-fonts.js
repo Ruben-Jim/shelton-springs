@@ -78,8 +78,6 @@ if (fs.existsSync(privacyPolicyPath)) {
 } else {
   console.log('⚠️ privacy-policy.html not found in project root');
 }
-<<<<<<< HEAD
-=======
 
 // Copy terms-of-service.html to dist folder
 const termsOfServicePath = path.join(__dirname, '../terms-of-service.html');
@@ -102,4 +100,3 @@ if (fs.existsSync(contactPath)) {
 } else {
   console.log('⚠️ contact.html not found in project root');
 }
->>>>>>> 7cb713f (adding contact, privacy-policy, and terms of service)

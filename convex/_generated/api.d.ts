@@ -13,6 +13,7 @@ import type {
   FilterApi,
   FunctionReference,
 } from "convex/server";
+import type * as archiver from "../archiver.js";
 import type * as boardMembers from "../boardMembers.js";
 import type * as communityPosts from "../communityPosts.js";
 import type * as covenants from "../covenants.js";
@@ -22,12 +23,14 @@ import type * as fines from "../fines.js";
 import type * as hoaInfo from "../hoaInfo.js";
 import type * as http from "../http.js";
 import type * as messages from "../messages.js";
+import type * as notifications from "../notifications.js";
 import type * as payments from "../payments.js";
 import type * as pets from "../pets.js";
 import type * as polls from "../polls.js";
 import type * as residentNotifications from "../residentNotifications.js";
 import type * as residents from "../residents.js";
 import type * as storage from "../storage.js";
+import type * as storageCleanup from "../storageCleanup.js";
 
 /**
  * A utility for referencing Convex functions in your app's API.
@@ -38,6 +41,7 @@ import type * as storage from "../storage.js";
  * ```
  */
 declare const fullApi: ApiFromModules<{
+  archiver: typeof archiver;
   boardMembers: typeof boardMembers;
   communityPosts: typeof communityPosts;
   covenants: typeof covenants;
@@ -47,12 +51,14 @@ declare const fullApi: ApiFromModules<{
   hoaInfo: typeof hoaInfo;
   http: typeof http;
   messages: typeof messages;
+  notifications: typeof notifications;
   payments: typeof payments;
   pets: typeof pets;
   polls: typeof polls;
   residentNotifications: typeof residentNotifications;
   residents: typeof residents;
   storage: typeof storage;
+  storageCleanup: typeof storageCleanup;
 }>;
 export declare const api: FilterApi<
   typeof fullApi,

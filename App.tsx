@@ -1,9 +1,10 @@
 import React, { useMemo, useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, Platform } from 'react-native';
+import { StyleSheet, Text, View, Platform, ScrollView } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
 import { ConvexProvider, ConvexReactClient } from 'convex/react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
@@ -14,6 +15,7 @@ import MessagingOverlay from './src/components/MessagingOverlay';
 import MinimizedMessageBubble from './src/components/MinimizedMessageBubble';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import AnimatedSplashScreen from './src/components/AnimatedSplashScreen';
+import { useUserNotifications } from './src/hooks/useUserNotifications';
 
 import HomeScreen from './src/screens/HomeScreen';
 import BoardScreen from './src/screens/BoardScreen';
@@ -29,6 +31,8 @@ const Stack = createStackNavigator();
 const MainAppContent = () => {
   const { isAuthenticated, isLoading, isUserBlocked, user } = useAuth();
   const { showOverlay, setShowOverlay } = useMessaging();
+  // Initialize notification hook to reactively get and display notifications
+  useUserNotifications();
 
   if (isLoading) {
     return (
@@ -81,24 +85,84 @@ const MainAppContent = () => {
   );
 };
 
-// Environment variable validation component
-const EnvironmentErrorScreen = () => (
+// Environment variable validation component - updated to show debug info
+const EnvironmentErrorScreen = ({ debugInfo }: { debugInfo?: any }) => (
   <View style={styles.setupContainer}>
+    <ScrollView contentContainerStyle={styles.scrollContent}>
     <Text style={styles.setupTitle}>Configuration Error</Text>
     <Text style={styles.setupText}>
       The app is missing required configuration. Please ensure EXPO_PUBLIC_CONVEX_URL is set.
     </Text>
+      
+      {/* Debug Information - shows what values were actually read */}
+      {debugInfo && (
+        <View style={styles.debugContainer}>
+          <Text style={styles.debugTitle}>🔍 Debug Information:</Text>
+          <Text style={styles.debugText}>
+            Constants.expoConfig?.extra?.convexUrl:{'\n'}
+            {String(debugInfo.constantsValue ?? 'undefined')}
+          </Text>
+          <Text style={styles.debugText}>
+            process.env.EXPO_PUBLIC_CONVEX_URL:{'\n'}
+            {String(debugInfo.processEnvValue ?? 'undefined')}
+          </Text>
+          <Text style={styles.debugText}>
+            Raw Value:{'\n'}
+            {String(debugInfo.rawValue ?? 'undefined')}
+          </Text>
+          <Text style={styles.debugText}>
+            Final Value: {debugInfo.finalValue ? '✅ SET' : '❌ NOT SET'}
+          </Text>
+        </View>
+      )}
+      
+      <Text style={styles.setupText}>
+        For local development, create a .env.local file with:
+      </Text>
+      <Text style={styles.setupCode}>
+        EXPO_PUBLIC_CONVEX_URL=your-convex-url-here
+      </Text>
     <Text style={styles.setupText}>
-      For production builds, set this as an EAS secret:
+        For EAS builds, set this as an EAS secret:
     </Text>
     <Text style={styles.setupCode}>
       eas secret:create --scope project --name EXPO_PUBLIC_CONVEX_URL --value {'<your-convex-url>'}
     </Text>
+    </ScrollView>
   </View>
 );
 
 export default function App() {
-  const convexUrl = process.env.EXPO_PUBLIC_CONVEX_URL;
+  // Get Convex URL from Constants.expoConfig.extra (populated from app.json during build)
+  // Fallback to process.env for web/development compatibility
+  const constantsValue = Constants.expoConfig?.extra?.convexUrl;
+  const processEnvValue = process.env.EXPO_PUBLIC_CONVEX_URL;
+  
+  // Check if constantsValue is a placeholder (not substituted)
+  const isPlaceholder = constantsValue &&
+    typeof constantsValue === 'string' &&
+    (constantsValue.includes('${EXPO_PUBLIC_CONVEX_URL}') || constantsValue.startsWith('${'));
+
+  // Use process.env if constantsValue is a placeholder or empty, otherwise use constantsValue
+  let rawConvexUrl = (isPlaceholder || !constantsValue) ? processEnvValue : constantsValue;
+
+  // Normalize the URL - filter out placeholder strings or empty values
+  const convexUrl = rawConvexUrl &&
+    typeof rawConvexUrl === 'string' &&
+    rawConvexUrl.trim() !== '' &&
+    !rawConvexUrl.includes('${EXPO_PUBLIC_CONVEX_URL}') &&
+    !rawConvexUrl.startsWith('${')
+    ? rawConvexUrl.trim()
+    : undefined;
+  
+  // Store debug info for display on error screen
+  const debugInfo = {
+    constantsValue: constantsValue,
+    processEnvValue: processEnvValue,
+    rawValue: rawConvexUrl,
+    finalValue: convexUrl,
+  };
+  
   const [notificationInitAttempted, setNotificationInitAttempted] = useState(false);
   // Only show splash screen on iOS and Android, not on web
   const [showSplash, setShowSplash] = useState(Platform.OS !== 'web');
@@ -135,7 +199,6 @@ export default function App() {
         if (!isMounted) return;
         
         await enhancedUnifiedNotificationManager.initialize();
-        console.log('Notifications initialized successfully');
       } catch (error) {
         // Log but don't crash - notifications are not critical for app startup
         console.error('Failed to initialize notifications (non-critical):', error);
@@ -193,7 +256,7 @@ export default function App() {
     return (
       <SafeAreaProvider>
         <ErrorBoundary>
-          <EnvironmentErrorScreen />
+          <EnvironmentErrorScreen debugInfo={debugInfo} />
         </ErrorBoundary>
       </SafeAreaProvider>
     );
@@ -218,7 +281,7 @@ export default function App() {
             <MessagingProvider>
               <NavigationContainer initialState={initialState} onStateChange={onStateChange}>
                 <MainAppContent />
-                <StatusBar style="auto" />
+                <StatusBar style="dark" />
               </NavigationContainer>
             </MessagingProvider>
           </AuthProvider>
@@ -228,7 +291,7 @@ export default function App() {
           <MessagingProvider>
             <NavigationContainer initialState={initialState} onStateChange={onStateChange}>
               <MainAppContent />
-              <StatusBar style="auto" />
+              <StatusBar style="dark" />
             </NavigationContainer>
           </MessagingProvider>
         </AuthProvider>
@@ -247,9 +310,13 @@ const styles = StyleSheet.create({
   setupContainer: {
     flex: 1,
     backgroundColor: '#fff',
+  },
+  scrollContent: {
+    flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 24,
+    paddingVertical: 40,
   },
   setupTitle: {
     fontSize: 22,
@@ -282,5 +349,26 @@ const styles = StyleSheet.create({
   loadingText: {
     fontSize: 18,
     color: '#333',
+  },
+  debugContainer: {
+    width: '100%',
+    backgroundColor: '#fef3c7',
+    padding: 16,
+    borderRadius: 8,
+    marginVertical: 16,
+    borderWidth: 1,
+    borderColor: '#f59e0b',
+  },
+  debugTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#92400e',
+    marginBottom: 8,
+  },
+  debugText: {
+    fontSize: 12,
+    color: '#78350f',
+    fontFamily: 'Courier',
+    marginBottom: 8,
   },
 });

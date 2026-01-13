@@ -8,8 +8,8 @@ export interface OptimizeImageOptions {
 }
 
 const DEFAULT_OPTIONS: Required<OptimizeImageOptions> = {
-  maxDimension: 1600,
-  compress: 0.7,
+  maxDimension: 1200,
+  compress: 0.6,
   format: ImageManipulator.SaveFormat.JPEG,
 };
 
@@ -50,30 +50,93 @@ export interface UploadReadyImage {
   optimizedUri: string;
 }
 
+// Web image compression using HTML5 Canvas API
+async function compressImageForWeb(
+  uri: string,
+  maxDimension: number = 1200,
+  quality: number = 0.6
+): Promise<Blob> {
+  // Type guard for browser environment
+  if (typeof window === 'undefined' || !window.Image || !window.document) {
+    throw new Error('Browser APIs not available');
+  }
+  
+  return new Promise((resolve, reject) => {
+    const img = new window.Image();
+    img.onload = () => {
+      try {
+        // Calculate new dimensions maintaining aspect ratio
+        let width = img.width;
+        let height = img.height;
+        
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = (height / width) * maxDimension;
+            width = maxDimension;
+          } else {
+            width = (width / height) * maxDimension;
+            height = maxDimension;
+          }
+        }
+        
+        // Create canvas and compress
+        const canvas = window.document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        
+        if (!ctx) {
+          reject(new Error('Could not get canvas context'));
+          return;
+        }
+        
+        // Draw and compress
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              resolve(blob);
+            } else {
+              reject(new Error('Failed to compress image'));
+            }
+          },
+          'image/jpeg',
+          quality
+        );
+      } catch (error) {
+        reject(error);
+      }
+    };
+    
+    img.onerror = () => {
+      reject(new Error('Failed to load image'));
+    };
+    
+    img.src = uri;
+  });
+}
+
 export const getUploadReadyImage = async (
   uri: string,
   options?: OptimizeImageOptions
 ): Promise<UploadReadyImage> => {
-  // For web, handle image upload differently (direct blob conversion)
+  const { maxDimension = 1200, compress = 0.6 } = { ...DEFAULT_OPTIONS, ...options };
+  
+  // For web, handle image upload with compression
   if (Platform.OS === 'web') {
     try {
-      // On web, the URI might be a blob URL or data URL
-      // Try to fetch it directly
-      const response = await fetch(uri);
-      const blob = await response.blob();
-      
-      // Determine mime type
-      const mimeType = blob.type || (options?.format === ImageManipulator.SaveFormat.PNG ? 'image/png' : 'image/jpeg');
+      // Compress the image before uploading
+      const compressedBlob = await compressImageForWeb(uri, maxDimension, compress);
       
       return {
-        blob,
-        mimeType,
+        blob: compressedBlob,
+        mimeType: 'image/jpeg',
         optimizedUri: uri,
       };
     } catch (error) {
-      console.error('Error handling web image upload:', error);
-      // Fallback: try to create blob from data URL if fetch fails
-      if (uri.startsWith('data:')) {
+      console.error('Error compressing web image, falling back to original:', error);
+      // Fallback: try to fetch the original blob if compression fails
+      try {
         const response = await fetch(uri);
         const blob = await response.blob();
         const mimeType = blob.type || 'image/jpeg';
@@ -82,8 +145,10 @@ export const getUploadReadyImage = async (
           mimeType,
           optimizedUri: uri,
         };
+      } catch (fetchError) {
+        console.error('Error handling web image upload:', fetchError);
+        throw fetchError;
       }
-      throw error;
     }
   }
   

@@ -3,6 +3,7 @@ import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from './AuthContext';
 import { Id } from '../../convex/_generated/dataModel';
+import { notifyNewMessage } from '../utils/notificationHelpers';
 
 interface Conversation {
   _id: Id<"conversations">;
@@ -23,7 +24,7 @@ interface Conversation {
     id: string;
     name: string;
     email: string;
-    profileImage?: string;
+    profileImageUrl?: string;
     isBoardMember: boolean;
   } | null;
 }
@@ -58,6 +59,7 @@ export const MessagingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const { user } = useAuth();
   const [activeConversationId, setActiveConversationId] = useState<Id<"conversations"> | null>(null);
   const [showOverlay, setShowOverlay] = useState(false);
+  const [notifiedMessageIds, setNotifiedMessageIds] = useState<Set<string>>(new Set());
 
   // Queries
   const conversations = useQuery(
@@ -129,11 +131,39 @@ export const MessagingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         senderRole,
         content: content.trim(),
       });
+
+      // Note: For recipient notifications, remote push notifications would be needed
+      // This local notification only works for the sender's device
+      // In a production app, you'd want to send remote push notifications to the recipient
     } catch (error) {
       console.error('Error sending message:', error);
       throw error;
     }
   }, [activeConversationId, user, sendMessageMutation]);
+
+  // Watch for new messages and notify the current user if they're not the sender
+  useEffect(() => {
+    if (!user || !conversations.length) return;
+
+    // Check for new messages in conversations
+    conversations.forEach((conversation) => {
+      if (conversation.latestMessage && conversation.latestMessage.senderId !== user._id) {
+        // This is a message from someone else - send notification
+        // Only send if we haven't already notified for this message
+        const messageId = conversation.latestMessage._id;
+        
+        if (!notifiedMessageIds.has(messageId)) {
+          notifyNewMessage(
+            conversation.latestMessage.senderName,
+            conversation.latestMessage.content,
+            conversation.otherParticipant?.isBoardMember || false
+          );
+          // Mark as notified
+          setNotifiedMessageIds(prev => new Set(prev).add(messageId));
+        }
+      }
+    });
+  }, [conversations, user, notifiedMessageIds]);
 
   const value: MessagingContextType = {
     conversations,

@@ -18,7 +18,7 @@ import { AuthStackParamList } from '../navigation/AuthNavigator';
 import { simpleAlert } from '../utils/webCompatibleAlert';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
-import { useQuery } from 'convex/react';
+import { useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 
 type LoginScreenNavigationProp = StackNavigationProp<AuthStackParamList, 'Login'>;
@@ -26,6 +26,7 @@ type LoginScreenNavigationProp = StackNavigationProp<AuthStackParamList, 'Login'
 const LoginScreen = () => {
   const navigation = useNavigation<LoginScreenNavigationProp>();
   const { signIn } = useAuth();
+  const convex = useConvex();
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -33,9 +34,6 @@ const LoginScreen = () => {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(false);
   const { alertState, showAlert, hideAlert } = useCustomAlert();
-
-  // Get user by email for authentication
-  const user = useQuery(api.residents.getByEmail, { email: formData.email.toLowerCase() });
 
   const validateForm = () => {
     const newErrors: Record<string, string> = {};
@@ -62,35 +60,18 @@ const LoginScreen = () => {
     setIsLoading(true);
 
     try {
-      // Check if user exists and password matches
+      // Authenticate user with email and password
+      const user = await convex.query(api.residents.authenticate, {
+        email: formData.email.toLowerCase(),
+        password: formData.password,
+      });
+
       if (!user) {
         showAlert({
           title: 'Login Failed',
-          message: 'No account found with this email address.',
+          message: 'Invalid email or password. Please try again.',
           buttons: [{ text: 'OK', onPress: () => {} }],
           type: 'error'
-        });
-        return;
-      }
-
-      // In a real app, you would hash the password and compare
-      // For now, we'll use a simple string comparison
-      if (user.password !== formData.password) {
-        showAlert({
-          title: 'Login Failed',
-          message: 'Invalid password. Please try again.',
-          buttons: [{ text: 'OK', onPress: () => {} }],
-          type: 'error'
-        });
-        return;
-      }
-
-      if (!user.isActive) {
-        showAlert({
-          title: 'Account Inactive',
-          message: 'Your account is inactive. Please contact support.',
-          buttons: [{ text: 'OK', onPress: () => {} }],
-          type: 'warning'
         });
         return;
       }

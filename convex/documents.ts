@@ -77,6 +77,20 @@ export const create = mutation({
 export const remove = mutation({
   args: { id: v.id("documents") },
   handler: async (ctx, args) => {
+    // Get the document to retrieve file storage ID before deletion
+    const document = await ctx.db.get(args.id);
+    
+    // Delete the storage file associated with the document
+    if (document?.fileStorageId) {
+      try {
+        await ctx.storage.delete(document.fileStorageId as any);
+      } catch (error) {
+        // Log but don't fail if storage deletion fails (file may not exist)
+        console.log(`Failed to delete storage file ${document.fileStorageId}:`, error);
+      }
+    }
+    
+    // Delete the document record
     await ctx.db.delete(args.id);
   },
 });

@@ -184,17 +184,39 @@ export const hasPaidAnnualFee = query({
       .collect();
     if (unpaidFines.length > 0) return false;
 
-    // Prefer explicit fee records when present
-    const userAnnualFees = await ctx.db
-      .query("fees")
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("userId"), args.userId),
-          q.eq(q.field("frequency"), "Annually"),
-          q.eq(q.field("year"), currentYear)
+    // Get user's address to check fees by address (for households)
+    const user = await ctx.db.get(args.userId as any);
+    const addressKey = user 
+      ? `${user.address}${user.unitNumber ? ` Unit ${user.unitNumber}` : ''}`
+      : null;
+
+    // Prefer explicit fee records when present (check by address first, then userId)
+    let userAnnualFees = addressKey
+      ? await ctx.db
+          .query("fees")
+          .filter((q) =>
+            q.and(
+              q.eq(q.field("address"), addressKey),
+              q.eq(q.field("frequency"), "Annually"),
+              q.eq(q.field("year"), currentYear)
+            )
+          )
+          .collect()
+      : [];
+
+    // Fall back to userId if no address-based fees found (backward compatibility)
+    if (userAnnualFees.length === 0) {
+      userAnnualFees = await ctx.db
+        .query("fees")
+        .filter((q) =>
+          q.and(
+            q.eq(q.field("userId"), args.userId),
+            q.eq(q.field("frequency"), "Annually"),
+            q.eq(q.field("year"), currentYear)
+          )
         )
-      )
-      .collect();
+        .collect();
+    }
 
     if (userAnnualFees.length > 0) {
       // User is fully paid only if all annual fees for the year are Paid
@@ -217,10 +239,20 @@ export const hasPaidAnnualFee = query({
     });
 
     // Check if all fees for the user are covered by verified payments
-    const userFees = await ctx.db
-      .query("fees")
-      .filter((q) => q.eq(q.field("userId"), args.userId))
-      .collect();
+    // Check fees by address first, then userId
+    let userFees = addressKey
+      ? await ctx.db
+          .query("fees")
+          .filter((q) => q.eq(q.field("address"), addressKey))
+          .collect()
+      : [];
+    
+    if (userFees.length === 0) {
+      userFees = await ctx.db
+        .query("fees")
+        .filter((q) => q.eq(q.field("userId"), args.userId))
+        .collect();
+    }
 
     // If user has fees, check if all are paid via verified payments
     if (userFees.length > 0) {
@@ -260,6 +292,23 @@ export const getAllHomeownersPaymentStatus = query({
     // Filter to only include homeowners (isResident = true and not renters)
     const homeowners = residents.filter(resident => resident.isResident && !resident.isRenter);
     
+    // Build address key for each homeowner
+    const addressKeyMap = new Map<string, string>();
+    for (const homeowner of homeowners) {
+      const addressKey = `${homeowner.address}${homeowner.unitNumber ? ` Unit ${homeowner.unitNumber}` : ''}`;
+      addressKeyMap.set(homeowner._id, addressKey);
+    }
+    
+    // Get all homeowners at each address
+    const homeownersByAddress = new Map<string, typeof homeowners>();
+    for (const homeowner of homeowners) {
+      const addressKey = addressKeyMap.get(homeowner._id)!;
+      if (!homeownersByAddress.has(addressKey)) {
+        homeownersByAddress.set(addressKey, []);
+      }
+      homeownersByAddress.get(addressKey)!.push(homeowner);
+    }
+    
     const homeownersWithPaymentStatus = await Promise.all(
       homeowners.map(async (homeowner) => {
         // Determine paid status based on unpaid items (fees + fines)
@@ -273,12 +322,26 @@ export const getAllHomeownersPaymentStatus = query({
           )
           .collect();
 
-        const userAnnualFees = allFees.filter(
+        // Get address key for this homeowner
+        const addressKey = addressKeyMap.get(homeowner._id)!;
+        
+        // Find fees by address (for households with multiple residents)
+        const addressAnnualFees = allFees.filter(
           (fee) =>
-            fee.userId === homeowner._id &&
+            fee.address === addressKey &&
             fee.year === currentYear &&
             fee.frequency === "Annually"
         );
+
+        // If no address-based fees, fall back to userId (for backward compatibility)
+        const userAnnualFees = addressAnnualFees.length === 0
+          ? allFees.filter(
+              (fee) =>
+                fee.userId === homeowner._id &&
+                fee.year === currentYear &&
+                fee.frequency === "Annually"
+            )
+          : addressAnnualFees;
 
         // If there are explicit annual fee records, require all to be Paid
         let hasPaid = false;
@@ -287,11 +350,21 @@ export const getAllHomeownersPaymentStatus = query({
           hasPaid = allAnnualFeesPaid && unpaidFines.length === 0;
         } else {
           // Fallback to payment records
-          // Only count payments that are verified AND paid
-          const payments = await ctx.db
-            .query("payments")
-            .withIndex("by_user", (q) => q.eq("userId", homeowner._id))
-            .collect();
+          // Get all homeowners at this address to check their payments
+          const homeownersAtAddress = homeownersByAddress.get(addressKey) || [homeowner];
+          const homeownerIdsAtAddress = homeownersAtAddress.map(h => h._id);
+          
+          // Check payments from any homeowner at this address
+          const allPayments = await Promise.all(
+            homeownerIdsAtAddress.map(userId =>
+              ctx.db
+                .query("payments")
+                .withIndex("by_user", (q) => q.eq("userId", userId))
+                .collect()
+            )
+          );
+          const payments = allPayments.flat();
+          
           const verifiedPaidPayments = payments.filter((payment) => {
             // Payment must have status "Paid" AND verificationStatus "Verified"
             // Do NOT count rejected or pending payments
@@ -309,12 +382,14 @@ export const getAllHomeownersPaymentStatus = query({
           hasPaid = hasPaidViaPaymentRecord && unpaidFines.length === 0;
         }
         
-        // Find the annual fee for this homeowner
-        const homeownerFee = allFees.find(fee => 
-          fee.userId === homeowner._id && 
-          fee.year === currentYear &&
-          fee.frequency === "Annually"
-        );
+        // Find the annual fee for this address (or fall back to userId)
+        const homeownerFee = addressAnnualFees.length > 0
+          ? addressAnnualFees[0]
+          : allFees.find(fee => 
+              fee.userId === homeowner._id && 
+              fee.year === currentYear &&
+              fee.frequency === "Annually"
+            );
         
         // Determine user type
         let userType = 'homeowner';
@@ -347,11 +422,48 @@ export const createYearFeesForAllHomeowners = mutation({
     // Filter to only include homeowners (isResident = true and not renters)
     const homeowners = residents.filter(resident => resident.isResident && !resident.isRenter);
     
+    // Group homeowners by address (including unit number)
+    const addressMap = new Map<string, typeof homeowners>();
+    for (const homeowner of homeowners) {
+      // Create address key: address + unitNumber (if present)
+      const addressKey = `${homeowner.address}${homeowner.unitNumber ? ` Unit ${homeowner.unitNumber}` : ''}`;
+      
+      if (!addressMap.has(addressKey)) {
+        addressMap.set(addressKey, []);
+      }
+      addressMap.get(addressKey)!.push(homeowner);
+    }
+    
+    // Check for existing fees for this year to avoid duplicates
+    const existingFees = await ctx.db
+      .query("fees")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("frequency"), "Annually"),
+          q.eq(q.field("year"), args.year)
+        )
+      )
+      .collect();
+    
+    const existingAddresses = new Set(
+      existingFees
+        .filter(fee => fee.address)
+        .map(fee => fee.address!)
+    );
+    
     const now = Date.now();
     const feeRecords = [];
     
-    // Create fee records for each homeowner
-    for (const homeowner of homeowners) {
+    // Create one fee record per unique address
+    for (const [addressKey, homeownersAtAddress] of addressMap.entries()) {
+      // Skip if fee already exists for this address and year
+      if (existingAddresses.has(addressKey)) {
+        continue;
+      }
+      
+      // Use the first homeowner's ID for backward compatibility
+      const primaryHomeownerId = homeownersAtAddress[0]._id;
+      
       const feeRecord = await ctx.db.insert("fees", {
         name: `${args.description} ${args.year}`,
         amount: args.amount,
@@ -359,7 +471,8 @@ export const createYearFeesForAllHomeowners = mutation({
         dueDate: `${args.year}-12-31`,
         description: args.description,
         isLate: false, // Initially not late
-        userId: homeowner._id, // Link to specific homeowner
+        userId: primaryHomeownerId, // Link to primary homeowner for backward compatibility
+        address: addressKey, // Store address to group fees by household
         year: args.year,
         createdAt: now,
         updatedAt: now,
@@ -371,7 +484,7 @@ export const createYearFeesForAllHomeowners = mutation({
     return {
       success: true,
       feesCreated: feeRecords.length,
-      message: `Created ${feeRecords.length} annual fees for year ${args.year}`,
+      message: `Created ${feeRecords.length} annual fees for year ${args.year} (grouped by address)`,
     };
   },
 });
@@ -523,6 +636,80 @@ export const addPastDueAmount = mutation({
       success: true,
       feeId: feeRecord,
       message: `Past due amount of $${args.amount} added successfully`,
+    };
+  },
+});
+
+// Fix mismatched userId values in fee records
+export const fixFeeUserIds = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const allFees = await ctx.db.query("fees").collect();
+    const allResidents = await ctx.db.query("residents").collect();
+
+    // Create a map of resident emails to IDs for quick lookup
+    const residentEmailToId = new Map<string, string>();
+    allResidents.forEach(resident => {
+      if (resident.email) {
+        residentEmailToId.set(resident.email.toLowerCase(), resident._id);
+      }
+    });
+
+    let fixedCount = 0;
+    let skippedCount = 0;
+
+    for (const fee of allFees) {
+      // Skip fees that already have valid userId
+      if (fee.userId) {
+        const residentExists = allResidents.some(r => r._id === fee.userId);
+        if (residentExists) {
+          continue; // This fee's userId is already correct
+        }
+      }
+
+      // Try to find the correct resident ID
+      let correctUserId: string | null = null;
+
+      // If fee has an address field, try to match by address
+      if (fee.address) {
+        const residentByAddress = allResidents.find(r =>
+          r.address && r.address.toLowerCase().includes(fee.address!.toLowerCase())
+        );
+        if (residentByAddress) {
+          correctUserId = residentByAddress._id;
+        }
+      }
+
+      // If still not found and fee has a name, try to match by name
+      if (!correctUserId && fee.name) {
+        // Extract potential names from fee name (e.g., "Annual HOA Fee 2025" -> try to match)
+        const nameParts = fee.name.toLowerCase().split(' ');
+        for (const resident of allResidents) {
+          const residentName = `${resident.firstName} ${resident.lastName}`.toLowerCase();
+          if (nameParts.some(part => residentName.includes(part))) {
+            correctUserId = resident._id;
+            break;
+          }
+        }
+      }
+
+      if (correctUserId) {
+        await ctx.db.patch(fee._id, {
+          userId: correctUserId,
+          updatedAt: Date.now(),
+        });
+        fixedCount++;
+      } else {
+        console.log(`Could not fix fee ${fee._id} with name: ${fee.name}`);
+        skippedCount++;
+      }
+    }
+
+    return {
+      success: true,
+      fixedCount,
+      skippedCount,
+      message: `Fixed ${fixedCount} fee records. ${skippedCount} could not be matched.`,
     };
   },
 });

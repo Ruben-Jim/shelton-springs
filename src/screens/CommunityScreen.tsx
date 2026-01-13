@@ -37,15 +37,19 @@ import OptimizedImage from '../components/OptimizedImage';
 import { getUploadReadyImage } from '../utils/imageUpload';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
+import * as Linking from 'expo-linking';
+import { notifyNewCommunityPost, notifyNewComment, notifyNewPoll, notifyResidentNotification } from '../utils/notificationHelpers';
 
 const CommunityScreen = () => {
   const { user } = useAuth();
   const { setShowOverlay } = useMessaging();
+  const convex = useConvex();
   const isBoardMember = user?.isBoardMember && user?.isActive;
   const route = useRoute();
   const { alertState, showAlert, hideAlert } = useCustomAlert();
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [activeSubTab, setActiveSubTab] = useState<'posts' | 'polls' | 'notifications' | 'pets'>('posts');
+  const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
   const [showNewPostModal, setShowNewPostModal] = useState(false);
   const [showCommentModal, setShowCommentModal] = useState(false);
   const [selectedPostForComment, setSelectedPostForComment] = useState<any>(null);
@@ -61,6 +65,7 @@ const CommunityScreen = () => {
     title: '',
     content: '',
     category: 'General' as any,
+    link: '',
   });
 
   // Notification state
@@ -70,6 +75,7 @@ const CommunityScreen = () => {
   const [selectedNotification, setSelectedNotification] = useState<any>(null);
   const [selectedImageStorageId, setSelectedImageStorageId] = useState<string | null>(null);
   const [selectedNotificationType, setSelectedNotificationType] = useState<string | null>(null);
+  const [notificationSearchQuery, setNotificationSearchQuery] = useState('');
   const [notificationFormData, setNotificationFormData] = useState({
     residentId: '',
     type: 'Selling' as 'Selling' | 'Moving',
@@ -115,6 +121,8 @@ const CommunityScreen = () => {
   const [isCreatingPost, setIsCreatingPost] = useState(false);
   const [isSavingPet, setIsSavingPet] = useState(false);
   const [uploadingPetImage, setUploadingPetImage] = useState(false);
+  const [isSavingNotification, setIsSavingNotification] = useState(false);
+  const [uploadingNotificationImage, setUploadingNotificationImage] = useState(false);
   
   // Rainbow colors for posts and polls
   const borderColors = [
@@ -334,13 +342,26 @@ const CommunityScreen = () => {
   //   }).start();
   // }, []);
 
-  // Handle route params to set active sub-tab
+  // Handle route params to set active sub-tab and selected post
   useEffect(() => {
-    const params = route.params as { activeSubTab?: 'posts' | 'polls' | 'notifications' | 'pets' } | undefined;
+    const params = route.params as {
+      activeSubTab?: 'posts' | 'polls' | 'notifications' | 'pets';
+      selectedPostId?: string;
+    } | undefined;
     if (params?.activeSubTab) {
       setActiveSubTab(params.activeSubTab);
     }
+    if (params?.selectedPostId) {
+      setSelectedPostId(params.selectedPostId);
+    }
   }, [route.params]);
+
+  // Clear selected post when navigating away from posts tab
+  useEffect(() => {
+    if (activeSubTab !== 'posts') {
+      setSelectedPostId(null);
+    }
+  }, [activeSubTab]);
 
   // Update selectedPollVotes when userVotes data is available
   useEffect(() => {
@@ -381,6 +402,23 @@ const CommunityScreen = () => {
   // Separate posts and polls for display
   const postsContent = filteredPosts.map(post => ({ ...post, type: 'post' })).sort((a, b) => b.createdAt - a.createdAt);
   const pollsContent = polls.map(poll => ({ ...poll, type: 'poll' })).sort((a, b) => b.createdAt - a.createdAt);
+
+  // Scroll to selected post when it's set
+  useEffect(() => {
+    if (selectedPostId && postsContent && listRef.current) {
+      const selectedIndex = postsContent.findIndex((post: any) => post._id === selectedPostId);
+      if (selectedIndex >= 0) {
+        // Scroll to the selected post with some offset for the header
+        setTimeout(() => {
+          listRef.current?.scrollToIndex({
+            index: selectedIndex,
+            animated: true,
+            viewOffset: 100, // Offset for header
+          });
+        }, 500); // Delay to allow list to render
+      }
+    }
+  }, [selectedPostId, postsContent]);
 
   // Pagination: show all posts/polls up to the limit, with "Load More" button
   const hasMorePosts = postsTotal > postsLimit;
@@ -509,6 +547,9 @@ const CommunityScreen = () => {
         content: newComment.trim(),
       });
 
+      // Send notification for new comment
+      await notifyNewComment(`${user.firstName} ${user.lastName}`, selectedPostForComment.title);
+
       // Auto-expand comments for the post that just got a new comment
       setExpandedComments(prev => new Set(prev).add(selectedPostForComment._id));
 
@@ -545,9 +586,13 @@ const CommunityScreen = () => {
         category: newPost.category,
         author: `${user.firstName} ${user.lastName}`,
         images: uploadedImageUrls.length > 0 ? uploadedImageUrls : undefined,
+        link: newPost.link.trim() || undefined,
       });
 
-      setNewPost({ title: '', content: '', category: 'General' });
+      // Send notification for new community post
+      await notifyNewCommunityPost(`${user.firstName} ${user.lastName}`, newPost.title, newPost.category, convex);
+
+      setNewPost({ title: '', content: '', category: 'General', link: '' });
       setSelectedImages([]);
       animateOut('post', () => {
         setShowNewPostModal(false);
@@ -669,6 +714,9 @@ const CommunityScreen = () => {
         expiresAt: pollForm.expiresAt ? new Date(pollForm.expiresAt).getTime() : undefined,
         createdBy: `${user.firstName} ${user.lastName}`,
       });
+
+      // Send notification for new poll
+      await notifyNewPoll(pollForm.title, `${user.firstName} ${user.lastName}`, convex);
 
       Alert.alert('Success', 'Poll created successfully!');
       
@@ -810,13 +858,21 @@ const CommunityScreen = () => {
 
   // Helper component for displaying images with URL resolution
   const PostImage = ({ storageId }: { storageId: string }) => (
-    <OptimizedImage
-      storageId={storageId}
-      containerStyle={styles.postImageWrapper}
-      style={styles.postImage}
-      contentFit="cover"
-      priority="high"
-    />
+    <TouchableOpacity
+      onPress={() => {
+        setSelectedImageStorageId(storageId);
+        setShowImageModal(true);
+      }}
+      activeOpacity={0.9}
+      style={styles.postImageWrapper}
+    >
+      <OptimizedImage
+        storageId={storageId}
+        style={styles.postImage}
+        contentFit="cover"
+        priority="high"
+      />
+    </TouchableOpacity>
   );
 
   // Helper component for notification house images
@@ -971,10 +1027,14 @@ const CommunityScreen = () => {
       return;
     }
 
+    setIsSavingNotification(true);
+
     try {
       let houseImageId: string | undefined;
       if (previewImage) {
+        setUploadingNotificationImage(true);
         houseImageId = await uploadNotificationImage(previewImage);
+        setUploadingNotificationImage(false);
       }
 
       if (showEditNotificationModal && selectedNotification) {
@@ -1011,19 +1071,39 @@ const CommunityScreen = () => {
           additionalInfo: notificationFormData.additionalInfo || undefined,
           houseImage: houseImageId,
         });
-        Alert.alert('Success', 'Notification created successfully');
+        
+        // Send notification for new resident notification
+        const resident = residents?.find((r: any) => r._id === notificationFormData.residentId);
+        if (resident) {
+          const residentName = `${resident.firstName} ${resident.lastName}`;
+          const address = `${resident.address}${resident.unitNumber ? ` #${resident.unitNumber}` : ''}`;
+          await notifyResidentNotification(notificationFormData.type, residentName, address, convex);
+        }
+        
+        Alert.alert('Success', showEditNotificationModal ? 'Notification updated successfully' : 'Notification created successfully');
       }
-      
+
       setShowAddNotificationModal(false);
       setShowEditNotificationModal(false);
       setSelectedNotification(null);
       setPreviewImage(null);
+      setNotificationSearchQuery('');
       setNotificationFormData({
-        ...notificationFormData,
+        residentId: '',
+        type: 'Selling',
+        listingDate: '',
+        closingDate: '',
+        realtorInfo: '',
+        newResidentName: '',
+        isRental: false,
+        additionalInfo: '',
         houseImage: null,
       });
     } catch (error: any) {
       Alert.alert('Error', error.message || 'Failed to save notification');
+    } finally {
+      setIsSavingNotification(false);
+      setUploadingNotificationImage(false);
     }
   };
 
@@ -1368,12 +1448,12 @@ const CommunityScreen = () => {
           {
             opacity: fadeAnim,
           },
-          Platform.OS === 'ios' && styles.headerContainerIOS
+          styles.headerContainerIOS
         ]}
       >
         <ImageBackground
           source={Platform.OS === 'ios' ? require('../../assets/hoa-1k.jpg') : require('../../assets/hoa-2k.jpg')}
-          style={styles.header}
+          style={[styles.header, !isBoardMember && styles.headerNonMember]}
           imageStyle={styles.headerImage}
           resizeMode="stretch"
         >
@@ -1396,6 +1476,9 @@ const CommunityScreen = () => {
                 <BoardMemberIndicator />
               </View>
             </View>
+
+            {/* Spacer for non-board members to center the text */}
+            {!isBoardMember && <View style={styles.headerSpacer} />}
 
             {/* Messaging Button - Board Members Only */}
             {isBoardMember && (
@@ -1729,8 +1812,9 @@ const CommunityScreen = () => {
       <Animated.View
         style={[
           styles.postCard,
+          selectedPostId === item._id && styles.selectedPostCard,
           {
-            borderLeftColor: borderColors[index % borderColors.length],
+            borderLeftColor: selectedPostId === item._id ? '#eab308' : borderColors[index % borderColors.length],
             opacity: fadeAnim,
             transform: [
               {
@@ -1745,7 +1829,7 @@ const CommunityScreen = () => {
       >
         <View style={styles.postHeader}>
           <View style={styles.postAuthor}>
-            <ProfileImage source={item.authorProfileImage} size={40} style={{ marginRight: 8 }} />
+            <ProfileImage source={item.authorProfileImageUrl} size={40} style={{ marginRight: 8 }} />
             <View>
               <Text style={styles.authorName}>{item.author}</Text>
               <Text style={styles.postTime}>{formatDate(new Date(item.createdAt).toISOString())}</Text>
@@ -1759,6 +1843,26 @@ const CommunityScreen = () => {
 
         <Text style={styles.postTitle}>{item.title}</Text>
         <Text style={styles.postContent}>{item.content}</Text>
+
+        {item.link && (
+          <TouchableOpacity
+            style={styles.linkContainer}
+            onPress={() => {
+              if (item.link) {
+                Linking.openURL(item.link).catch(err => {
+                  console.error('Failed to open link:', err);
+                  Alert.alert('Error', 'Could not open the link');
+                });
+              }
+            }}
+          >
+            <Ionicons name="link" size={16} color="#2563eb" />
+            <Text style={styles.linkText} numberOfLines={1}>
+              {item.link}
+            </Text>
+            <Ionicons name="open-outline" size={16} color="#2563eb" />
+          </TouchableOpacity>
+        )}
 
         {item.images && item.images.length > 0 && (
           <View style={styles.postImagesContainer}>
@@ -1802,7 +1906,7 @@ const CommunityScreen = () => {
               <View key={comment._id ?? commentIndex} style={styles.commentItem}>
                 <View style={styles.commentHeader}>
                   <View style={styles.commentAuthorInfo}>
-                    <ProfileImage source={comment.authorProfileImage} size={24} style={{ marginRight: 6 }} />
+                    <ProfileImage source={comment.authorProfileImageUrl} size={24} style={{ marginRight: 6 }} />
                     <Text style={styles.commentAuthor}>{comment.author}</Text>
                     {isCommentAuthorDeveloper(comment.author) ? (
                       <View style={styles.developerBadge}>
@@ -1838,7 +1942,7 @@ const CommunityScreen = () => {
                     <View key={comment._id ?? `expanded-${extraIndex}`} style={styles.commentItem}>
                       <View style={styles.commentHeader}>
                         <View style={styles.commentAuthorInfo}>
-                          <ProfileImage source={comment.authorProfileImage} size={24} style={{ marginRight: 6 }} />
+                          <ProfileImage source={comment.authorProfileImageUrl} size={24} style={{ marginRight: 6 }} />
                           <Text style={styles.commentAuthor}>{comment.author}</Text>
                           {isCommentAuthorDeveloper(comment.author) ? (
                             <View style={styles.developerBadge}>
@@ -1892,6 +1996,11 @@ const CommunityScreen = () => {
           data={postsContent}
           keyExtractor={(item: any) => item._id}
           renderItem={renderPostItem}
+          getItemLayout={(data, index) => ({
+            length: 280, // Approximate height of each post card
+            offset: 280 * index,
+            index,
+          })}
           ListHeaderComponent={renderTopContent}
           ListEmptyComponent={renderPostsEmpty}
           ListFooterComponent={
@@ -2108,7 +2217,7 @@ const CommunityScreen = () => {
                       <View style={styles.notificationCardContent}>
                         <View style={styles.notificationCardMainInfo}>
                           <ProfileImage 
-                            source={notification.profileImage} 
+                            source={notification.profileImageUrl} 
                             size={48}
                             style={{ marginRight: 10 }}
                             initials={notification.name ? notification.name.split(' ').map((n: string) => n.charAt(0)).join('').substring(0, 2) : undefined}
@@ -2387,6 +2496,17 @@ const CommunityScreen = () => {
               textAlignVertical="top"
             />
 
+            <Text style={styles.inputLabel}>Link (Optional)</Text>
+            <TextInput
+              style={styles.textInput}
+              placeholder="https://example.com"
+              value={newPost.link}
+              onChangeText={(text) => setNewPost(prev => ({ ...prev, link: text }))}
+              keyboardType="url"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
             {/* Image Upload Section */}
             <Text style={styles.inputLabel}>Images (Optional)</Text>
             <View style={styles.imageUploadContainer}>
@@ -2571,8 +2691,22 @@ const CommunityScreen = () => {
               >
                 <View style={styles.inputGroup}>
                   <Text style={styles.label}>Resident *</Text>
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="Search by name or address..."
+                    value={notificationSearchQuery}
+                    onChangeText={setNotificationSearchQuery}
+                  />
                   <ScrollView style={styles.picker} nestedScrollEnabled>
-                    {residents?.map((resident: any) => (
+                    {residents
+                      ?.filter(resident => {
+                        const query = notificationSearchQuery.toLowerCase();
+                        return query === '' ||
+                          resident.firstName.toLowerCase().includes(query) ||
+                          resident.lastName.toLowerCase().includes(query) ||
+                          resident.address.toLowerCase().includes(query);
+                      })
+                      .map((resident: any) => (
                       <TouchableOpacity
                         key={resident._id}
                         style={[
@@ -2587,7 +2721,13 @@ const CommunityScreen = () => {
                             notificationFormData.residentId === resident._id && styles.pickerOptionTextSelected,
                           ]}
                         >
-                          {resident.firstName} {resident.lastName} - {resident.address}
+                          {resident.firstName} {resident.lastName}
+                        </Text>
+                        <Text style={[
+                          styles.pickerOptionSubtext,
+                          notificationFormData.residentId === resident._id && styles.pickerOptionSubtextSelected,
+                        ]}>
+                          {resident.address}
                           {resident.unitNumber ? ` #${resident.unitNumber}` : ''}
                         </Text>
                       </TouchableOpacity>
@@ -2756,10 +2896,26 @@ const CommunityScreen = () => {
                   />
                 </View>
 
-                <TouchableOpacity style={styles.submitButton} onPress={handleSubmitNotification}>
-                  <Text style={styles.submitButtonText}>
-                    {showEditNotificationModal ? 'Update' : 'Create'} Notification
-                  </Text>
+                <TouchableOpacity
+                  style={[
+                    styles.submitButton,
+                    (isSavingNotification || uploadingNotificationImage) && styles.submitButtonDisabled
+                  ]}
+                  onPress={handleSubmitNotification}
+                  disabled={isSavingNotification || uploadingNotificationImage}
+                >
+                  {(isSavingNotification || uploadingNotificationImage) ? (
+                    <View style={styles.buttonLoadingContainer}>
+                      <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 8 }} />
+                      <Text style={styles.submitButtonText}>
+                        {uploadingNotificationImage ? 'Uploading image...' : (showEditNotificationModal ? 'Updating...' : 'Creating...')}
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text style={styles.submitButtonText}>
+                      {showEditNotificationModal ? 'Update' : 'Create'} Notification
+                    </Text>
+                  )}
                 </TouchableOpacity>
               </ScrollView>
             </Animated.View>
@@ -3130,9 +3286,22 @@ const styles = StyleSheet.create({
     width: Dimensions.get('window').width,
     alignSelf: 'stretch',
     overflow: 'hidden',
+    marginLeft: 0,
+    marginRight: 0,
+    marginHorizontal: 0,
   },
   header: {
-    height: 240,
+    height: 180,
+    padding: 20,
+    paddingTop: 40,
+    paddingBottom: 20,
+    position: 'relative',
+    justifyContent: 'space-between',
+    width: '100%',
+    alignSelf: 'stretch',
+  },
+  headerNonMember: {
+    height: 170,
     padding: 20,
     paddingTop: 40,
     paddingBottom: 20,
@@ -3143,11 +3312,11 @@ const styles = StyleSheet.create({
   },
   headerImage: {
     borderRadius: 0,
-    width: Platform.OS === 'ios' ? Dimensions.get('window').width + 40 : '100%',
+    width: Dimensions.get('window').width,
     height: 240,
     position: 'absolute',
-    left: Platform.OS === 'ios' ? -20 : 0,
-    right: Platform.OS === 'ios' ? -20 : 0,
+    left: 0,
+    right: 0,
     top: 0,
     bottom: 0,
   },
@@ -3179,6 +3348,9 @@ const styles = StyleSheet.create({
   headerRight: {
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  headerSpacer: {
+    width: 44, // Same width as MessagingButton (icon + padding)
   },
   titleContainer: {
     flexDirection: 'row',
@@ -3363,6 +3535,13 @@ const styles = StyleSheet.create({
     borderLeftWidth: 4,
     // borderLeftColor is set dynamically per card
   },
+  selectedPostCard: {
+    backgroundColor: '#fefce8', // Light yellow background
+    shadowColor: '#eab308',
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 8,
+  },
   postHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -3417,6 +3596,23 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     lineHeight: 20,
     marginBottom: 12,
+  },
+  linkContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eff6ff',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  linkText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#2563eb',
+    marginLeft: 8,
+    marginRight: 8,
   },
   postFooter: {
     flexDirection: 'row',
@@ -4265,6 +4461,24 @@ const styles = StyleSheet.create({
   pickerOptionTextSelected: {
     color: '#eab308',
     fontWeight: '600',
+  },
+  searchInput: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    marginBottom: 8,
+    backgroundColor: '#ffffff',
+  },
+  pickerOptionSubtext: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 2,
+  },
+  pickerOptionSubtextSelected: {
+    color: '#d97706',
   },
   typeSelector: {
     flexDirection: 'row',

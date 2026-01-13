@@ -90,7 +90,6 @@ class EnhancedNotificationService {
         await this.getPushToken();
       }
 
-      console.log('EnhancedNotificationService initialized with status:', finalStatus);
       return finalStatus === 'granted';
     } catch (error) {
       console.error('Failed to initialize EnhancedNotificationService:', error);
@@ -153,7 +152,6 @@ class EnhancedNotificationService {
         projectId: 'a30576d8-ca43-4d96-8957-d6080ae9076d', // From app.json
       });
       this.pushToken = token.data;
-      console.log('Push token obtained:', this.pushToken);
     } catch (error) {
       console.error('Failed to get push token:', error);
     }
@@ -275,29 +273,36 @@ class EnhancedNotificationService {
 
     // Check if user has enabled this type of notification
     if (!this.shouldSendNotification(notificationData.data?.type)) {
-      console.log('Notification type disabled by user settings');
       return null;
     }
 
     try {
+      // Build notification content, only including badge if it has a valid value
+      const notificationContent: Notifications.NotificationContentInput = {
+        title: notificationData.title,
+        body: notificationData.body,
+        data: notificationData.data || {},
+        categoryIdentifier: notificationData.category || 'info',
+        priority: notificationData.priority || 'normal',
+        sound: this.notificationSettings?.sound ? notificationData.sound !== false : false,
+        vibrate: this.notificationSettings?.vibrate ? (notificationData.vibrate !== false ? [0, 250, 250, 250] : []) : [],
+      };
+      
+      // Only set badge if it's a valid number (iOS crashes with undefined/null badge)
+      if (this.notificationSettings?.badge && typeof notificationData.badge === 'number') {
+        notificationContent.badge = notificationData.badge;
+      }
+      
+      // Add Android channel ID if specified
+      if (Platform.OS === 'android' && notificationData.channelId) {
+        notificationContent.channelId = notificationData.channelId;
+      }
+
       const notificationId = await Notifications.scheduleNotificationAsync({
-        content: {
-          title: notificationData.title,
-          body: notificationData.body,
-          data: notificationData.data || {},
-          categoryIdentifier: notificationData.category || 'info',
-          priority: notificationData.priority || 'normal',
-          sound: this.notificationSettings?.sound ? notificationData.sound !== false : false,
-          vibrate: this.notificationSettings?.vibrate ? (notificationData.vibrate !== false ? [0, 250, 250, 250] : []) : [],
-          badge: this.notificationSettings?.badge ? notificationData.badge : undefined,
-          ...(Platform.OS === 'android' && notificationData.channelId && {
-            channelId: notificationData.channelId,
-          }),
-        },
+        content: notificationContent,
         trigger: null, // Show immediately
       });
 
-      console.log('Local notification sent with ID:', notificationId);
       this.retryAttempts = 0; // Reset retry counter on success
       return notificationId;
     } catch (error) {
@@ -306,8 +311,6 @@ class EnhancedNotificationService {
       // Implement retry logic with exponential backoff
       if (retryCount < this.maxRetries) {
         const delay = Math.pow(2, retryCount) * 1000; // Exponential backoff
-        console.log(`Retrying notification in ${delay}ms (attempt ${retryCount + 1})`);
-        
         setTimeout(() => {
           this.sendLocalNotification(notificationData, retryCount + 1);
         }, delay);
@@ -323,12 +326,26 @@ class EnhancedNotificationService {
   private shouldSendNotification(type?: string): boolean {
     if (!this.notificationSettings) return true;
     
+    // Map notification types to settings
     switch (type) {
-      case 'alert':
-        return this.notificationSettings.alerts;
-      case 'info':
+      case 'community_post':
+      case 'poll':
+      case 'resident_notification':
+      case 'document':
+        // These are info notifications
         return this.notificationSettings.info;
+      case 'payment_pending':
+      case 'fee':
+      case 'fine':
+      case 'board_update':
+      case 'message':
+        // These are alerts
+        return this.notificationSettings.alerts;
+      case 'emergency':
+        // Emergency notifications are always enabled for safety
+        return true;
       default:
+        // Default to allowing if type is unknown
         return true;
     }
   }
@@ -389,7 +406,6 @@ class EnhancedNotificationService {
   public async cancelNotification(notificationId: string): Promise<void> {
     try {
       await Notifications.cancelScheduledNotificationAsync(notificationId);
-      console.log('Notification cancelled:', notificationId);
     } catch (error) {
       console.error('Failed to cancel notification:', error);
     }
@@ -401,7 +417,6 @@ class EnhancedNotificationService {
   public async cancelAllNotifications(): Promise<void> {
     try {
       await Notifications.cancelAllScheduledNotificationsAsync();
-      console.log('All notifications cancelled');
     } catch (error) {
       console.error('Failed to cancel all notifications:', error);
     }

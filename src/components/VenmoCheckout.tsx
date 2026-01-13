@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Alert, Linking, Image, Platform, Modal, ScrollView, KeyboardAvoidingView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useMutation } from 'convex/react';
+import { useMutation, useQuery, useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import QRCode from 'react-native-qrcode-svg';
 import { Id } from '../../convex/_generated/dataModel';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { notifyPendingVenmoPayment } from '../utils/notificationHelpers';
+import * as ImagePicker from 'expo-image-picker';
+import { getUploadReadyImage } from '../utils/imageUpload';
 
 interface VenmoCheckoutProps {
   amount: number;
@@ -26,12 +29,18 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
   onSuccess,
   onError,
 }) => {
+  const convex = useConvex();
   const createVenmoPayment = useMutation(api.payments.createVenmoPayment);
+  const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
+  const residents = useQuery(api.residents.getAll) ?? [];
   const [venmoUsername, setVenmoUsername] = useState('');
   const [venmoTransactionId, setVenmoTransactionId] = useState('');
   const [loading, setLoading] = useState(false);
   const [showQR, setShowQR] = useState(false);
   const [showPaymentOverlay, setShowPaymentOverlay] = useState(false);
+  const [showTransactionIdHelp, setShowTransactionIdHelp] = useState(false);
+  const [receiptImage, setReceiptImage] = useState<string | null>(null);
+  const [uploadingReceipt, setUploadingReceipt] = useState(false);
 
   const VENMO_USERNAME_KEY = '@venmo_username';
 
@@ -77,8 +86,22 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
     setShowPaymentOverlay(true);
   };
 
-  const handleOpenVenmoLink = () => {
-    // Open Venmo business profile page on all platforms
+  const handleOpenVenmoLink = async () => {
+    // Try deep link first (if available)
+    const venmoDeepLink = `venmo://paycharge?txn=pay&recipients=SheltonSprings-HOA&amount=${amount}&note=${encodeURIComponent(feeType)}`;
+    
+    // Try to open deep link, fallback to web link
+    try {
+      const canOpen = await Linking.canOpenURL(venmoDeepLink);
+      if (canOpen) {
+        await Linking.openURL(venmoDeepLink);
+        return;
+      }
+    } catch (error) {
+      // Deep link not available, fall through to web link
+    }
+    
+    // Fallback to web link
     Linking.openURL(venmoWebLink).catch(() => {
       Alert.alert('Error', 'Could not open Venmo. Please visit the profile manually or scan the QR code.');
       setShowQR(true);
@@ -87,6 +110,34 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
 
   const handleCloseOverlay = () => {
     setShowPaymentOverlay(false);
+  };
+
+  const handlePickReceipt = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Required', 'Please grant camera roll permissions to upload receipt.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        setReceiptImage(result.assets[0].uri);
+      }
+    } catch (error) {
+      console.error('Error picking receipt image:', error);
+      Alert.alert('Error', 'Failed to pick image. Please try again.');
+    }
+  };
+
+  const handleRemoveReceipt = () => {
+    setReceiptImage(null);
   };
 
   const handleSubmit = async () => {
@@ -103,6 +154,29 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
     setLoading(true);
 
     try {
+      // Upload receipt image if provided
+      let receiptImageId: string | undefined = undefined;
+      if (receiptImage) {
+        setUploadingReceipt(true);
+        try {
+          const uploadReadyImage = await getUploadReadyImage(receiptImage);
+          const uploadUrl = await generateUploadUrl();
+          const uploadResponse = await fetch(uploadUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': uploadReadyImage.mimeType },
+            body: uploadReadyImage.blob,
+          });
+          const { storageId } = await uploadResponse.json();
+          receiptImageId = storageId;
+        } catch (error) {
+          console.error('Error uploading receipt:', error);
+          // Don't fail the payment if receipt upload fails
+          Alert.alert('Warning', 'Payment will be submitted, but receipt upload failed. You can still proceed.');
+        } finally {
+          setUploadingReceipt(false);
+        }
+      }
+
       // Create Venmo payment record
       await createVenmoPayment({
         userId,
@@ -110,9 +184,16 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
         amount,
         venmoUsername: venmoUsername.trim(),
         venmoTransactionId: venmoTransactionId.trim(),
+        receiptImage: receiptImageId,
         feeId,
         fineId,
       });
+
+      // Send notification to board members about pending payment
+      const resident = residents.find(r => r._id === userId);
+      const homeownerName = resident ? `${resident.firstName} ${resident.lastName}` : 'Unknown Homeowner';
+
+      await notifyPendingVenmoPayment(homeownerName, amount, feeType, convex);
 
       onSuccess();
     } catch (error: any) {
@@ -319,7 +400,77 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
 
                 {/* Transaction ID Input */}
                 <View style={styles.overlayInputGroup}>
-                  <Text style={styles.overlayLabel}>Venmo Transaction ID</Text>
+                  <View style={styles.overlayLabelRow}>
+                    <Text style={styles.overlayLabel}>Venmo Transaction ID</Text>
+                    <TouchableOpacity
+                      onPress={() => setShowTransactionIdHelp(!showTransactionIdHelp)}
+                      style={styles.helpButton}
+                    >
+                      <Ionicons 
+                        name={showTransactionIdHelp ? "chevron-up" : "chevron-down"} 
+                        size={16} 
+                        color="#2563eb" 
+                      />
+                      <Text style={styles.helpButtonText}>
+                        {showTransactionIdHelp ? 'Hide' : 'How to find'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                  
+                  {showTransactionIdHelp && (
+                    <View style={styles.helpCard}>
+                      <Text style={styles.helpTitle}>How to Find Your Transaction ID</Text>
+                      <View style={styles.helpSteps}>
+                        <View style={styles.helpStep}>
+                          <View style={styles.helpStepNumber}>
+                            <Text style={styles.helpStepNumberText}>1</Text>
+                          </View>
+                          <Text style={styles.helpStepText}>
+                            Open the Venmo app on your phone
+                          </Text>
+                        </View>
+                        <View style={styles.helpStep}>
+                          <View style={styles.helpStepNumber}>
+                            <Text style={styles.helpStepNumberText}>2</Text>
+                          </View>
+                          <Text style={styles.helpStepText}>
+                            Go to your transaction history (tap "You" tab → "Transactions")
+                          </Text>
+                        </View>
+                        <View style={styles.helpStep}>
+                          <View style={styles.helpStepNumber}>
+                            <Text style={styles.helpStepNumberText}>3</Text>
+                          </View>
+                          <Text style={styles.helpStepText}>
+                            Find the payment you just made to @SheltonSprings-HOA
+                          </Text>
+                        </View>
+                        <View style={styles.helpStep}>
+                          <View style={styles.helpStepNumber}>
+                            <Text style={styles.helpStepNumberText}>4</Text>
+                          </View>
+                          <Text style={styles.helpStepText}>
+                            Tap on the transaction to open details
+                          </Text>
+                        </View>
+                        <View style={styles.helpStep}>
+                          <View style={styles.helpStepNumber}>
+                            <Text style={styles.helpStepNumberText}>5</Text>
+                          </View>
+                          <Text style={styles.helpStepText}>
+                            The transaction ID is shown at the bottom of the receipt, or in the URL if viewing on web
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={styles.helpTip}>
+                        <Ionicons name="bulb" size={16} color="#f59e0b" />
+                        <Text style={styles.helpTipText}>
+                          Tip: You can also take a screenshot of the receipt and upload it below (optional)
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+                  
                   <TextInput
                     style={styles.overlayInput}
                     placeholder="Copy from your Venmo receipt"
@@ -331,6 +482,43 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
                   <Text style={styles.overlayHelperText}>
                     After completing payment, paste the transaction ID from your Venmo receipt
                   </Text>
+                </View>
+
+                {/* Receipt Screenshot Upload (Optional) */}
+                <View style={styles.overlayInputGroup}>
+                  <Text style={styles.overlayLabel}>Receipt Screenshot (Optional)</Text>
+                  <Text style={[styles.overlayHelperText, { marginBottom: 8 }]}>
+                    Upload a screenshot of your Venmo receipt to help with faster verification
+                  </Text>
+                  
+                  {receiptImage ? (
+                    <View style={styles.receiptPreviewContainer}>
+                      <Image source={{ uri: receiptImage }} style={styles.receiptPreview} />
+                      <TouchableOpacity
+                        style={styles.removeReceiptButton}
+                        onPress={handleRemoveReceipt}
+                        disabled={loading || uploadingReceipt}
+                      >
+                        <Ionicons name="close-circle" size={24} color="#ef4444" />
+                        <Text style={styles.removeReceiptText}>Remove</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.uploadReceiptButton}
+                      onPress={handlePickReceipt}
+                      disabled={loading || uploadingReceipt}
+                    >
+                      {uploadingReceipt ? (
+                        <ActivityIndicator color="#2563eb" />
+                      ) : (
+                        <>
+                          <Ionicons name="image-outline" size={20} color="#2563eb" />
+                          <Text style={styles.uploadReceiptText}>Upload Receipt Screenshot</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  )}
                 </View>
 
                 {/* Submit Button */}
@@ -769,6 +957,125 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  overlayLabelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  helpButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  helpButtonText: {
+    fontSize: 12,
+    color: '#2563eb',
+    fontWeight: '500',
+  },
+  helpCard: {
+    backgroundColor: '#f0f9ff',
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  helpTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1e40af',
+    marginBottom: 12,
+  },
+  helpSteps: {
+    gap: 12,
+  },
+  helpStep: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  helpStepNumber: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#2563eb',
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  helpStepNumberText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  helpStepText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#1e40af',
+    lineHeight: 18,
+  },
+  helpTip: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 12,
+    padding: 10,
+    backgroundColor: '#fef3c7',
+    borderRadius: 6,
+    borderLeftWidth: 3,
+    borderLeftColor: '#f59e0b',
+  },
+  helpTipText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#92400e',
+    lineHeight: 16,
+  },
+  receiptPreviewContainer: {
+    position: 'relative',
+    marginTop: 8,
+  },
+  receiptPreview: {
+    width: '100%',
+    height: 200,
+    borderRadius: 8,
+    backgroundColor: '#f3f4f6',
+  },
+  removeReceiptButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    gap: 4,
+  },
+  removeReceiptText: {
+    fontSize: 12,
+    color: '#ef4444',
+    fontWeight: '500',
+  },
+  uploadReceiptButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderWidth: 2,
+    borderColor: '#2563eb',
+    borderStyle: 'dashed',
+    borderRadius: 8,
+    padding: 16,
+    backgroundColor: '#eff6ff',
+  },
+  uploadReceiptText: {
+    fontSize: 14,
+    color: '#2563eb',
+    fontWeight: '500',
   },
 });
 

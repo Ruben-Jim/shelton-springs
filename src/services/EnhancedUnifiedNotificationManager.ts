@@ -75,17 +75,8 @@ class EnhancedUnifiedNotificationManager {
       this.isInitialized = true;
       const success = mobileEnabled || webEnabled;
 
-      console.log('EnhancedUnifiedNotificationManager initialized:', {
-        mobile: mobileEnabled,
-        web: webEnabled,
-        success,
-        platform: Platform.OS,
-      });
 
       // Log web-specific information
-      if (Platform.OS === 'web') {
-        console.log('📱 Web notifications: Push token listeners are not supported on web - this is expected behavior');
-      }
 
       return success;
     } catch (error) {

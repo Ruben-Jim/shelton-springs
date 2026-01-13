@@ -68,9 +68,18 @@ const CustomAlert: React.FC<CustomAlertProps> = ({
     }
   }, [visible]);
 
-  const handleButtonPress = (button: AlertButton) => {
-    button.onPress?.();
+  const handleButtonPress = async (button: AlertButton) => {
+    try {
+      const maybePromise = button.onPress?.();
+      // Support async handlers; only close after they finish
+      if (maybePromise && typeof (maybePromise as any).then === 'function') {
+        await maybePromise;
+      }
+    } catch (error) {
+      console.log('Error in alert button handler:', error);
+    } finally {
     onClose();
+    }
   };
 
   const getButtonStyle = (style?: string) => {

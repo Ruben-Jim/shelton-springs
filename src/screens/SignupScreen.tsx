@@ -220,9 +220,7 @@ const SignupScreen = () => {
       
       // Upload profile image if selected
       if (profileImage) {
-        console.log('📸 Uploading profile image...');
         profileImageUrl = await uploadImage(profileImage);
-        console.log('✅ Profile image uploaded:', profileImageUrl);
       }
 
       const userData: Omit<User, '_id' | 'createdAt' | 'updatedAt' | 'isActive'> = {

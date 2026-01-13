@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   Dimensions,
   Platform,
   Image,
+  Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -200,28 +201,60 @@ const FeesScreen = () => {
   // Get the latest user data from database (for fresh profile image)
   const residents = useQuery(api.residents.getAll) ?? [];
   const currentUser = residents.find(resident => resident.email === user?.email);
-  const displayProfileImage = currentUser?.profileImage || user?.profileImage;
+  const displayProfileImage = currentUser?.profileImageUrl || user?.profileImage;
 
   // Get all fees from database and filter for current user
   const [feesLimit, setFeesLimit] = useState(50);
   const feesData = useQuery(api.fees.getPaginated, { limit: feesLimit, offset: 0 });
   const allFeesFromDatabase = feesData?.items ?? [];
   
-  // Filter fees for the current user if they are a homeowner
-  const fees = user && (user.isResident && !user.isRenter) 
+  // Filter fees for the current user if they are a homeowner or developer
+  const fees = user && ((user.isResident && !user.isRenter) || user.isDev) 
     ? allFeesFromDatabase.filter((fee: any) => fee.userId === user._id)
     : [];
 
   // Get fines for the user (if any)
   const allFines = useQuery(api.fees.getAllFines) ?? [];
   
-  // Filter fines for the current user if they are a homeowner
-  const fines = user && (user.isResident && !user.isRenter) 
+  // Filter fines for the current user if they are a homeowner or developer
+  const fines = user && ((user.isResident && !user.isRenter) || user.isDev) 
     ? allFines.filter((fine: any) => fine.residentId === user._id)
     : [];
+  
+  // Get user payments (reactive query - auto-updates)
+  const userPayments = useQuery(
+    api.payments.getUserPayments,
+    user ? { userId: user._id } : "skip"
+  ) ?? [];
+  
+  // Create maps for quick payment lookup by feeId/fineId (client-side filtering)
+  const paymentsByFeeId = useMemo(() => {
+    const map = new Map();
+    userPayments.forEach((payment: any) => {
+      if (payment.feeId) {
+        map.set(payment.feeId, payment);
+      }
+    });
+    return map;
+  }, [userPayments]);
+  
+  const paymentsByFineId = useMemo(() => {
+    const map = new Map();
+    userPayments.forEach((payment: any) => {
+      if (payment.fineId) {
+        map.set(payment.fineId, payment);
+      }
+    });
+    return map;
+  }, [userPayments]);
+  
   const totalFees = fees.reduce((sum: number, fee: any) => sum + fee.amount, 0);
   const totalFines = fines.reduce((sum: number, fine: any) => sum + fine.amount, 0);
   const overdueFines = fines.filter((fine: any) => (fine.status || 'Pending') === 'Overdue').reduce((sum: number, fine: any) => sum + fine.amount, 0);
+  
+  // State for payment history modal
+  const [selectedItemForHistory, setSelectedItemForHistory] = useState<any>(null);
+  const [showPaymentHistory, setShowPaymentHistory] = useState(false);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -276,7 +309,7 @@ const FeesScreen = () => {
             {
           opacity: fadeAnim,
             },
-            Platform.OS === 'ios' && styles.headerContainerIOS
+            styles.headerContainerIOS
           ]}
         >
           <ImageBackground
@@ -309,6 +342,9 @@ const FeesScreen = () => {
                   <BoardMemberIndicator />
                 </View>
               </View>
+
+              {/* Spacer for non-board members to center the text */}
+              {!isBoardMember && <View style={styles.headerSpacer} />}
 
               {/* Messaging Button - Board Members Only */}
               {isBoardMember && (
@@ -528,6 +564,33 @@ const FeesScreen = () => {
                         </Text>
                       </View>
                       
+                      {/* Payment Status Badge */}
+                      {(() => {
+                        const payment = paymentsByFeeId.get(fee._id);
+                        if (payment) {
+                          const statusColor = payment.verificationStatus === 'Verified' ? '#10b981' : 
+                                            payment.verificationStatus === 'Rejected' ? '#ef4444' : '#f59e0b';
+                          const statusIcon = payment.verificationStatus === 'Verified' ? 'checkmark-circle' : 
+                                           payment.verificationStatus === 'Rejected' ? 'close-circle' : 'time';
+                          return (
+                            <TouchableOpacity
+                              style={[styles.paymentStatusBadge, { backgroundColor: statusColor + '20' }]}
+                              onPress={() => {
+                                setSelectedItemForHistory({ item: fee, type: 'fee', payment });
+                                setShowPaymentHistory(true);
+                              }}
+                            >
+                              <Ionicons name={statusIcon} size={12} color={statusColor} />
+                              <Text style={[styles.paymentStatusText, { color: statusColor }]}>
+                                {payment.verificationStatus === 'Verified' ? 'Verified' : 
+                                 payment.verificationStatus === 'Rejected' ? 'Rejected' : 'Pending'}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        }
+                        return null;
+                      })()}
+                      
                       {fee.status !== 'Paid' && (
                         <TouchableOpacity
                           style={styles.payButton}
@@ -575,6 +638,33 @@ const FeesScreen = () => {
                           {fine.status || 'Pending'}
                         </Text>
                       </View>
+                      
+                      {/* Payment Status Badge */}
+                      {(() => {
+                        const payment = paymentsByFineId.get(fine._id);
+                        if (payment) {
+                          const statusColor = payment.verificationStatus === 'Verified' ? '#10b981' : 
+                                            payment.verificationStatus === 'Rejected' ? '#ef4444' : '#f59e0b';
+                          const statusIcon = payment.verificationStatus === 'Verified' ? 'checkmark-circle' : 
+                                           payment.verificationStatus === 'Rejected' ? 'close-circle' : 'time';
+                          return (
+                            <TouchableOpacity
+                              style={[styles.paymentStatusBadge, { backgroundColor: statusColor + '20' }]}
+                              onPress={() => {
+                                setSelectedItemForHistory({ item: fine, type: 'fine', payment });
+                                setShowPaymentHistory(true);
+                              }}
+                            >
+                              <Ionicons name={statusIcon} size={12} color={statusColor} />
+                              <Text style={[styles.paymentStatusText, { color: statusColor }]}>
+                                {payment.verificationStatus === 'Verified' ? 'Verified' : 
+                                 payment.verificationStatus === 'Rejected' ? 'Rejected' : 'Pending'}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        }
+                        return null;
+                      })()}
                       
                       {(fine.status || 'Pending') !== 'Paid' && (
                         <TouchableOpacity
@@ -647,6 +737,86 @@ const FeesScreen = () => {
             onSuccess={handlePaymentSuccess}
           />
         )}
+
+        {/* Payment History Modal */}
+        <Modal
+          visible={showPaymentHistory}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setShowPaymentHistory(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Payment History</Text>
+                <TouchableOpacity onPress={() => setShowPaymentHistory(false)}>
+                  <Ionicons name="close" size={24} color="#6b7280" />
+                </TouchableOpacity>
+              </View>
+              {selectedItemForHistory && (
+                <ScrollView style={styles.modalScrollView}>
+                  <View style={styles.paymentHistoryCard}>
+                    <Text style={styles.paymentHistoryTitle}>
+                      {selectedItemForHistory.type === 'fee' ? selectedItemForHistory.item.name : selectedItemForHistory.item.violation}
+                    </Text>
+                    <View style={styles.paymentHistoryDetails}>
+                      <View style={styles.paymentHistoryRow}>
+                        <Text style={styles.paymentHistoryLabel}>Amount:</Text>
+                        <Text style={styles.paymentHistoryValue}>
+                          {formatCurrency(selectedItemForHistory.payment.amount)}
+                        </Text>
+                      </View>
+                      <View style={styles.paymentHistoryRow}>
+                        <Text style={styles.paymentHistoryLabel}>Date:</Text>
+                        <Text style={styles.paymentHistoryValue}>
+                          {new Date(selectedItemForHistory.payment.createdAt).toLocaleDateString()}
+                        </Text>
+                      </View>
+                      <View style={styles.paymentHistoryRow}>
+                        <Text style={styles.paymentHistoryLabel}>Transaction ID:</Text>
+                        <Text style={styles.paymentHistoryValue}>
+                          {selectedItemForHistory.payment.venmoTransactionId || selectedItemForHistory.payment.transactionId}
+                        </Text>
+                      </View>
+                      <View style={styles.paymentHistoryRow}>
+                        <Text style={styles.paymentHistoryLabel}>Status:</Text>
+                        <View style={[
+                          styles.paymentHistoryStatusBadge,
+                          { backgroundColor: selectedItemForHistory.payment.verificationStatus === 'Verified' ? '#10b98120' : 
+                                           selectedItemForHistory.payment.verificationStatus === 'Rejected' ? '#ef444420' : '#f59e0b20' }
+                        ]}>
+                          <Ionicons 
+                            name={selectedItemForHistory.payment.verificationStatus === 'Verified' ? 'checkmark-circle' : 
+                                 selectedItemForHistory.payment.verificationStatus === 'Rejected' ? 'close-circle' : 'time'} 
+                            size={14} 
+                            color={selectedItemForHistory.payment.verificationStatus === 'Verified' ? '#10b981' : 
+                                  selectedItemForHistory.payment.verificationStatus === 'Rejected' ? '#ef4444' : '#f59e0b'} 
+                          />
+                          <Text style={[
+                            styles.paymentHistoryStatusText,
+                            { color: selectedItemForHistory.payment.verificationStatus === 'Verified' ? '#10b981' : 
+                                    selectedItemForHistory.payment.verificationStatus === 'Rejected' ? '#ef4444' : '#f59e0b' }
+                          ]}>
+                            {selectedItemForHistory.payment.verificationStatus === 'Verified' ? 'Verified' : 
+                             selectedItemForHistory.payment.verificationStatus === 'Rejected' ? 'Rejected' : 'Pending Verification'}
+                          </Text>
+                        </View>
+                      </View>
+                      {selectedItemForHistory.payment.adminNotes && (
+                        <View style={styles.paymentHistoryRow}>
+                          <Text style={styles.paymentHistoryLabel}>Admin Notes:</Text>
+                          <Text style={styles.paymentHistoryValue}>
+                            {selectedItemForHistory.payment.adminNotes}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                </ScrollView>
+              )}
+            </View>
+          </View>
+        </Modal>
       </View>
     </SafeAreaView>
   );
@@ -694,9 +864,12 @@ const styles = StyleSheet.create({
     width: Dimensions.get('window').width,
     alignSelf: 'stretch',
     overflow: 'hidden',
+    marginLeft: 0,
+    marginRight: 0,
+    marginHorizontal: 0,
   },
   header: {
-    height: 240,
+    height: 180,
     padding: 20,
     paddingTop: 40,
     paddingBottom: 20,
@@ -708,11 +881,11 @@ const styles = StyleSheet.create({
   headerImage: {
     borderRadius: 0,
     resizeMode: 'stretch',
-    width: Platform.OS === 'ios' ? Dimensions.get('window').width + 40 : '100%',
+    width: Dimensions.get('window').width,
     height: 240,
     position: 'absolute',
-    left: Platform.OS === 'ios' ? -20 : 0,
-    right: Platform.OS === 'ios' ? -20 : 0,
+    left: 0,
+    right: 0,
     top: 0,
     bottom: 0,
   },
@@ -735,6 +908,9 @@ const styles = StyleSheet.create({
   headerRight: {
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  headerSpacer: {
+    width: 44, // Same width as MessagingButton (icon + padding)
   },
   menuButton: {
     padding: 8,
@@ -1049,6 +1225,98 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     marginLeft: 4,
+  },
+  paymentStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginLeft: 8,
+    gap: 4,
+  },
+  paymentStatusText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    width: '100%',
+    maxWidth: 500,
+    maxHeight: '80%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  modalScrollView: {
+    padding: 20,
+  },
+  paymentHistoryCard: {
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    padding: 16,
+  },
+  paymentHistoryTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 16,
+  },
+  paymentHistoryDetails: {
+    gap: 12,
+  },
+  paymentHistoryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  paymentHistoryLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#6b7280',
+    flexShrink: 0,
+  },
+  paymentHistoryValue: {
+    fontSize: 14,
+    color: '#1f2937',
+    flex: 1,
+    textAlign: 'right',
+  },
+  paymentHistoryStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    gap: 6,
+  },
+  paymentHistoryStatusText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
 });
 

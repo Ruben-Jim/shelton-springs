@@ -179,10 +179,10 @@ const CovenantsScreen = () => {
         })}
       >
         {/* Header with ImageBackground */}
-        <View style={Platform.OS === 'ios' ? styles.headerContainerIOS : undefined}>
+        <View style={styles.headerContainerIOS}>
         <ImageBackground
           source={require('../../assets/hoa-4k.jpg')}
-          style={styles.header}
+          style={[styles.header, !isBoardMember && styles.headerNonMember]}
           imageStyle={styles.headerImage}
             resizeMode="stretch"
         >
@@ -210,6 +210,9 @@ const CovenantsScreen = () => {
                 <BoardMemberIndicator />
               </View>
             </View>
+
+            {/* Spacer for non-board members to center the text */}
+            {!isBoardMember && <View style={styles.headerSpacer} />}
 
             {/* Messaging Button - Board Members Only */}
             {isBoardMember && (
@@ -370,6 +373,13 @@ const CovenantsScreen = () => {
       <View style={styles.infoSection}>
         <Text style={styles.infoTitle}>About Covenants</Text>
         <Text style={styles.infoText}>
+        <Text style={styles.infoText}>
+          Please be aware that the summaries provided above are brief highlights of the community regulations;
+          for a complete and authoritative understanding of all rules, rights, and obligations,
+          you should refer to the full descriptions contained within the official Shelton Springs CC&R PDF.
+        </Text>
+        </Text>
+        <Text style={styles.infoText}>
           Covenants, Conditions, and Restrictions (CC&Rs) are the rules and regulations that govern our community. 
           All residents are required to follow these guidelines to maintain the quality and appearance of our neighborhood.
         </Text>
@@ -418,9 +428,22 @@ const styles = StyleSheet.create({
     width: Dimensions.get('window').width,
     alignSelf: 'stretch',
     overflow: 'hidden',
+    marginLeft: 0,
+    marginRight: 0,
+    marginHorizontal: 0,
   },
   header: {
-    height: 240,
+    height: 180,
+    padding: 20,
+    paddingTop: 40,
+    paddingBottom: 20,
+    position: 'relative',
+    justifyContent: 'space-between',
+    width: '100%',
+    alignSelf: 'stretch',
+  },
+  headerNonMember: {
+    height: 170,
     padding: 20,
     paddingTop: 40,
     paddingBottom: 20,
@@ -432,11 +455,11 @@ const styles = StyleSheet.create({
   headerImage: {
     borderRadius: 0,
     resizeMode: 'stretch',
-    width: Platform.OS === 'ios' ? Dimensions.get('window').width + 40 : '100%',
+    width: Dimensions.get('window').width,
     height: 240,
     position: 'absolute',
-    left: Platform.OS === 'ios' ? -20 : 0,
-    right: Platform.OS === 'ios' ? -20 : 0,
+    left: 0,
+    right: 0,
     top: 0,
     bottom: 0,
   },
@@ -458,6 +481,9 @@ const styles = StyleSheet.create({
   headerRight: {
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  headerSpacer: {
+    width: 44, // Same width as MessagingButton (icon + padding)
   },
   menuButton: {
     padding: 8,

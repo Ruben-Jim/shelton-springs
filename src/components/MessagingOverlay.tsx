@@ -196,9 +196,6 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
 
   // Add console log for debugging on iOS
   useEffect(() => {
-    if (visible) {
-      console.log('[MessagingOverlay] Modal should be visible, showOverlay:', visible);
-    }
   }, [visible]);
 
   if (!visible) {
@@ -282,7 +279,7 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                     {otherParticipant && isBoardMember && (
                       <View style={[styles.conversationHeader, styles.conversationHeaderCentered]}>
                         <ProfileImage
-                          source={otherParticipant.profileImage}
+                          source={otherParticipant.profileImageUrl}
                           size={40}
                           initials={otherParticipant.name
                             .split(' ')
@@ -358,7 +355,7 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                       onPress={() => handleSelectUser(resident._id)}
                     >
                       <ProfileImage
-                        source={resident.profileImage}
+                        source={resident.profileImageUrl}
                         size={48}
                         initials={`${resident.firstName[0]}${resident.lastName[0]}`}
                       />
@@ -412,7 +409,7 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                         onPress={() => openConversation(conversation._id)}
                       >
                         <ProfileImage
-                          source={other?.profileImage}
+                          source={other?.profileImageUrl}
                           size={48}
                           initials={
                             other
@@ -495,7 +492,7 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                           {isCurrentUser && isBoardMember && (
                             <ProfileImage
                               source={
-                                user?.profileImage
+                                user?.profileImageUrl
                               }
                               size={32}
                               initials={

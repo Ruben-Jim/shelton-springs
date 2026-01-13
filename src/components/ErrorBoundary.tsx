@@ -60,7 +60,8 @@ class ErrorBoundary extends Component<Props, State> {
               The app encountered an unexpected error. Please try restarting the app.
             </Text>
             
-            {__DEV__ && this.state.error && (
+            {/* Temporarily show errors in production for debugging */}
+            {this.state.error && (
               <View style={styles.errorDetails}>
                 <Text style={styles.errorTitle}>Error Details:</Text>
                 <Text style={styles.errorText}>{this.state.error.toString()}</Text>

@@ -284,15 +284,26 @@ class EnhancedWebNotificationService {
   private shouldSendNotification(type?: string): boolean {
     if (!this.notificationSettings) return true;
     
+    // Map notification types to settings
     switch (type) {
+      case 'community_post':
+      case 'poll':
+      case 'resident_notification':
+      case 'document':
+        // These are info notifications
+        return this.notificationSettings.info;
+      case 'payment_pending':
+      case 'fee':
+      case 'fine':
+      case 'board_update':
+      case 'message':
+        // These are alerts
+        return this.notificationSettings.alerts;
       case 'emergency':
         // Emergency notifications are always enabled for safety
         return true;
-      case 'alert':
-        return this.notificationSettings.alerts;
-      case 'info':
-        return this.notificationSettings.info;
       default:
+        // Default to allowing if type is unknown
         return true;
     }
   }
