@@ -6,8 +6,10 @@ import { useAuth } from '../context/AuthContext';
 const BoardMemberIndicator = () => {
   const { user } = useAuth();
   const isBoardMember = user?.isBoardMember && user?.isActive;
+  const isDev = user?.isDev ?? false;
 
-  if (!isBoardMember) {
+  // Devs see DeveloperIndicator only; don't show Board Member
+  if (!isBoardMember || isDev) {
     return null;
   }
 

@@ -26,9 +26,18 @@ const ProfileImage = ({ source, size = 40, style, initials }: ProfileImageProps)
     return placeholder;
   }
 
+  // Determine if source is a URL or a storage ID
+  // URLs have protocols (http, https, file://, data:) or are local file paths
+  const isUrl = source.startsWith('http') || 
+                source.startsWith('https') || 
+                source.startsWith('file://') || 
+                source.startsWith('data:') ||
+                (source.includes('/') && source.length > 20); // Local file path
+
   return (
     <OptimizedImage
-      source={source}
+      source={isUrl ? source : undefined}
+      storageId={isUrl ? undefined : source}
       fallback={placeholder}
       containerStyle={[radiusStyle, style]}
       style={[styles.image, radiusStyle]}

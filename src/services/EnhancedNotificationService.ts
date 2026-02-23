@@ -1,4 +1,5 @@
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -148,8 +149,9 @@ class EnhancedNotificationService {
    */
   private async getPushToken(): Promise<void> {
     try {
+      const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? 'a30576d8-ca43-4d96-8957-d6080ae9076d';
       const token = await Notifications.getExpoPushTokenAsync({
-        projectId: 'a30576d8-ca43-4d96-8957-d6080ae9076d', // From app.json
+        projectId,
       });
       this.pushToken = token.data;
     } catch (error) {

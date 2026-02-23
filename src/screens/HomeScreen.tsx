@@ -13,14 +13,16 @@ import {
   Animated,
   Dimensions,
   ActivityIndicator,
+  Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useIsFocused } from '@react-navigation/native';
 import { useQuery, useMutation } from 'convex/react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
+import { useCachedHoaInfo, useCachedResidents } from '../context/QueryCacheContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
 import CustomTabBar from '../components/CustomTabBar';
@@ -35,16 +37,27 @@ import { useMessaging } from '../context/MessagingContext';
 const HomeScreen = () => {
   const { user } = useAuth();
   const navigation = useNavigation();
+  const isFocused = useIsFocused();
   const { setShowOverlay } = useMessaging();
   const isBoardMember = user?.isBoardMember && user?.isActive;
-  const hoaInfo = useQuery(api.hoaInfo.get);
-  // Use paginated queries with small initial limits for home screen
-  const communityPostsData = useQuery(api.communityPosts.getPaginated, { limit: 5, offset: 0 });
+  const hoaInfo = useCachedHoaInfo();
+  const residents = useCachedResidents();
+  // Use paginated queries with small initial limits for home screen (conditional based on screen focus)
+  const communityPostsData = useQuery(
+    api.communityPosts.getPaginated,
+    isFocused ? { limit: 5, offset: 0 } : "skip"
+  );
   const communityPosts = communityPostsData?.items ?? [];
   
-  const pollsData = useQuery(api.polls.getPaginated, { limit: 1, offset: 0 });
+  const pollsData = useQuery(
+    api.polls.getPaginated,
+    isFocused ? { limit: 1, offset: 0 } : "skip"
+  );
   const polls = pollsData?.items ?? [];
-  const userVotes = useQuery(api.polls.getAllUserVotes, user ? { userId: user._id } : "skip");
+  const userVotes = useQuery(
+    api.polls.getAllUserVotes,
+    isFocused && user ? { userId: user._id } : "skip"
+  );
   const voteOnPoll = useMutation(api.polls.vote);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [selectedPollVotes, setSelectedPollVotes] = useState<{[pollId: string]: number[]}>({});
@@ -67,6 +80,9 @@ const HomeScreen = () => {
   
   // Onboarding state
   const [showOnboarding, setShowOnboarding] = useState(false);
+
+  // Pet registration prompt modal (board requires residents to register pets)
+  const [showPetRegistrationModal, setShowPetRegistrationModal] = useState(false);
   
   // ScrollView ref for better control
   const scrollViewRef = useRef<ScrollView>(null);
@@ -153,12 +169,44 @@ const HomeScreen = () => {
     clearLegacyOnboarding();
   }, [user?._id]);
 
+  // Pet registration prompt - show on app launch until user confirms they've registered
+  useEffect(() => {
+    const checkPetRegistrationPrompt = async () => {
+      if (!user?._id || !isFocused) return;
+      try {
+        const confirmed = await AsyncStorage.getItem(`pet_registration_confirmed_${user._id}`);
+        if (confirmed !== 'true') {
+          setShowPetRegistrationModal(true);
+        }
+      } catch (error) {
+        console.error('Error checking pet registration status:', error);
+      }
+    };
+    checkPetRegistrationPrompt();
+  }, [user?._id, isFocused]);
+
   const handleContact = (type: 'phone' | 'email') => {
     if (type === 'phone') {
       if (hoaInfo?.phone) Linking.openURL(`tel:${hoaInfo.phone}`);
     } else {
       if (hoaInfo?.email) Linking.openURL(`mailto:${hoaInfo.email}`);
     }
+  };
+
+  const handlePetRegistrationNotYet = () => {
+    setShowPetRegistrationModal(false);
+    (navigation as any).navigate('Community', { activeSubTab: 'pets' });
+  };
+
+  const handlePetRegistrationYes = async () => {
+    if (user?._id) {
+      try {
+        await AsyncStorage.setItem(`pet_registration_confirmed_${user._id}`, 'true');
+      } catch (error) {
+        console.error('Error saving pet registration confirmation:', error);
+      }
+    }
+    setShowPetRegistrationModal(false);
   };
 
   const handleEmergency = () => {
@@ -307,13 +355,14 @@ const HomeScreen = () => {
           {
         opacity: fadeAnim,
           },
-          styles.headerContainerIOS
+          styles.headerContainerIOS,
+          { width: screenWidth }
         ]}
       >
         <ImageBackground
           source={require('../../assets/hoa-4k.jpg')}
           style={[styles.header, !isBoardMember && styles.headerNonMember]}
-          imageStyle={styles.headerImage}
+          imageStyle={[styles.headerImage, { width: screenWidth }]}
           resizeMode="stretch"
         >
         <View style={styles.headerOverlay} />
@@ -436,7 +485,7 @@ const HomeScreen = () => {
               key={post._id}
               activeOpacity={0.8}
               onPress={() => {
-                navigation.navigate('Community' as never, {
+                (navigation as any).navigate('Community', {
                   activeSubTab: 'posts',
                   selectedPostId: post._id
                 });
@@ -458,7 +507,15 @@ const HomeScreen = () => {
               >
               <View style={styles.postHeader}>
                 <View style={styles.postAuthorInfo}>
-                  <ProfileImage source={post.authorProfileImageUrl} size={40} style={{ marginRight: 8 }} />
+                  <ProfileImage 
+                    source={
+                      post.authorProfileImage || 
+                      (residents?.find((r: any) => `${r.firstName} ${r.lastName}` === post.author)?.profileImage) || 
+                      null
+                    } 
+                    size={40} 
+                    style={{ marginRight: 8 }} 
+                  />
                   <Text style={styles.postAuthor}>{post.author}</Text>
                 </View>
                 <Text style={styles.postCategory}>{post.category}</Text>
@@ -470,12 +527,6 @@ const HomeScreen = () => {
               
               <View style={styles.postFooter}>
                 <Text style={styles.postTime}>{formatDate(new Date(post.createdAt).toISOString())}</Text>
-                <View style={styles.postStats}>
-                  <Ionicons name="heart" size={16} color="#6b7280" />
-                  <Text style={styles.postStatsText}>{post.likes}</Text>
-                  <Ionicons name="chatbubble" size={16} color="#6b7280" />
-                  <Text style={styles.postStatsText}>{post.comments?.length ?? 0}</Text>
-                </View>
               </View>
               </Animated.View>
             </TouchableOpacity>
@@ -725,8 +776,8 @@ const HomeScreen = () => {
           <Text style={[styles.sectionTitle, { marginLeft: 8, marginBottom: 0 }]}>Upcoming Events</Text>
         </View>
         <View style={styles.infoCard}>
-          {(hoaInfo?.eventText || '').split(/\r?\n/).filter(line => line.trim().length > 0).length > 0 ? (
-            (hoaInfo?.eventText || '').split(/\r?\n/).map((line, idx) => (
+          {(hoaInfo?.eventText || '').split(/\r?\n/).filter((line: string) => line.trim().length > 0).length > 0 ? (
+            (hoaInfo?.eventText || '').split(/\r?\n/).map((line: string, idx: number) => (
               <Text key={idx} style={styles.eventText}>{line}</Text>
             ))
           ) : (
@@ -752,6 +803,40 @@ const HomeScreen = () => {
         
       />
 
+      {/* Pet Registration Prompt Modal */}
+      <Modal
+        visible={showPetRegistrationModal}
+        transparent
+        animationType="fade"
+      >
+        <View style={styles.petModalOverlay}>
+          <View style={styles.petModalContent}>
+            <View style={styles.petModalIcon}>
+              <Ionicons name="paw" size={48} color="#eab308" />
+            </View>
+            <Text style={styles.petModalTitle}>Pet Registration</Text>
+            <Text style={styles.petModalMessage}>
+              Have you registered your pet with the HOA? Pet registration is required per community guidelines.
+            </Text>
+            <View style={styles.petModalButtons}>
+              <TouchableOpacity
+                style={[styles.petModalButton, styles.petModalButtonNotYet]}
+                onPress={handlePetRegistrationNotYet}
+              >
+                <Ionicons name="paw-outline" size={20} color="#ffffff" />
+                <Text style={styles.petModalButtonText}>Not Yet</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.petModalButton, styles.petModalButtonYes]}
+                onPress={handlePetRegistrationYes}
+              >
+                <Ionicons name="checkmark-circle" size={20} color="#ffffff" />
+                <Text style={styles.petModalButtonText}>Yes</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -1242,6 +1327,62 @@ const styles = StyleSheet.create({
   eventText: {
     fontSize: 14,
     color: '#374151',
+  },
+  petModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  petModalContent: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 24,
+    alignItems: 'center',
+    maxWidth: 400,
+  },
+  petModalIcon: {
+    marginBottom: 16,
+  },
+  petModalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1e293b',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  petModalMessage: {
+    fontSize: 15,
+    color: '#64748b',
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 22,
+  },
+  petModalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  petModalButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    gap: 8,
+    minWidth: 120,
+  },
+  petModalButtonNotYet: {
+    backgroundColor: '#3b82f6',
+  },
+  petModalButtonYes: {
+    backgroundColor: '#10b981',
+  },
+  petModalButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
   },
 });
 

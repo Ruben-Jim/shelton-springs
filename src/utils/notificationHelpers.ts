@@ -226,7 +226,13 @@ export const notifyNewPoll = async (
   }
 };
 
-export const notifyNewFee = async (feeName: string, amount: number, dueDate: string): Promise<void> => {
+export const notifyNewFee = async (
+  feeName: string,
+  amount: number,
+  dueDate: string,
+  convex?: ConvexReactClient,
+  notifyAllResidents?: boolean
+): Promise<void> => {
   await triggerNotification({
     type: 'fee',
     title: 'New Fee',
@@ -238,6 +244,19 @@ export const notifyNewFee = async (feeName: string, amount: number, dueDate: str
       dueDate,
     },
   });
+
+  if (convex && notifyAllResidents) {
+    try {
+      await convex.mutation(api.notifications.createNotificationForAllResidents, {
+        type: 'fee',
+        title: 'New Fee',
+        body: `New fee: ${feeName} - $${amount.toFixed(2)} (Due: ${dueDate})`,
+        data: { feeName, amount, dueDate },
+      });
+    } catch (error) {
+      console.error('Failed to create fee notification records:', error);
+    }
+  }
 };
 
 export const notifyOverdueFee = async (feeName: string, amount: number): Promise<void> => {
@@ -254,7 +273,13 @@ export const notifyOverdueFee = async (feeName: string, amount: number): Promise
   });
 };
 
-export const notifyNewFine = async (violation: string, amount: number, dueDate: string): Promise<void> => {
+export const notifyNewFine = async (
+  violation: string,
+  amount: number,
+  dueDate: string,
+  residentId?: string,
+  convex?: ConvexReactClient
+): Promise<void> => {
   await triggerNotification({
     type: 'fine',
     title: 'New Fine',
@@ -266,6 +291,20 @@ export const notifyNewFine = async (violation: string, amount: number, dueDate: 
       dueDate,
     },
   });
+
+  if (convex && residentId) {
+    try {
+      await convex.mutation(api.notifications.createNotificationForUsers, {
+        userIds: [residentId],
+        type: 'fine',
+        title: 'New Fine',
+        body: `Fine issued: ${violation} - $${amount.toFixed(2)} (Due: ${dueDate})`,
+        data: { violation, amount, dueDate },
+      });
+    } catch (error) {
+      console.error('Failed to create fine notification record:', error);
+    }
+  }
 };
 
 export const notifyOverdueFine = async (violation: string, amount: number): Promise<void> => {
@@ -336,7 +375,11 @@ export const notifyResidentNotification = async (
   }
 };
 
-export const notifyBoardUpdate = async (updateType: string, details: string): Promise<void> => {
+export const notifyBoardUpdate = async (
+  updateType: string,
+  details: string,
+  convex?: ConvexReactClient
+): Promise<void> => {
   await triggerNotification({
     type: 'board_update',
     title: 'Board Update',
@@ -347,6 +390,19 @@ export const notifyBoardUpdate = async (updateType: string, details: string): Pr
       details,
     },
   });
+
+  if (convex) {
+    try {
+      await convex.mutation(api.notifications.createNotificationForAllResidents, {
+        type: 'board_update',
+        title: 'Board Update',
+        body: `${updateType}: ${details}`,
+        data: { updateType, details },
+      });
+    } catch (error) {
+      console.error('Failed to create board update notification records:', error);
+    }
+  }
 };
 
 export const notifyPendingVenmoPayment = async (
@@ -390,17 +446,35 @@ export const notifyPendingVenmoPayment = async (
   }
 };
 
-export const notifyNewDocument = async (title: string, type: 'Minutes' | 'Financial', uploadedBy: string): Promise<void> => {
+export const notifyNewDocument = async (
+  title: string,
+  docType: 'Minutes' | 'Financial',
+  uploadedBy: string,
+  convex?: ConvexReactClient
+): Promise<void> => {
   await triggerNotification({
     type: 'document',
-    title: `New ${type} Document`,
+    title: `New ${docType} Document`,
     body: `${uploadedBy} uploaded: ${title}`,
     priority: 'Medium',
     data: {
       title,
-      type,
+      type: docType,
       uploadedBy,
     },
   });
+
+  if (convex) {
+    try {
+      await convex.mutation(api.notifications.createNotificationForAllResidents, {
+        type: 'document',
+        title: `New ${docType} Document`,
+        body: `${uploadedBy} uploaded: ${title}`,
+        data: { title, type: docType, uploadedBy },
+      });
+    } catch (error) {
+      console.error('Failed to create document notification records:', error);
+    }
+  }
 };
 

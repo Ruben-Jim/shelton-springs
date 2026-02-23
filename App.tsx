@@ -9,6 +9,7 @@ import { ConvexProvider, ConvexReactClient } from 'convex/react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { MessagingProvider, useMessaging } from './src/context/MessagingContext';
+import { QueryCacheProvider } from './src/context/QueryCacheContext';
 import AuthNavigator from './src/navigation/AuthNavigator';
 import enhancedUnifiedNotificationManager from './src/services/EnhancedUnifiedNotificationManager';
 import MessagingOverlay from './src/components/MessagingOverlay';
@@ -278,12 +279,14 @@ export default function App() {
       {convex ? (
         <ConvexProvider client={convex}>
           <AuthProvider>
-            <MessagingProvider>
-              <NavigationContainer initialState={initialState} onStateChange={onStateChange}>
-                <MainAppContent />
-                <StatusBar style="dark" />
-              </NavigationContainer>
-            </MessagingProvider>
+            <QueryCacheProvider>
+              <MessagingProvider>
+                <NavigationContainer initialState={initialState} onStateChange={onStateChange}>
+                  <MainAppContent />
+                  <StatusBar style="dark" />
+                </NavigationContainer>
+              </MessagingProvider>
+            </QueryCacheProvider>
           </AuthProvider>
         </ConvexProvider>
       ) : (

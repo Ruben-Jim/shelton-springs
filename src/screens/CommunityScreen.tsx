@@ -21,11 +21,12 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRoute } from '@react-navigation/native';
+import { useRoute, useIsFocused } from '@react-navigation/native';
 import { useQuery, useMutation } from 'convex/react';
 import { useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
+import { useCachedResidents } from '../context/QueryCacheContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
 import CustomTabBar from '../components/CustomTabBar';
@@ -34,6 +35,7 @@ import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
 import ProfileImage from '../components/ProfileImage';
 import OptimizedImage from '../components/OptimizedImage';
+import PostVideoPlayer from '../components/PostVideoPlayer';
 import { getUploadReadyImage } from '../utils/imageUpload';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
@@ -46,6 +48,7 @@ const CommunityScreen = () => {
   const convex = useConvex();
   const isBoardMember = user?.isBoardMember && user?.isActive;
   const route = useRoute();
+  const isFocused = useIsFocused();
   const { alertState, showAlert, hideAlert } = useCustomAlert();
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [activeSubTab, setActiveSubTab] = useState<'posts' | 'polls' | 'notifications' | 'pets'>('posts');
@@ -116,7 +119,7 @@ const CommunityScreen = () => {
   });
   
   // Image upload state
-  const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  const [selectedMedia, setSelectedMedia] = useState<Array<{uri: string, type: 'image' | 'video'}>>([]);
   const [uploadingImages, setUploadingImages] = useState(false);
   const [isCreatingPost, setIsCreatingPost] = useState(false);
   const [isSavingPet, setIsSavingPet] = useState(false);
@@ -194,16 +197,25 @@ const CommunityScreen = () => {
   const buttonScale = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(1)).current; // Start at 1 to avoid flash on tab click
 
-  // Convex queries - using paginated queries
-  const postsData = useQuery(api.communityPosts.getPaginated, { limit: postsLimit, offset: 0 });
+  // Convex queries - using paginated queries (conditional based on screen focus)
+  const postsData = useQuery(
+    api.communityPosts.getPaginated,
+    isFocused ? { limit: postsLimit, offset: 0 } : "skip"
+  );
   const posts = postsData?.items ?? [];
   const postsTotal = postsData?.total ?? 0;
   
-  const pollsData = useQuery(api.polls.getPaginated, { limit: pollsLimit, offset: 0 });
+  const pollsData = useQuery(
+    api.polls.getPaginated,
+    isFocused ? { limit: pollsLimit, offset: 0 } : "skip"
+  );
   const polls = pollsData?.items ?? [];
   const pollsTotal = pollsData?.total ?? 0;
   
-  const userVotes = useQuery(api.polls.getAllUserVotes, user ? { userId: user._id } : "skip");
+  const userVotes = useQuery(
+    api.polls.getAllUserVotes,
+    isFocused && user ? { userId: user._id } : "skip"
+  );
   
   // Lazy load comments for posts when expanded
   const postsWithComments = (posts || []).map((post: any) => {
@@ -213,9 +225,16 @@ const CommunityScreen = () => {
     const comments = hasLoadedComments ? (loadedComments[postId] || []) : (post.comments || []);
     return { ...post, comments };
   });
-  const notifications = useQuery(api.residentNotifications.getAllActive);
-  const residents = useQuery(api.residents.getAll);
-  const pets = useQuery(api.pets.getAll) || [];
+  const notifications = useQuery(
+    api.residentNotifications.getAllActive,
+    isFocused ? {} : "skip"
+  );
+  // Use cached residents to prevent duplicate queries
+  const residents = useCachedResidents();
+  const pets = useQuery(
+    api.pets.getAll,
+    isFocused ? {} : "skip"
+  ) || [];
   
   // Helper function to check if a comment author is a board member
   const isCommentAuthorBoardMember = (authorName: string) => {
@@ -403,22 +422,29 @@ const CommunityScreen = () => {
   const postsContent = filteredPosts.map(post => ({ ...post, type: 'post' })).sort((a, b) => b.createdAt - a.createdAt);
   const pollsContent = polls.map(poll => ({ ...poll, type: 'poll' })).sort((a, b) => b.createdAt - a.createdAt);
 
-  // Scroll to selected post when it's set
+  // Scroll to selected post + 1 when it's set and we're on the posts tab
+  // Note: scrollToIndex crashes on iOS with variable-height FlatList items (no getItemLayout).
+  // Skip auto-scroll on iOS to prevent crash; user still lands on Community posts tab.
   useEffect(() => {
-    if (selectedPostId && postsContent && listRef.current) {
-      const selectedIndex = postsContent.findIndex((post: any) => post._id === selectedPostId);
+    if (selectedPostId && postsContent && listRef.current && activeSubTab === 'posts' && Platform.OS !== 'ios') {
+      const selectedIndex = postsContent.findIndex((post: any) => post._id === selectedPostId || String(post._id) === selectedPostId);
       if (selectedIndex >= 0) {
-        // Scroll to the selected post with some offset for the header
-        setTimeout(() => {
-          listRef.current?.scrollToIndex({
-            index: selectedIndex,
-            animated: true,
-            viewOffset: 100, // Offset for header
-          });
-        }, 500); // Delay to allow list to render
+        const scrollIndex = Math.min(selectedIndex + 1, postsContent.length - 1);
+        requestAnimationFrame(() => {
+          try {
+            listRef.current?.scrollToIndex({
+              index: scrollIndex,
+              animated: false,
+              viewOffset: 0,
+              viewPosition: 0.1,
+            });
+          } catch (_e) {
+            // Ignore scroll errors on Android/web
+          }
+        });
       }
     }
-  }, [selectedPostId, postsContent]);
+  }, [selectedPostId, postsContent, activeSubTab]);
 
   // Pagination: show all posts/polls up to the limit, with "Load More" button
   const hasMorePosts = postsTotal > postsLimit;
@@ -452,56 +478,68 @@ const CommunityScreen = () => {
     }
   };
 
-  // Lazy load comments for expanded posts - load comments when post is expanded
-  // We'll load comments on-demand when toggleComments is called
-
-  // Lazy load comments: Query comments for posts that are expanded
-  // We'll query for up to 5 expanded posts at a time to limit concurrent queries
-  const expandedPostIds = Array.from(expandedComments || []);
-  const postsNeedingComments = expandedPostIds
-    .filter(postId => postId && !loadedComments[postId])
-    .slice(0, 5); // Limit to 5 concurrent comment queries
+  // Track which posts need their comments loaded
+  const [postsNeedingComments, setPostsNeedingComments] = useState<Set<string>>(new Set());
   
-  // Query comments for posts that need them
-  const comment1 = useQuery(
-    api.communityPosts.getCommentsByPost,
-    postsNeedingComments[0] ? { postId: postsNeedingComments[0] as any } : "skip"
-  );
-  const comment2 = useQuery(
-    api.communityPosts.getCommentsByPost,
-    postsNeedingComments[1] ? { postId: postsNeedingComments[1] as any } : "skip"
-  );
-  const comment3 = useQuery(
-    api.communityPosts.getCommentsByPost,
-    postsNeedingComments[2] ? { postId: postsNeedingComments[2] as any } : "skip"
-  );
-  const comment4 = useQuery(
-    api.communityPosts.getCommentsByPost,
-    postsNeedingComments[3] ? { postId: postsNeedingComments[3] as any } : "skip"
-  );
-  const comment5 = useQuery(
-    api.communityPosts.getCommentsByPost,
-    postsNeedingComments[4] ? { postId: postsNeedingComments[4] as any } : "skip"
-  );
-  
-  const commentResults = [comment1, comment2, comment3, comment4, comment5];
-  
-  // Update loadedComments when comments are fetched
-  React.useEffect(() => {
-    if (!postsNeedingComments || postsNeedingComments.length === 0) return;
+  // Load comments on-demand using convex client
+  useEffect(() => {
+    if (!isFocused || postsNeedingComments.size === 0) return;
     
-    postsNeedingComments.forEach((postId, index) => {
-      if (!postId) return;
-      const comments = commentResults[index];
-      if (comments && Array.isArray(comments) && !loadedComments[postId]) {
-        setLoadedComments(prev => ({
-          ...prev,
-          [postId]: comments
-        }));
+    const loadComments = async () => {
+      const postsToLoad = Array.from(postsNeedingComments);
+      for (const postId of postsToLoad) {
+        // Skip if already loaded
+        if (loadedComments[postId] !== undefined) continue;
+        
+        try {
+          const comments = await convex.query(api.communityPosts.getCommentsByPost, { postId: postId as any });
+          setLoadedComments(prev => ({
+            ...prev,
+            [postId]: comments || []
+          }));
+        } catch (error) {
+          console.error(`Failed to load comments for post ${postId}:`, error);
+          // Set empty array on error to prevent retrying
+          setLoadedComments(prev => ({
+            ...prev,
+            [postId]: []
+          }));
+        }
+      }
+    };
+    
+    loadComments();
+  }, [postsNeedingComments.size, isFocused, convex]);
+  
+  // Auto-load comments for visible posts (limit to first 10 posts to reduce bandwidth)
+  // This ensures preview comments are shown for posts currently on screen
+  useEffect(() => {
+    if (!posts || posts.length === 0 || !isFocused) return;
+    
+    const postsToLoad = new Set<string>();
+    // Only load comments for first 10 posts to keep bandwidth usage low
+    const visiblePosts = posts.slice(0, 10);
+    visiblePosts.forEach((post: any) => {
+      if (post && post._id) {
+        const postId = post._id;
+        // Load comments if they haven't been loaded yet
+        // This ensures preview comments (first 2) are shown
+        if (loadedComments[postId] === undefined) {
+          postsToLoad.add(postId);
+        }
       }
     });
-  }, [postsNeedingComments.join(','), commentResults.map(c => c ? 'loaded' : 'pending').join(',')]);
+    
+    if (postsToLoad.size > 0) {
+      setPostsNeedingComments(prev => {
+        const newSet = new Set(prev);
+        postsToLoad.forEach(id => newSet.add(id));
+        return newSet;
+      });
+    }
+  }, [posts?.slice(0, 10).map((p: any) => p?._id).join(','), isFocused]);
   
+  // Lazy load comments for expanded posts - load comments when post is expanded
   const toggleComments = (postId: string) => {
     setExpandedComments(prev => {
       const newSet = new Set(prev);
@@ -509,6 +547,8 @@ const CommunityScreen = () => {
         newSet.delete(postId);
       } else {
         newSet.add(postId);
+        // Mark this post as needing comments loaded
+        setPostsNeedingComments(prev => new Set(prev).add(postId));
       }
       return newSet;
     });
@@ -552,6 +592,15 @@ const CommunityScreen = () => {
 
       // Auto-expand comments for the post that just got a new comment
       setExpandedComments(prev => new Set(prev).add(selectedPostForComment._id));
+      
+      // Reload comments for this post to show the new comment
+      setPostsNeedingComments(prev => new Set(prev).add(selectedPostForComment._id));
+      // Clear cached comments so they reload
+      setLoadedComments(prev => {
+        const updated = { ...prev };
+        delete updated[selectedPostForComment._id];
+        return updated;
+      });
 
       setNewComment('');
       animateOut('comment', () => {
@@ -577,15 +626,16 @@ const CommunityScreen = () => {
 
     try {
       setIsCreatingPost(true);
-      // Upload images first
-      const uploadedImageUrls = await uploadImages();
+      // Upload media (images and videos)
+      const { images: uploadedImages, videos: uploadedVideos } = await uploadMedia();
 
       await createPost({
         title: newPost.title,
         content: newPost.content,
         category: newPost.category,
         author: `${user.firstName} ${user.lastName}`,
-        images: uploadedImageUrls.length > 0 ? uploadedImageUrls : undefined,
+        images: uploadedImages.length > 0 ? uploadedImages : undefined,
+        videos: uploadedVideos.length > 0 ? uploadedVideos : undefined,
         link: newPost.link.trim() || undefined,
       });
 
@@ -593,7 +643,7 @@ const CommunityScreen = () => {
       await notifyNewCommunityPost(`${user.firstName} ${user.lastName}`, newPost.title, newPost.category, convex);
 
       setNewPost({ title: '', content: '', category: 'General', link: '' });
-      setSelectedImages([]);
+      setSelectedMedia([]);
       animateOut('post', () => {
         setShowNewPostModal(false);
       });
@@ -776,45 +826,76 @@ const CommunityScreen = () => {
     }));
   };
 
-  const pickImage = async () => {
-    if (selectedImages.length >= 5) {
-      Alert.alert('Limit Reached', 'You can only add up to 5 images per post.');
+  const pickMedia = async () => {
+    if (selectedMedia.length >= 5) {
+      Alert.alert('Limit Reached', 'You can only add up to 5 media files per post.');
       return;
     }
 
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: 'images' as any,
+        mediaTypes: ['images', 'videos'] as any,
         allowsEditing: true,
         aspect: [4, 3],
         quality: 0.8,
+        videoMaxDuration: 30, // 30 seconds max
       });
 
       if (!result.canceled && result.assets[0]) {
-        const imageUri = result.assets[0].uri;
-        setSelectedImages(prev => [...prev, imageUri]);
+        const mediaUri = result.assets[0].uri;
+        const isVideo = result.assets[0].type === 'video';
+
+        // For videos, validate size before adding
+        if (isVideo) {
+          const { validateVideoBeforeUpload } = await import('../utils/videoUpload');
+          const validation = await validateVideoBeforeUpload(mediaUri);
+
+          if (!validation.valid) {
+            Alert.alert('Video Error', validation.error);
+            return;
+          }
+
+          if (validation.suggestedCompression) {
+            const shouldCompress = await new Promise<boolean>((resolve) => {
+              Alert.alert(
+                'Large Video',
+                `This video is ${validation.sizeMB.toFixed(1)}MB. It will be compressed to reduce storage usage.`,
+                [
+                  { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+                  { text: 'Continue', onPress: () => resolve(true) },
+                ]
+              );
+            });
+
+            if (!shouldCompress) return;
+          }
+        }
+
+        setSelectedMedia(prev => [...prev, { uri: mediaUri, type: isVideo ? 'video' : 'image' }]);
       }
     } catch (error) {
-      console.error('Error picking image:', error);
-      Alert.alert('Error', 'Failed to pick image. Please try again.');
+      console.error('Error picking media:', error);
+      Alert.alert('Error', 'Failed to pick media. Please try again.');
     }
   };
 
-  const removeImage = (index: number) => {
-    setSelectedImages(prev => prev.filter((_, i) => i !== index));
+  const removeMedia = (index: number) => {
+    setSelectedMedia(prev => prev.filter((_, i) => i !== index));
   };
 
-  const uploadImages = async (): Promise<string[]> => {
-    if (selectedImages.length === 0) return [];
+  const uploadMedia = async (): Promise<{ images: string[], videos: string[] }> => {
+    if (selectedMedia.length === 0) return { images: [], videos: [] };
 
     setUploadingImages(true);
-    const uploadedUrls: string[] = [];
+    const uploadedImages: string[] = [];
+    const uploadedVideos: string[] = [];
 
     try {
-      for (const imageUri of selectedImages) {
+      for (const media of selectedMedia) {
         try {
           const uploadUrl = await generateUploadUrl();
-          const { blob, mimeType } = await getUploadReadyImage(imageUri);
+          const { getUploadReadyMedia } = await import('../utils/videoUpload');
+          const { blob, mimeType } = await getUploadReadyMedia(media.uri, media.type);
 
           const uploadResponse = await fetch(uploadUrl, {
             method: 'POST',
@@ -827,30 +908,37 @@ const CommunityScreen = () => {
           }
 
           const { storageId } = await uploadResponse.json();
-          uploadedUrls.push(storageId);
-        } catch (imageError: any) {
-          console.error('Error uploading individual image:', imageError);
-          console.error('Image URI:', imageUri);
+          
+          // Separate images and videos
+          if (media.type === 'video') {
+            uploadedVideos.push(storageId);
+          } else {
+            uploadedImages.push(storageId);
+          }
+        } catch (mediaError: any) {
+          console.error('Error uploading media:', mediaError);
+          console.error('Media URI:', media.uri);
+          console.error('Media type:', media.type);
           console.error('Error details:', {
-            message: imageError?.message,
-            stack: imageError?.stack,
-            name: imageError?.name,
+            message: mediaError?.message,
+            stack: mediaError?.stack,
+            name: mediaError?.name,
           });
-          // Continue with other images even if one fails
-          throw imageError;
+          // Continue with other media even if one fails
+          throw mediaError;
         }
       }
 
-      return uploadedUrls;
+      return { images: uploadedImages, videos: uploadedVideos };
     } catch (error: any) {
-      console.error('Error uploading images:', error);
+      console.error('Error uploading media:', error);
       console.error('Error details:', {
         message: error?.message,
         stack: error?.stack,
         name: error?.name,
       });
-      Alert.alert('Error', `Failed to upload images: ${error?.message || 'Unknown error'}`);
-      return [];
+      Alert.alert('Error', `Failed to upload media: ${error?.message || 'Unknown error'}`);
+      return { images: [], videos: [] };
     } finally {
       setUploadingImages(false);
     }
@@ -1448,13 +1536,14 @@ const CommunityScreen = () => {
           {
             opacity: fadeAnim,
           },
-          styles.headerContainerIOS
+          styles.headerContainerIOS,
+          { width: screenWidth }
         ]}
       >
         <ImageBackground
           source={Platform.OS === 'ios' ? require('../../assets/hoa-1k.jpg') : require('../../assets/hoa-2k.jpg')}
           style={[styles.header, !isBoardMember && styles.headerNonMember]}
-          imageStyle={styles.headerImage}
+          imageStyle={[styles.headerImage, { width: screenWidth }]}
           resizeMode="stretch"
         >
           <View style={styles.headerOverlay} />
@@ -1812,9 +1901,8 @@ const CommunityScreen = () => {
       <Animated.View
         style={[
           styles.postCard,
-          selectedPostId === item._id && styles.selectedPostCard,
           {
-            borderLeftColor: selectedPostId === item._id ? '#eab308' : borderColors[index % borderColors.length],
+            borderLeftColor: borderColors[index % borderColors.length],
             opacity: fadeAnim,
             transform: [
               {
@@ -1829,7 +1917,15 @@ const CommunityScreen = () => {
       >
         <View style={styles.postHeader}>
           <View style={styles.postAuthor}>
-            <ProfileImage source={item.authorProfileImageUrl} size={40} style={{ marginRight: 8 }} />
+            <ProfileImage 
+              source={
+                item.authorProfileImage || 
+                (residents?.find((r: any) => `${r.firstName} ${r.lastName}` === item.author)?.profileImage) || 
+                null
+              } 
+              size={40} 
+              style={{ marginRight: 8 }} 
+            />
             <View>
               <Text style={styles.authorName}>{item.author}</Text>
               <Text style={styles.postTime}>{formatDate(new Date(item.createdAt).toISOString())}</Text>
@@ -1872,6 +1968,16 @@ const CommunityScreen = () => {
           </View>
         )}
 
+        {item.videos && item.videos.length > 0 && (
+          <View style={styles.postVideosContainer}>
+            {item.videos.map((videoStorageId: string, videoIndex: number) => (
+              <View key={videoStorageId ?? videoIndex} style={styles.postVideoWrapper}>
+                <PostVideoPlayer storageId={videoStorageId} style={styles.postVideo} />
+              </View>
+            ))}
+          </View>
+        )}
+
         <View style={styles.postFooter}>
           <TouchableOpacity style={styles.actionButton} onPress={() => handleLike(item._id)}>
             <Ionicons name="heart" size={16} color="#6b7280" />
@@ -1906,7 +2012,15 @@ const CommunityScreen = () => {
               <View key={comment._id ?? commentIndex} style={styles.commentItem}>
                 <View style={styles.commentHeader}>
                   <View style={styles.commentAuthorInfo}>
-                    <ProfileImage source={comment.authorProfileImageUrl} size={24} style={{ marginRight: 6 }} />
+                    <ProfileImage 
+                      source={
+                        comment.authorProfileImage || 
+                        (residents?.find((r: any) => `${r.firstName} ${r.lastName}` === comment.author)?.profileImage) || 
+                        null
+                      } 
+                      size={24} 
+                      style={{ marginRight: 6 }} 
+                    />
                     <Text style={styles.commentAuthor}>{comment.author}</Text>
                     {isCommentAuthorDeveloper(comment.author) ? (
                       <View style={styles.developerBadge}>
@@ -1942,7 +2056,7 @@ const CommunityScreen = () => {
                     <View key={comment._id ?? `expanded-${extraIndex}`} style={styles.commentItem}>
                       <View style={styles.commentHeader}>
                         <View style={styles.commentAuthorInfo}>
-                          <ProfileImage source={comment.authorProfileImageUrl} size={24} style={{ marginRight: 6 }} />
+                          <ProfileImage source={comment.authorProfileImage} size={24} style={{ marginRight: 6 }} />
                           <Text style={styles.commentAuthor}>{comment.author}</Text>
                           {isCommentAuthorDeveloper(comment.author) ? (
                             <View style={styles.developerBadge}>
@@ -1996,11 +2110,6 @@ const CommunityScreen = () => {
           data={postsContent}
           keyExtractor={(item: any) => item._id}
           renderItem={renderPostItem}
-          getItemLayout={(data, index) => ({
-            length: 280, // Approximate height of each post card
-            offset: 280 * index,
-            index,
-          })}
           ListHeaderComponent={renderTopContent}
           ListEmptyComponent={renderPostsEmpty}
           ListFooterComponent={
@@ -2217,7 +2326,7 @@ const CommunityScreen = () => {
                       <View style={styles.notificationCardContent}>
                         <View style={styles.notificationCardMainInfo}>
                           <ProfileImage 
-                            source={notification.profileImageUrl} 
+                            source={notification.profileImage} 
                             size={48}
                             style={{ marginRight: 10 }}
                             initials={notification.name ? notification.name.split(' ').map((n: string) => n.charAt(0)).join('').substring(0, 2) : undefined}
@@ -2507,45 +2616,55 @@ const CommunityScreen = () => {
               autoCorrect={false}
             />
 
-            {/* Image Upload Section */}
-            <Text style={styles.inputLabel}>Images (Optional)</Text>
+            {/* Media Upload Section */}
+            <Text style={styles.inputLabel}>Media (Optional)</Text>
             <View style={styles.imageUploadContainer}>
-              {selectedImages.map((imageUri, index) => (
+              {selectedMedia.map((media, index) => (
                 <View key={index} style={styles.imagePreview}>
-                  <Image source={{ uri: imageUri }} style={styles.previewImage} />
+                  {media.type === 'video' ? (
+                    <View style={styles.videoPreview}>
+                      <Ionicons name="videocam" size={32} color="#fff" />
+                      <Text style={styles.videoLabel}>VIDEO</Text>
+                    </View>
+                  ) : (
+                    <Image source={{ uri: media.uri }} style={styles.previewImage} />
+                  )}
                   <TouchableOpacity
                     style={styles.removeImageButton}
-                    onPress={() => removeImage(index)}
+                    onPress={() => removeMedia(index)}
                   >
                     <Ionicons name="close-circle" size={20} color="#ef4444" />
                   </TouchableOpacity>
                 </View>
               ))}
-              
-              {selectedImages.length < 5 && (
+
+              {selectedMedia.length < 5 && (
                 <TouchableOpacity
                   style={styles.addImageButton}
-                  onPress={pickImage}
+                  onPress={pickMedia}
                   disabled={uploadingImages}
                 >
-                  <Ionicons 
-                    name="camera" 
-                    size={24} 
-                    color={uploadingImages ? "#9ca3af" : "#eab308"} 
+                  <Ionicons
+                    name="videocam"
+                    size={24}
+                    color={uploadingImages ? "#9ca3af" : "#eab308"}
                   />
                   <Text style={[
                     styles.addImageText,
                     uploadingImages && styles.addImageTextDisabled
                   ]}>
-                    {uploadingImages ? 'Uploading...' : 'Add Image'}
+                    {uploadingImages ? 'Uploading...' : 'Add Media'}
                   </Text>
                 </TouchableOpacity>
               )}
             </View>
-            
-            {selectedImages.length > 0 && (
+
+            {selectedMedia.length > 0 && (
               <Text style={styles.imageLimitText}>
-                {selectedImages.length}/5 images selected
+                {selectedMedia.length}/5 media selected
+                {selectedMedia.filter(m => m.type === 'video').length > 0 &&
+                  ` (${selectedMedia.filter(m => m.type === 'video').length} video${selectedMedia.filter(m => m.type === 'video').length > 1 ? 's' : ''})`
+                }
               </Text>
             )}
           </ScrollView>
@@ -2588,14 +2707,18 @@ const CommunityScreen = () => {
         transparent={true}
         animationType="none"
       >
-        <Animated.View style={[styles.commentModalOverlay, { opacity: overlayOpacity }]}>
-          <Animated.View style={[
-            styles.commentModalContainer,
-            {
-              opacity: commentModalOpacity,
-              transform: [{ translateY: commentModalTranslateY }],
-            }
-          ]}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.commentModalWrapper}
+        >
+          <Animated.View style={[styles.commentModalOverlay, { opacity: overlayOpacity }]}>
+            <Animated.View style={[
+              styles.commentModalContainer,
+              {
+                opacity: commentModalOpacity,
+                transform: [{ translateY: commentModalTranslateY }],
+              }
+            ]}>
             <View style={styles.commentModalHeader}>
               <View style={styles.commentModalHeaderContent}>
                 <Text style={styles.modalTitle}>Add Comment</Text>
@@ -2605,7 +2728,10 @@ const CommunityScreen = () => {
                   </Text>
                 )}
               </View>
-              <TouchableOpacity onPress={() => animateOut('comment', () => setShowCommentModal(false))}>
+              <TouchableOpacity
+                style={styles.commentModalCloseButton}
+                onPress={() => animateOut('comment', () => setShowCommentModal(false))}
+              >
                 <Ionicons name="close" size={24} color="#6b7280" />
               </TouchableOpacity>
             </View>
@@ -2629,7 +2755,9 @@ const CommunityScreen = () => {
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
-              
+
+              <View style={styles.commentModalFooterSpacer} />
+
               <TouchableOpacity
                 style={styles.createButton}
                 onPress={handleAddComment}
@@ -2639,6 +2767,7 @@ const CommunityScreen = () => {
             </View>
           </Animated.View>
         </Animated.View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Add/Edit Notification Modal */}
@@ -2699,7 +2828,7 @@ const CommunityScreen = () => {
                   />
                   <ScrollView style={styles.picker} nestedScrollEnabled>
                     {residents
-                      ?.filter(resident => {
+                      ?.filter((resident: any) => {
                         const query = notificationSearchQuery.toLowerCase();
                         return query === '' ||
                           resident.firstName.toLowerCase().includes(query) ||
@@ -3535,13 +3664,6 @@ const styles = StyleSheet.create({
     borderLeftWidth: 4,
     // borderLeftColor is set dynamically per card
   },
-  selectedPostCard: {
-    backgroundColor: '#fefce8', // Light yellow background
-    shadowColor: '#eab308',
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
-    elevation: 8,
-  },
   postHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -3935,9 +4057,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   commentModalHeader: {
-    flexDirection: 'column',
-    alignItems: 'flex-start',
-    flex: 1,
+    position: 'relative',
+    marginBottom: 0,
   },
   commentPostTitle: {
     fontSize: 14,
@@ -3946,7 +4067,22 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   commentInput: {
-    height: 100, // Adjust height for comment input
+    height: 75, // Adjust height for comment input
+  },
+  commentModalWrapper: {
+    width: '100%',
+    flex: 1,
+    justifyContent: 'flex-end',
+    ...(Platform.OS === 'web' ? {
+      position: 'relative' as any,
+    } : {}),
+  } as any,
+  commentModalCloseButton: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    padding: 8,
+    zIndex: 1,
   },
   commentModalOverlay: {
     flex: 1,
@@ -3970,18 +4106,19 @@ const styles = StyleSheet.create({
   commentModalHeaderContent: {
     flexDirection: 'column',
     alignItems: 'flex-start',
-    flex: 1,
+    paddingRight: 48, // Leave space for close button (24px icon + 16px padding + 8px margin)
   },
   commentModalContent: {
-    marginTop: 20,
-    flex: 1,
+    marginTop: 10,
   },
   commentModalFooter: {
     flexDirection: 'row',
     paddingTop: 20,
     borderTopWidth: 1,
     borderTopColor: '#e5e7eb',
-    marginTop: 20,
+  },
+  commentModalFooterSpacer: {
+    flex: 0.1,
   },
   // Poll styles
   pollOptionsContainer: {
@@ -4075,6 +4212,20 @@ const styles = StyleSheet.create({
     height: 80,
     borderRadius: 8,
   },
+  videoPreview: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+    backgroundColor: '#374151',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  videoLabel: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: 'bold',
+    marginTop: 4,
+  },
   removeImageButton: {
     position: 'absolute',
     top: -8,
@@ -4114,6 +4265,22 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     marginVertical: 12,
     gap: 12,
+  },
+  postVideosContainer: {
+    marginVertical: 12,
+    gap: 12,
+  },
+  postVideoWrapper: {
+    borderRadius: 12,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  postVideo: {
+    width: '100%',
   },
   postImageWrapper: {
     borderRadius: 12,

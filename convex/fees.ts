@@ -1,5 +1,7 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { Id } from "./_generated/dataModel";
+import { api } from "./_generated/api";
 
 export const getAll = query({
   args: {},
@@ -185,8 +187,9 @@ export const hasPaidAnnualFee = query({
     if (unpaidFines.length > 0) return false;
 
     // Get user's address to check fees by address (for households)
-    const user = await ctx.db.get(args.userId as any);
-    const addressKey = user 
+    const residentId = args.userId as Id<"residents">;
+    const user = await ctx.db.get(residentId);
+    const addressKey = user
       ? `${user.address}${user.unitNumber ? ` Unit ${user.unitNumber}` : ''}`
       : null;
 
@@ -453,7 +456,8 @@ export const createYearFeesForAllHomeowners = mutation({
     
     const now = Date.now();
     const feeRecords = [];
-    
+    const notifiedHomeownerIds: string[] = [];
+
     // Create one fee record per unique address
     for (const [addressKey, homeownersAtAddress] of addressMap.entries()) {
       // Skip if fee already exists for this address and year
@@ -479,6 +483,24 @@ export const createYearFeesForAllHomeowners = mutation({
       });
       
       feeRecords.push(feeRecord);
+      notifiedHomeownerIds.push(primaryHomeownerId.toString());
+    }
+
+    // Notify all affected homeowners of new annual fees (triggers push notifications)
+    if (notifiedHomeownerIds.length > 0) {
+      const dueDate = `${args.year}-12-31`;
+      await ctx.runMutation(api.notifications.createNotificationForUsers, {
+        userIds: notifiedHomeownerIds,
+        type: "fee",
+        title: "New Annual Fee",
+        body: `${args.description} ${args.year} - $${args.amount.toFixed(2)} (Due: ${dueDate})`,
+        data: {
+          year: args.year,
+          amount: args.amount,
+          description: args.description,
+          dueDate,
+        },
+      });
     }
     
     return {
@@ -548,6 +570,21 @@ export const addFineToProperty = mutation({
       residentId: args.homeownerId,
       createdAt: now,
       updatedAt: now,
+    });
+
+    // Notify the homeowner of the new fine (triggers push notification)
+    const dueDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    await ctx.runMutation(api.notifications.createNotificationForUsers, {
+      userIds: [args.homeownerId],
+      type: "fine",
+      title: "New Fine",
+      body: `Fine issued: ${args.reason} - $${args.amount.toFixed(2)} (Due: ${dueDate})`,
+      data: {
+        fineId: fineRecord,
+        violation: args.reason,
+        amount: args.amount,
+        dueDate,
+      },
     });
     
     return {
@@ -630,6 +667,21 @@ export const addPastDueAmount = mutation({
       status: "Overdue",
       createdAt: now,
       updatedAt: now,
+    });
+
+    // Notify the homeowner that a past due amount was added
+    await ctx.runMutation(api.notifications.createNotificationForUsers, {
+      userIds: [args.userId],
+      type: "fee",
+      title: "Past Due Amount Added",
+      body: `A past due amount of $${args.amount.toFixed(2)} has been added: ${args.description} (Due: ${args.dueDate})`,
+      data: {
+        feeId: feeRecord,
+        amount: args.amount,
+        description: args.description,
+        dueDate: args.dueDate,
+        isOverdue: true,
+      },
     });
     
     return {

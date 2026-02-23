@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { Platform } from 'react-native';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
@@ -27,17 +28,53 @@ export const useUserNotifications = () => {
   // Mutations
   const markNotificationAsRead = useMutation(api.notifications.markNotificationAsRead);
   const markAllNotificationsAsRead = useMutation(api.notifications.markAllNotificationsAsRead);
+  const updatePushToken = useMutation(api.residents.updatePushToken);
+
+  // Sync Expo push token to server (mobile only) for server-side push notifications
+  useEffect(() => {
+    if (!user?._id || Platform.OS === 'web') return;
+
+    const syncToken = async () => {
+      const token = enhancedUnifiedNotificationManager.getPushToken();
+      if (token) {
+        try {
+          await updatePushToken({
+            userId: user!._id,
+            expoPushToken: token,
+          });
+        } catch (error) {
+          console.warn('Failed to sync push token:', error);
+        }
+      }
+    };
+
+    // Sync immediately and retry after delay (token may not be ready yet)
+    syncToken();
+    const retryTimer = setTimeout(syncToken, 3000);
+    return () => clearTimeout(retryTimer);
+  }, [user, updatePushToken]);
 
   // Track which notifications we've already shown to avoid duplicates
   const shownNotificationIds = useRef<Set<string>>(new Set());
+  // On app restart, don't re-show existing unread; only show notifications that arrive while app is open
+  const hasCompletedInitialLoad = useRef(false);
 
   // Watch for new notifications and trigger local push notifications
   useEffect(() => {
     if (!unreadNotifications || !userId) return;
 
-    // Filter out notifications we've already shown
+    const alreadyShown = shownNotificationIds.current;
+
+    // Initial load: mark all existing unread as "shown" without triggering local notifications
+    if (!hasCompletedInitialLoad.current) {
+      hasCompletedInitialLoad.current = true;
+      unreadNotifications.forEach((n) => alreadyShown.add(n._id));
+      return;
+    }
+
+    // Subsequent updates: only show local for notifications that arrived after initial load
     const newNotifications = unreadNotifications.filter(
-      (notification) => !shownNotificationIds.current.has(notification._id)
+      (notification) => !alreadyShown.has(notification._id)
     );
 
     // Show local push notification for each new unread notification
@@ -96,9 +133,10 @@ export const useUserNotifications = () => {
     });
   }, [unreadNotifications, userId]);
 
-  // Clean up shown notification IDs when user changes
+  // Clean up when user changes
   useEffect(() => {
     shownNotificationIds.current.clear();
+    hasCompletedInitialLoad.current = false;
   }, [userId]);
 
   return {

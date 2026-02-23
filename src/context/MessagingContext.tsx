@@ -3,7 +3,6 @@ import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from './AuthContext';
 import { Id } from '../../convex/_generated/dataModel';
-import { notifyNewMessage } from '../utils/notificationHelpers';
 
 interface Conversation {
   _id: Id<"conversations">;
@@ -24,7 +23,7 @@ interface Conversation {
     id: string;
     name: string;
     email: string;
-    profileImageUrl?: string;
+    profileImage?: string;
     isBoardMember: boolean;
   } | null;
 }
@@ -59,12 +58,13 @@ export const MessagingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const { user } = useAuth();
   const [activeConversationId, setActiveConversationId] = useState<Id<"conversations"> | null>(null);
   const [showOverlay, setShowOverlay] = useState(false);
-  const [notifiedMessageIds, setNotifiedMessageIds] = useState<Set<string>>(new Set());
 
-  // Queries
+  // Queries - only poll conversations when overlay is visible or for non-board members (to show unread indicator)
+  // This reduces operations by ~400K/month for board members not actively using messaging
+  const shouldQueryConversations = showOverlay || (!user?.isBoardMember && user);
   const conversations = useQuery(
     api.messages.getUserConversations,
-    user ? { userId: user._id } : "skip"
+    shouldQueryConversations && user ? { userId: user._id } : "skip"
   ) || [];
 
   const activeConversationMessages = useQuery(
@@ -76,18 +76,21 @@ export const MessagingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const createConversation = useMutation(api.messages.createConversation);
   const sendMessageMutation = useMutation(api.messages.sendMessage);
 
-  // Check for unread messages (for non-board users)
+  // Check for unread messages (for non-board users) - optimized to reduce re-computations
   const hasUnreadMessages = React.useMemo(() => {
     if (!user || user.isBoardMember) return false;
+    // For now, consider any conversation as "unread" for non-board users
+    // This could be enhanced with actual read tracking later
     return conversations.length > 0;
-  }, [conversations, user]);
+  }, [conversations.length, user]);
 
-  // Get latest message preview for minimized bubble
+  // Get latest message preview for minimized bubble - optimized
   const latestMessagePreview = React.useMemo(() => {
     if (conversations.length === 0) return null;
+    // Conversations are already sorted by updatedAt, so first one is latest
     const latestConv = conversations[0];
     return latestConv.latestMessage?.content || null;
-  }, [conversations]);
+  }, [conversations.length > 0 ? conversations[0]?.latestMessage?.content : null]);
 
   const openConversation = useCallback((conversationId: Id<"conversations"> | null) => {
     setActiveConversationId(conversationId);
@@ -141,29 +144,8 @@ export const MessagingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   }, [activeConversationId, user, sendMessageMutation]);
 
-  // Watch for new messages and notify the current user if they're not the sender
-  useEffect(() => {
-    if (!user || !conversations.length) return;
-
-    // Check for new messages in conversations
-    conversations.forEach((conversation) => {
-      if (conversation.latestMessage && conversation.latestMessage.senderId !== user._id) {
-        // This is a message from someone else - send notification
-        // Only send if we haven't already notified for this message
-        const messageId = conversation.latestMessage._id;
-        
-        if (!notifiedMessageIds.has(messageId)) {
-          notifyNewMessage(
-            conversation.latestMessage.senderName,
-            conversation.latestMessage.content,
-            conversation.otherParticipant?.isBoardMember || false
-          );
-          // Mark as notified
-          setNotifiedMessageIds(prev => new Set(prev).add(messageId));
-        }
-      }
-    });
-  }, [conversations, user, notifiedMessageIds]);
+  // Note: New message notifications are created server-side in messages.sendMessage
+  // and delivered via Expo Push (when app closed) or useUserNotifications (when app open)
 
   const value: MessagingContextType = {
     conversations,

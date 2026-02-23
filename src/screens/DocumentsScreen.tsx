@@ -20,6 +20,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useIsFocused } from '@react-navigation/native';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
@@ -32,9 +33,11 @@ import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
+import { getUploadReadyImage } from '../utils/imageUpload';
 
 const DocumentsScreen = () => {
   const { user } = useAuth();
+  const isFocused = useIsFocused();
   const { setShowOverlay } = useMessaging();
   const isBoardMember = user?.isBoardMember && user?.isActive;
   const { alertState, showAlert, hideAlert } = useCustomAlert();
@@ -141,9 +144,12 @@ const DocumentsScreen = () => {
     });
   };
 
-  // Convex queries
+  // Convex queries (conditional based on screen focus)
   const [documentsLimit, setDocumentsLimit] = useState(50);
-  const documentsData = useQuery(api.documents.getPaginated, { limit: documentsLimit, offset: 0 });
+  const documentsData = useQuery(
+    api.documents.getPaginated,
+    isFocused ? { limit: documentsLimit, offset: 0 } : "skip"
+  );
   const allDocuments = documentsData?.items ?? [];
   const documents = allDocuments.filter((doc: any) => doc.type === activeType);
 
@@ -225,11 +231,17 @@ const DocumentsScreen = () => {
         const response = await fetch(selectedFile.uri);
         blob = await response.blob();
         mimeType = blob.type || selectedFile.mimeType || 'application/pdf';
+        
+        // Check file size limit (10MB for documents)
+        const sizeMB = blob.size / (1024 * 1024);
+        if (sizeMB > 10) {
+          throw new Error('Document too large. Maximum 10MB allowed.');
+        }
       } else if (selectedImage) {
-        // Handle image upload
-        const response = await fetch(selectedImage);
-        blob = await response.blob();
-        mimeType = blob.type || 'image/jpeg';
+        // Handle image upload with compression
+        const { blob: optimizedBlob, mimeType: optimizedMimeType } = await getUploadReadyImage(selectedImage);
+        blob = optimizedBlob;
+        mimeType = optimizedMimeType;
       } else {
         throw new Error('No file selected');
       }
@@ -246,7 +258,7 @@ const DocumentsScreen = () => {
 
       const { storageId } = await uploadResponse.json();
 
-      // Create document record
+      // Create document record (notification with push sent by Convex)
       await createDocument({
         title: documentForm.title.trim(),
         description: documentForm.description.trim() || undefined,
@@ -399,13 +411,14 @@ const DocumentsScreen = () => {
           <Animated.View
             style={[
               { opacity: fadeAnim },
-              styles.headerContainerIOS
+              styles.headerContainerIOS,
+              { width: screenWidth }
             ]}
           >
             <ImageBackground
               source={require('../../assets/hoa-4k.jpg')}
               style={[styles.header, !isBoardMember && styles.headerNonMember]}
-              imageStyle={styles.headerImage}
+              imageStyle={[styles.headerImage, { width: screenWidth }]}
               resizeMode="stretch"
             >
               <View style={styles.headerOverlay} />

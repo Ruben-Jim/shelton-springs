@@ -15,9 +15,11 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useIsFocused } from '@react-navigation/native';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
+import { useCachedResidents } from '../context/QueryCacheContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
 import CustomTabBar from '../components/CustomTabBar';
@@ -29,6 +31,7 @@ import { useMessaging } from '../context/MessagingContext';
 
 const FeesScreen = () => {
   const { user } = useAuth();
+  const isFocused = useIsFocused();
   const { setShowOverlay } = useMessaging();
   const isBoardMember = user?.isBoardMember && user?.isActive;
   const [activeTab, setActiveTab] = useState<'fees' | 'fines'>('fees');
@@ -109,10 +112,10 @@ const FeesScreen = () => {
     animateStaggeredContent();
   }, []);
 
-  // Check if user has paid their annual fee
+  // Check if user has paid their annual fee (conditional based on screen focus)
   const userPaymentStatus = useQuery(
     api.fees.hasPaidAnnualFee,
-    user ? { userId: user._id } : "skip"
+    isFocused && user ? { userId: user._id } : "skip"
   );
 
   useEffect(() => {
@@ -136,7 +139,10 @@ const FeesScreen = () => {
     }).format(amount);
   };
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = (status: string, isPartialPayment: boolean = false) => {
+    if (isPartialPayment) {
+      return '#f59e0b'; // Amber for partial payments
+    }
     switch (status) {
       case 'Paid':
         return '#10b981';
@@ -149,7 +155,10 @@ const FeesScreen = () => {
     }
   };
 
-  const getStatusIcon = (status: string) => {
+  const getStatusIcon = (status: string, isPartialPayment: boolean = false) => {
+    if (isPartialPayment) {
+      return 'hourglass'; // Hourglass icon for partial payments
+    }
     switch (status) {
       case 'Paid':
         return 'checkmark-circle';
@@ -198,14 +207,17 @@ const FeesScreen = () => {
     return 'guest';
   };
 
-  // Get the latest user data from database (for fresh profile image)
-  const residents = useQuery(api.residents.getAll) ?? [];
+  // Get the latest user data from database (for fresh profile image) - use cached to prevent duplicates
+  const residents = useCachedResidents();
   const currentUser = residents.find(resident => resident.email === user?.email);
-  const displayProfileImage = currentUser?.profileImageUrl || user?.profileImage;
+  const displayProfileImage = currentUser?.profileImage || user?.profileImage;
 
   // Get all fees from database and filter for current user
   const [feesLimit, setFeesLimit] = useState(50);
-  const feesData = useQuery(api.fees.getPaginated, { limit: feesLimit, offset: 0 });
+  const feesData = useQuery(
+    api.fees.getPaginated,
+    isFocused ? { limit: feesLimit, offset: 0 } : "skip"
+  );
   const allFeesFromDatabase = feesData?.items ?? [];
   
   // Filter fees for the current user if they are a homeowner or developer
@@ -214,17 +226,20 @@ const FeesScreen = () => {
     : [];
 
   // Get fines for the user (if any)
-  const allFines = useQuery(api.fees.getAllFines) ?? [];
+  const allFines = useQuery(
+    api.fees.getAllFines,
+    isFocused ? {} : "skip"
+  ) ?? [];
   
   // Filter fines for the current user if they are a homeowner or developer
   const fines = user && ((user.isResident && !user.isRenter) || user.isDev) 
     ? allFines.filter((fine: any) => fine.residentId === user._id)
     : [];
   
-  // Get user payments (reactive query - auto-updates)
+  // Get user payments (reactive query - auto-updates) (conditional based on screen focus)
   const userPayments = useQuery(
     api.payments.getUserPayments,
-    user ? { userId: user._id } : "skip"
+    isFocused && user ? { userId: user._id } : "skip"
   ) ?? [];
   
   // Create maps for quick payment lookup by feeId/fineId (client-side filtering)
@@ -309,13 +324,14 @@ const FeesScreen = () => {
             {
           opacity: fadeAnim,
             },
-            styles.headerContainerIOS
+            styles.headerContainerIOS,
+            { width: screenWidth }
           ]}
         >
           <ImageBackground
             source={require('../../assets/hoa-4k.jpg')}
             style={styles.header}
-            imageStyle={styles.headerImage}
+            imageStyle={[styles.headerImage, { width: screenWidth }]}
             resizeMode="stretch"
           >
             <View style={styles.headerOverlay} />
@@ -551,54 +567,73 @@ const FeesScreen = () => {
                     </View>
                     
                     <View style={styles.itemFooter}>
-                      <View style={styles.statusContainer}>
-                        <Ionicons 
-                          name={fee.status === 'Paid' ? "checkmark-circle" : fee.isLate ? "warning" : "time"} 
-                          size={16} 
-                          color={fee.status === 'Paid' ? "#10b981" : fee.isLate ? "#ef4444" : "#f59e0b"} 
-                        />
-                        <Text style={[styles.compactStatusText, { 
-                          color: fee.status === 'Paid' ? "#10b981" : fee.isLate ? "#ef4444" : "#f59e0b"
-                        }]}>
-                          {fee.status === 'Paid' ? 'Paid' : fee.isLate ? 'Late' : 'Pending'}
-                        </Text>
-                      </View>
-                      
-                      {/* Payment Status Badge */}
                       {(() => {
                         const payment = paymentsByFeeId.get(fee._id);
-                        if (payment) {
-                          const statusColor = payment.verificationStatus === 'Verified' ? '#10b981' : 
-                                            payment.verificationStatus === 'Rejected' ? '#ef4444' : '#f59e0b';
-                          const statusIcon = payment.verificationStatus === 'Verified' ? 'checkmark-circle' : 
-                                           payment.verificationStatus === 'Rejected' ? 'close-circle' : 'time';
-                          return (
-                            <TouchableOpacity
-                              style={[styles.paymentStatusBadge, { backgroundColor: statusColor + '20' }]}
-                              onPress={() => {
-                                setSelectedItemForHistory({ item: fee, type: 'fee', payment });
-                                setShowPaymentHistory(true);
-                              }}
-                            >
-                              <Ionicons name={statusIcon} size={12} color={statusColor} />
-                              <Text style={[styles.paymentStatusText, { color: statusColor }]}>
-                                {payment.verificationStatus === 'Verified' ? 'Verified' : 
-                                 payment.verificationStatus === 'Rejected' ? 'Rejected' : 'Pending'}
+                        const isPartialPayment = payment && 
+                                                 payment.verificationStatus === 'Verified' && 
+                                                 payment.amount < fee.amount;
+                        const displayStatus = isPartialPayment ? 'Partially Paid' : 
+                                            fee.status === 'Paid' ? 'Paid' : 
+                                            fee.isLate ? 'Late' : 'Pending';
+                        const statusColor = getStatusColor(fee.status || 'Pending', isPartialPayment);
+                        const statusIcon = getStatusIcon(fee.status || 'Pending', isPartialPayment);
+                        
+                        return (
+                          <>
+                            <View style={styles.statusContainer}>
+                              <Ionicons 
+                                name={statusIcon as any} 
+                                size={16} 
+                                color={statusColor} 
+                              />
+                              <Text style={[styles.compactStatusText, { color: statusColor }]}>
+                                {displayStatus}
                               </Text>
-                            </TouchableOpacity>
-                          );
-                        }
-                        return null;
+                              {isPartialPayment && (
+                                <Text style={[styles.partialPaymentText, { color: statusColor }]}>
+                                  ({formatCurrency(payment.amount)} of {formatCurrency(fee.amount)})
+                                </Text>
+                              )}
+                            </View>
+                            
+                            {/* Payment Status Badge */}
+                            {payment && (
+                              <TouchableOpacity
+                                style={[styles.paymentStatusBadge, { backgroundColor: payment.verificationStatus === 'Verified' ? '#10b98120' : 
+                                            payment.verificationStatus === 'Rejected' ? '#ef444420' : '#f59e0b20' }]}
+                                onPress={() => {
+                                  setSelectedItemForHistory({ item: fee, type: 'fee', payment });
+                                  setShowPaymentHistory(true);
+                                }}
+                              >
+                                <Ionicons 
+                                  name={payment.verificationStatus === 'Verified' ? 'checkmark-circle' : 
+                                       payment.verificationStatus === 'Rejected' ? 'close-circle' : 'time'} 
+                                  size={12} 
+                                  color={payment.verificationStatus === 'Verified' ? '#10b981' : 
+                                        payment.verificationStatus === 'Rejected' ? '#ef4444' : '#f59e0b'} 
+                                />
+                                <Text style={[styles.paymentStatusText, { 
+                                  color: payment.verificationStatus === 'Verified' ? '#10b981' : 
+                                         payment.verificationStatus === 'Rejected' ? '#ef4444' : '#f59e0b'
+                                }]}>
+                                  {payment.verificationStatus === 'Verified' ? 'Verified' : 
+                                   payment.verificationStatus === 'Rejected' ? 'Rejected' : 'Pending'}
+                                </Text>
+                              </TouchableOpacity>
+                            )}
+                            
+                            {fee.status !== 'Paid' && (
+                              <TouchableOpacity
+                                style={styles.payButton}
+                                onPress={() => handlePayment(fee, 'fee')}
+                              >
+                                <Text style={styles.payButtonText}>Pay Now</Text>
+                              </TouchableOpacity>
+                            )}
+                          </>
+                        );
                       })()}
-                      
-                      {fee.status !== 'Paid' && (
-                        <TouchableOpacity
-                          style={styles.payButton}
-                          onPress={() => handlePayment(fee, 'fee')}
-                        >
-                          <Text style={styles.payButtonText}>Pay Now</Text>
-                        </TouchableOpacity>
-                      )}
                     </View>
                   </View>
                 ))
@@ -628,52 +663,72 @@ const FeesScreen = () => {
                     </View>
                     
                     <View style={styles.itemFooter}>
-                      <View style={styles.statusContainer}>
-                        <Ionicons 
-                          name={getStatusIcon(fine.status || 'Pending') as any} 
-                          size={16} 
-                          color={getStatusColor(fine.status || 'Pending')} 
-                        />
-                        <Text style={[styles.compactStatusText, { color: getStatusColor(fine.status || 'Pending') }]}>
-                          {fine.status || 'Pending'}
-                        </Text>
-                      </View>
-                      
-                      {/* Payment Status Badge */}
                       {(() => {
                         const payment = paymentsByFineId.get(fine._id);
-                        if (payment) {
-                          const statusColor = payment.verificationStatus === 'Verified' ? '#10b981' : 
-                                            payment.verificationStatus === 'Rejected' ? '#ef4444' : '#f59e0b';
-                          const statusIcon = payment.verificationStatus === 'Verified' ? 'checkmark-circle' : 
-                                           payment.verificationStatus === 'Rejected' ? 'close-circle' : 'time';
-                          return (
-                            <TouchableOpacity
-                              style={[styles.paymentStatusBadge, { backgroundColor: statusColor + '20' }]}
-                              onPress={() => {
-                                setSelectedItemForHistory({ item: fine, type: 'fine', payment });
-                                setShowPaymentHistory(true);
-                              }}
-                            >
-                              <Ionicons name={statusIcon} size={12} color={statusColor} />
-                              <Text style={[styles.paymentStatusText, { color: statusColor }]}>
-                                {payment.verificationStatus === 'Verified' ? 'Verified' : 
-                                 payment.verificationStatus === 'Rejected' ? 'Rejected' : 'Pending'}
+                        const isPartialPayment = payment && 
+                                                 payment.verificationStatus === 'Verified' && 
+                                                 payment.amount < fine.amount;
+                        const fineStatus = fine.status || 'Pending';
+                        const displayStatus = isPartialPayment ? 'Partially Paid' : fineStatus;
+                        const statusColor = getStatusColor(fineStatus, isPartialPayment);
+                        const statusIcon = getStatusIcon(fineStatus, isPartialPayment);
+                        
+                        return (
+                          <>
+                            <View style={styles.statusContainer}>
+                              <Ionicons 
+                                name={statusIcon as any} 
+                                size={16} 
+                                color={statusColor} 
+                              />
+                              <Text style={[styles.compactStatusText, { color: statusColor }]}>
+                                {displayStatus}
                               </Text>
-                            </TouchableOpacity>
-                          );
-                        }
-                        return null;
+                              {isPartialPayment && (
+                                <Text style={[styles.partialPaymentText, { color: statusColor }]}>
+                                  ({formatCurrency(payment.amount)} of {formatCurrency(fine.amount)})
+                                </Text>
+                              )}
+                            </View>
+                            
+                            {/* Payment Status Badge */}
+                            {payment && (
+                              <TouchableOpacity
+                                style={[styles.paymentStatusBadge, { backgroundColor: payment.verificationStatus === 'Verified' ? '#10b98120' : 
+                                            payment.verificationStatus === 'Rejected' ? '#ef444420' : '#f59e0b20' }]}
+                                onPress={() => {
+                                  setSelectedItemForHistory({ item: fine, type: 'fine', payment });
+                                  setShowPaymentHistory(true);
+                                }}
+                              >
+                                <Ionicons 
+                                  name={payment.verificationStatus === 'Verified' ? 'checkmark-circle' : 
+                                       payment.verificationStatus === 'Rejected' ? 'close-circle' : 'time'} 
+                                  size={12} 
+                                  color={payment.verificationStatus === 'Verified' ? '#10b981' : 
+                                        payment.verificationStatus === 'Rejected' ? '#ef4444' : '#f59e0b'} 
+                                />
+                                <Text style={[styles.paymentStatusText, { 
+                                  color: payment.verificationStatus === 'Verified' ? '#10b981' : 
+                                         payment.verificationStatus === 'Rejected' ? '#ef4444' : '#f59e0b'
+                                }]}>
+                                  {payment.verificationStatus === 'Verified' ? 'Verified' : 
+                                   payment.verificationStatus === 'Rejected' ? 'Rejected' : 'Pending'}
+                                </Text>
+                              </TouchableOpacity>
+                            )}
+                            
+                            {fineStatus !== 'Paid' && (
+                              <TouchableOpacity
+                                style={styles.payButton}
+                                onPress={() => handlePayment(fine, 'fine')}
+                              >
+                                <Text style={styles.payButtonText}>Pay Now</Text>
+                              </TouchableOpacity>
+                            )}
+                          </>
+                        );
                       })()}
-                      
-                      {(fine.status || 'Pending') !== 'Paid' && (
-                        <TouchableOpacity
-                          style={styles.payButton}
-                          onPress={() => handlePayment(fine, 'fine')}
-                        >
-                          <Text style={styles.payButtonText}>Pay Now</Text>
-                        </TouchableOpacity>
-                      )}
                     </View>
                   </View>
                 ))
@@ -761,11 +816,27 @@ const FeesScreen = () => {
                     </Text>
                     <View style={styles.paymentHistoryDetails}>
                       <View style={styles.paymentHistoryRow}>
-                        <Text style={styles.paymentHistoryLabel}>Amount:</Text>
+                        <Text style={styles.paymentHistoryLabel}>Amount Paid:</Text>
                         <Text style={styles.paymentHistoryValue}>
                           {formatCurrency(selectedItemForHistory.payment.amount)}
                         </Text>
                       </View>
+                      {selectedItemForHistory.item.amount && selectedItemForHistory.payment.amount < selectedItemForHistory.item.amount && (
+                        <View style={styles.paymentHistoryRow}>
+                          <Text style={styles.paymentHistoryLabel}>Fee/Fine Amount:</Text>
+                          <Text style={styles.paymentHistoryValue}>
+                            {formatCurrency(selectedItemForHistory.item.amount)}
+                          </Text>
+                        </View>
+                      )}
+                      {selectedItemForHistory.item.amount && selectedItemForHistory.payment.amount < selectedItemForHistory.item.amount && (
+                        <View style={styles.paymentHistoryRow}>
+                          <Text style={styles.paymentHistoryLabel}>Remaining:</Text>
+                          <Text style={[styles.paymentHistoryValue, { color: '#f59e0b', fontWeight: '600' }]}>
+                            {formatCurrency(selectedItemForHistory.item.amount - selectedItemForHistory.payment.amount)}
+                          </Text>
+                        </View>
+                      )}
                       <View style={styles.paymentHistoryRow}>
                         <Text style={styles.paymentHistoryLabel}>Date:</Text>
                         <Text style={styles.paymentHistoryValue}>
@@ -797,8 +868,13 @@ const FeesScreen = () => {
                             { color: selectedItemForHistory.payment.verificationStatus === 'Verified' ? '#10b981' : 
                                     selectedItemForHistory.payment.verificationStatus === 'Rejected' ? '#ef4444' : '#f59e0b' }
                           ]}>
-                            {selectedItemForHistory.payment.verificationStatus === 'Verified' ? 'Verified' : 
-                             selectedItemForHistory.payment.verificationStatus === 'Rejected' ? 'Rejected' : 'Pending Verification'}
+                            {selectedItemForHistory.payment.verificationStatus === 'Verified' 
+                              ? (selectedItemForHistory.item.amount && selectedItemForHistory.payment.amount < selectedItemForHistory.item.amount
+                                  ? 'Verified (Partial Payment)' 
+                                  : 'Verified')
+                              : selectedItemForHistory.payment.verificationStatus === 'Rejected' 
+                                ? 'Rejected' 
+                                : 'Pending Verification'}
                           </Text>
                         </View>
                       </View>
@@ -1115,16 +1191,20 @@ const styles = StyleSheet.create({
     color: '#9ca3af',
   },
   itemFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: Platform.OS === 'ios' ? 'column' : 'row',
+    justifyContent: Platform.OS === 'ios' ? 'flex-start' : 'space-between',
+    alignItems: Platform.OS === 'ios' ? 'flex-start' : 'center',
     paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: '#e5e7eb',
+    gap: Platform.OS === 'ios' ? 8 : 0,
   },
   statusContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexShrink: 1,
+    flexWrap: 'wrap',
+    maxWidth: '100%',
   },
   payButton: {
     backgroundColor: '#2563eb',
@@ -1136,6 +1216,13 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 3,
+    flexShrink: 0,
+    ...(Platform.OS === 'ios' && {
+      alignSelf: 'stretch',
+      width: '100%',
+      justifyContent: 'center',
+      alignItems: 'center',
+    }),
   },
   payButtonText: {
     color: '#ffffff',
@@ -1226,14 +1313,22 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginLeft: 4,
   },
+  partialPaymentText: {
+    fontSize: 10,
+    fontWeight: '500',
+    marginLeft: 6,
+    fontStyle: 'italic',
+    flexShrink: 1,
+  },
   paymentStatusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
-    marginLeft: 8,
+    marginLeft: Platform.OS === 'ios' ? 0 : 8,
     gap: 4,
+    flexShrink: 0,
   },
   paymentStatusText: {
     fontSize: 11,

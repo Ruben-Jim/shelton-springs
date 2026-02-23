@@ -8,8 +8,8 @@ export interface OptimizeImageOptions {
 }
 
 const DEFAULT_OPTIONS: Required<OptimizeImageOptions> = {
-  maxDimension: 1200,
-  compress: 0.6,
+  maxDimension: 800,
+  compress: 0.4,
   format: ImageManipulator.SaveFormat.JPEG,
 };
 
@@ -53,8 +53,8 @@ export interface UploadReadyImage {
 // Web image compression using HTML5 Canvas API
 async function compressImageForWeb(
   uri: string,
-  maxDimension: number = 1200,
-  quality: number = 0.6
+  maxDimension: number = 800,
+  quality: number = 0.4
 ): Promise<Blob> {
   // Type guard for browser environment
   if (typeof window === 'undefined' || !window.Image || !window.document) {
@@ -120,7 +120,7 @@ export const getUploadReadyImage = async (
   uri: string,
   options?: OptimizeImageOptions
 ): Promise<UploadReadyImage> => {
-  const { maxDimension = 1200, compress = 0.6 } = { ...DEFAULT_OPTIONS, ...options };
+  const { maxDimension = 800, compress = 0.4 } = { ...DEFAULT_OPTIONS, ...options };
   
   // For web, handle image upload with compression
   if (Platform.OS === 'web') {

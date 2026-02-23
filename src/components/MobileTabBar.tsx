@@ -21,6 +21,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
+import { useCachedResidents } from '../context/QueryCacheContext';
 import CustomAlert from './CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
 import { confirmAlert } from '../utils/webCompatibleAlert';
@@ -50,10 +51,10 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
   const [uploading, setUploading] = useState(false);
   const [removing, setRemoving] = useState(false);
   
-  // Get user's profile image from residents table
-  const residents = useQuery(api.residents.getAll) ?? [];
+  // Get user's profile image from residents table - use cached to prevent duplicates
+  const residents = useCachedResidents();
   const currentUser = residents.find(resident => resident.email === user?.email);
-  const displayImageUrl = currentUser?.profileImageUrl;
+  const displayImage = currentUser?.profileImage;
   
   // Convex mutations
   const updateResident = useMutation(api.residents.update);
@@ -556,7 +557,7 @@ const handleDeleteAccount = () => {
               <View style={styles.userSection} pointerEvents="box-none">
                 <View style={styles.userInfo} pointerEvents="box-none">
                   <ProfileImage 
-                    source={currentUser?.profileImageUrl} 
+                    source={currentUser?.profileImage} 
                     size={40}
                     style={{ marginRight: 12 }}
                   />
@@ -669,7 +670,7 @@ const handleDeleteAccount = () => {
                 {/* Large Profile Image Display */}
                 <View style={styles.profileImageDisplayContainer}>
                   <ProfileImage 
-                    source={profileImage ? profileImage : currentUser?.profileImageUrl} 
+                    source={profileImage ? profileImage : currentUser?.profileImage} 
                     size={120}
                     style={styles.largeProfileImage}
                     initials={currentUser ? `${currentUser.firstName?.[0] || ''}${currentUser.lastName?.[0] || ''}` : undefined}
@@ -677,7 +678,7 @@ const handleDeleteAccount = () => {
                 </View>
 
                 {/* Image Editing Controls */}
-                {displayImageUrl && !profileImage ? (
+                {displayImage && !profileImage ? (
                   // If there's an existing profile image, only show remove button (cannot add new image)
                   <View style={styles.imagePickerContainer}>
                     <TouchableOpacity
@@ -695,7 +696,7 @@ const handleDeleteAccount = () => {
                       )}
                     </TouchableOpacity>
                   </View>
-                ) : !displayImageUrl && !profileImage ? (
+                ) : !displayImage && !profileImage ? (
                   // If no profile image exists, show add buttons (can add new image)
                   <View style={styles.imagePickerContainer}>
                     <TouchableOpacity
@@ -873,12 +874,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#2563eb',
     ...(Platform.OS === 'ios' 
       ? {
-          top: '50%',
-          transform: [{ translateY: 13 }],
+          top: 24, // 16px padding + 8px to center the 8px dot
         }
       : {
-          top: '50%',
-          marginTop: -4,
+          top: 24, // 16px padding + 6px to center the 8px dot
         }
     ),
   },

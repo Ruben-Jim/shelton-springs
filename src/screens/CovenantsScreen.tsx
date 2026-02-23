@@ -13,9 +13,11 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useIsFocused } from '@react-navigation/native';
 import { useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
+import { useCachedHoaInfo } from '../context/QueryCacheContext';
 import { useStorageUrl } from '../hooks/useStorageUrl';
 import { Linking, ActivityIndicator } from 'react-native';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
@@ -27,12 +29,13 @@ import { useMessaging } from '../context/MessagingContext';
 
 const CovenantsScreen = () => {
   const { user } = useAuth();
+  const isFocused = useIsFocused();
   const { setShowOverlay } = useMessaging();
   const isBoardMember = user?.isBoardMember && user?.isActive;
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const hoaInfo = useQuery(api.hoaInfo.get);
+  const hoaInfo = useCachedHoaInfo();
   const ccrsPdfUrl = useStorageUrl(hoaInfo?.ccrsPdfStorageId || null);
 
   // State for dynamic responsive behavior (only for web/desktop)
@@ -80,7 +83,10 @@ const CovenantsScreen = () => {
 
   const categories = ['Architecture', 'Landscaping', 'Minutes', 'Caveats', 'General'];
   const [covenantsLimit, setCovenantsLimit] = useState(50);
-  const covenantsData = useQuery(api.covenants.getPaginated, { limit: covenantsLimit, offset: 0 });
+  const covenantsData = useQuery(
+    api.covenants.getPaginated,
+    isFocused ? { limit: covenantsLimit, offset: 0 } : "skip"
+  );
   const covenants = covenantsData?.items ?? [];
 
   const filteredCovenants = covenants.filter((covenant: any) => {
@@ -179,11 +185,11 @@ const CovenantsScreen = () => {
         })}
       >
         {/* Header with ImageBackground */}
-        <View style={styles.headerContainerIOS}>
+        <View style={[styles.headerContainerIOS, { width: screenWidth }]}>
         <ImageBackground
           source={require('../../assets/hoa-4k.jpg')}
           style={[styles.header, !isBoardMember && styles.headerNonMember]}
-          imageStyle={styles.headerImage}
+          imageStyle={[styles.headerImage, { width: screenWidth }]}
             resizeMode="stretch"
         >
           <View style={styles.headerOverlay} />

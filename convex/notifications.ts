@@ -1,5 +1,6 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 
 // Create notification records for multiple users
 export const createNotificationForUsers = mutation({
@@ -26,6 +27,14 @@ export const createNotificationForUsers = mutation({
     await Promise.all(
       notifications.map((notification) => ctx.db.insert("userNotifications", notification))
     );
+
+    // Schedule Expo push notifications (delivered even when app is closed)
+    await ctx.scheduler.runAfter(0, internal.push.sendExpoPush, {
+      userIds: args.userIds,
+      title: args.title,
+      body: args.body,
+      data: args.data,
+    });
 
     return notifications.length;
   },
@@ -69,6 +78,14 @@ export const createNotificationForBoardMembers = mutation({
       notifications.map((notification) => ctx.db.insert("userNotifications", notification))
     );
 
+    // Schedule Expo push notifications (delivered even when app is closed)
+    await ctx.scheduler.runAfter(0, internal.push.sendExpoPush, {
+      userIds: boardMemberIds,
+      title: args.title,
+      body: args.body,
+      data: args.data,
+    });
+
     return notifications.length;
   },
 });
@@ -109,6 +126,14 @@ export const createNotificationForAllResidents = mutation({
     await Promise.all(
       notifications.map((notification) => ctx.db.insert("userNotifications", notification))
     );
+
+    // Schedule Expo push notifications (delivered even when app is closed)
+    await ctx.scheduler.runAfter(0, internal.push.sendExpoPush, {
+      userIds: residentIds,
+      title: args.title,
+      body: args.body,
+      data: args.data,
+    });
 
     return notifications.length;
   },

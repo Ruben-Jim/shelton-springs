@@ -186,13 +186,14 @@ const BoardScreen = () => {
             {
           opacity: fadeAnim,
             },
-            styles.headerContainerIOS
+            styles.headerContainerIOS,
+            { width: screenWidth }
           ]}
         >
           <ImageBackground
             source={require('../../assets/hoa-4k.jpg')}
             style={[styles.header, !isBoardMember && styles.headerNonMember]}
-            imageStyle={styles.headerImage}
+            imageStyle={[styles.headerImage, { width: screenWidth }]}
             resizeMode="stretch"
           >
             <View style={styles.headerOverlay} />

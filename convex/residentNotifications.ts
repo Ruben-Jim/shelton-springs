@@ -27,28 +27,7 @@ export const getAllActive = query({
       }
     });
     
-    // Collect all storage IDs for batch resolution
-    const allStorageIds: string[] = [];
-    notifications.forEach((notification) => {
-      const resident = residentsById.get(notification.residentId);
-      if (resident?.profileImage) allStorageIds.push(resident.profileImage);
-      if (notification.houseImage) allStorageIds.push(notification.houseImage);
-    });
-
-    // Resolve all URLs in batch
-    const urlMap = new Map();
-    await Promise.all(
-      Array.from(new Set(allStorageIds)).map(async (id) => {
-        try {
-          const url = await ctx.storage.getUrl(id);
-          if (url) urlMap.set(id, url);
-        } catch (error) {
-          console.log(`Failed to resolve URL for storage ID ${id}:`, error);
-        }
-      })
-    );
-
-    // Join with resident data using the map
+    // Join with resident data and return storage IDs (frontend will resolve URLs)
     const notificationsWithResidentInfo = notifications.map((notification) => {
       const resident = residentsById.get(notification.residentId);
         return {
@@ -57,8 +36,8 @@ export const getAllActive = query({
           residentAddress: resident
             ? `${resident.address}${resident.unitNumber ? ` #${resident.unitNumber}` : ''}`
             : '',
-          profileImageUrl: resident?.profileImage ? urlMap.get(resident.profileImage) || null : null,
-          houseImageUrl: notification.houseImage ? urlMap.get(notification.houseImage) || null : null,
+          profileImage: resident?.profileImage || null,
+          houseImage: notification.houseImage || null,
         };
     });
     

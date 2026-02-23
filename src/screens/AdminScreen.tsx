@@ -27,6 +27,7 @@ import { useQuery, useMutation } from 'convex/react';
 import { useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
+import { useCachedResidents, useCachedHoaInfo } from '../context/QueryCacheContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
 import CustomTabBar from '../components/CustomTabBar';
@@ -35,7 +36,6 @@ import ProfileImage from '../components/ProfileImage';
 import OptimizedImage from '../components/OptimizedImage';
 import { getUploadReadyImage } from '../utils/imageUpload';
 import {
-  notifyNewFine,
   notifyNewPoll,
   notifyBoardUpdate
 } from '../utils/notificationHelpers';
@@ -53,15 +53,12 @@ const AdminScreen = () => {
   const showMobileNav = isMobileDevice || screenWidth < 1024; // Always mobile on mobile devices, responsive on web
   const showDesktopNav = !isMobileDevice && screenWidth >= 1024; // Only desktop nav on web when wide enough
   
-  // Listen for window size changes (only on web/desktop)
+  // Listen for window/dimension changes (web resize, tablet rotation, etc.)
   useEffect(() => {
-    if (Platform.OS === 'web') {
-      const subscription = Dimensions.addEventListener('change', ({ window }) => {
-        setScreenWidth(window.width);
-      });
-
-      return () => subscription?.remove();
-    }
+    const subscription = Dimensions.addEventListener('change', ({ window }) => {
+      setScreenWidth(window.width);
+    });
+    return () => subscription?.remove();
   }, []);
 
   // Pagination state for large lists
@@ -69,23 +66,69 @@ const AdminScreen = () => {
   const [postsLimit, setPostsLimit] = useState(50);
   const [pollsLimit, setPollsLimit] = useState(50);
   
+  // State (define early so it can be used in conditional queries)
+  const [activeTab, setActiveTab] = useState<'SheltonHOA' | 'residents' | 'board' | 'covenants' | 'Community' | 'fees'>('SheltonHOA');
+  
   // Data queries - using paginated queries for large lists
-  const residents = useQuery(api.residents.getAll) ?? [];
+  // Always loaded: residents, boardMembers (needed for all tabs)
+  // Use cached queries to prevent duplicates across screens
+  const residents = useCachedResidents();
+  const hoaInfo = useCachedHoaInfo();
   const boardMembers = useQuery(api.boardMembers.getAll) ?? [];
-  const covenantsData = useQuery(api.covenants.getPaginated, { limit: covenantsLimit, offset: 0 });
+  
+  // Conditional queries - only load when tab is active (lazy loading)
+  const covenantsData = useQuery(
+    api.covenants.getPaginated,
+    activeTab === 'covenants' ? { limit: covenantsLimit, offset: 0 } : "skip"
+  );
   const covenants = covenantsData?.items ?? [];
-  const communityPostsData = useQuery(api.communityPosts.getPaginated, { limit: postsLimit, offset: 0 });
+  
+  const communityPostsData = useQuery(
+    api.communityPosts.getPaginated,
+    activeTab === 'Community' ? { limit: postsLimit, offset: 0 } : "skip"
+  );
   const communityPosts = communityPostsData?.items ?? [];
-  const comments = useQuery(api.communityPosts.getAllComments) ?? [];
-  const homeownersPaymentStatus = useQuery(api.fees.getAllHomeownersPaymentStatus) ?? [];
-  const allFeesFromDatabase = useQuery(api.fees.getAll) ?? [];
-  const allFinesFromDatabase = useQuery(api.fees.getAllFines) ?? [];
-  const pollsData = useQuery(api.polls.getPaginated, { limit: pollsLimit, offset: 0 });
+  
+  const comments = useQuery(
+    api.communityPosts.getAllComments,
+    activeTab === 'Community' ? {} : "skip"
+  ) ?? [];
+  
+  const pollsData = useQuery(
+    api.polls.getPaginated,
+    activeTab === 'Community' ? { limit: pollsLimit, offset: 0 } : "skip"
+  );
   const polls = pollsData?.items ?? [];
-  const pendingVenmoPayments = useQuery(api.payments.getPendingVenmoPayments) ?? [];
-  const allPayments = useQuery(api.payments.getAllPayments) ?? [];
-  const pets = useQuery(api.pets.getAll) ?? [];
-  const hoaInfo = useQuery(api.hoaInfo.get) ?? null;
+  
+  const pets = useQuery(
+    api.pets.getAll,
+    activeTab === 'Community' ? {} : "skip"
+  ) ?? [];
+  
+  const homeownersPaymentStatus = useQuery(
+    api.fees.getAllHomeownersPaymentStatus,
+    activeTab === 'fees' ? {} : "skip"
+  ) ?? [];
+  
+  const allFeesFromDatabase = useQuery(
+    api.fees.getAll,
+    activeTab === 'fees' ? {} : "skip"
+  ) ?? [];
+  
+  const allFinesFromDatabase = useQuery(
+    api.fees.getAllFines,
+    activeTab === 'fees' ? {} : "skip"
+  ) ?? [];
+  
+  const pendingVenmoPayments = useQuery(
+    api.payments.getPendingVenmoPayments,
+    activeTab === 'fees' ? {} : "skip"
+  ) ?? [];
+  
+  const allPayments = useQuery(
+    api.payments.getAllPayments,
+    activeTab === 'fees' ? {} : "skip"
+  ) ?? [];
 
   // Load HOA info into form when it's available
   useEffect(() => {
@@ -195,58 +238,6 @@ const AdminScreen = () => {
     return map;
   }, [allPayments]);
 
-  // Group homeowners by address for residents sub-tab (similar to fees tab)
-  const homeownersGroupedByAddressForTable = useMemo(() => {
-    const addressMap = new Map<string, any[]>();
-    
-    homeownersList.forEach((homeowner: any) => {
-      // Create address key: address + unitNumber (if present)
-      const addressKey = `${homeowner.address}${homeowner.unitNumber ? ` Unit ${homeowner.unitNumber}` : ''}`;
-      
-      if (!addressMap.has(addressKey)) {
-        addressMap.set(addressKey, []);
-      }
-      addressMap.get(addressKey)!.push(homeowner);
-    });
-    
-    // Convert map to array of grouped addresses with aggregated fees and payments
-    return Array.from(addressMap.entries()).map(([addressKey, homeowners]) => {
-      // Aggregate fees for all homeowners at this address
-      const allFees: any[] = [];
-      const allPayments: any[] = [];
-      
-      homeowners.forEach((homeowner: any) => {
-        const homeownerFees = feesByUserId.get(String(homeowner._id)) || [];
-        const homeownerPayments = paymentsByUserId.get(String(homeowner._id)) || [];
-        
-        allFees.push(...homeownerFees);
-        allPayments.push(...homeownerPayments);
-      });
-      
-      // Get the most recent paid payment method across all homeowners
-      const paidPayments = allPayments.filter((p: any) => p.status === 'Paid' && p.verificationStatus === 'Verified');
-      const latestPayment = paidPayments.length > 0 
-        ? paidPayments.sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0] 
-        : null;
-      
-      const totalAmount = allFees.reduce((sum: number, fee: any) => sum + fee.amount, 0);
-      const unpaidCount = allFees.filter((fee: any) => fee.status !== 'Paid').length;
-      const allFeesPaid = allFees.length > 0 && allFees.every((f: any) => f.status === 'Paid');
-      
-      return {
-        addressKey,
-        address: homeowners[0].address,
-        unitNumber: homeowners[0].unitNumber,
-        homeowners,
-        fees: allFees,
-        payments: allPayments,
-        latestPayment,
-        totalAmount,
-        unpaidCount,
-        allFeesPaid,
-      };
-    });
-  }, [homeownersList, feesByUserId, paymentsByUserId]);
 
   // Filtered fees arrays - cached to avoid repeated filtering
   const unpaidAnnualFees = useMemo(() => {
@@ -317,6 +308,41 @@ const AdminScreen = () => {
         ? paidPayments.sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0] 
         : null;
       
+      // Calculate total paid amount and check for partial payments (fees)
+      const totalFeeAmount = allFees.reduce((sum: number, fee: any) => sum + fee.amount, 0);
+      let totalPaidAmount = 0;
+      let hasPartialPayment = false;
+      
+      // Check each fee for partial payments
+      allFees.forEach((fee: any) => {
+        const feePayments = allPayments.filter((p: any) => 
+          p.feeId === fee._id && 
+          p.verificationStatus === 'Verified'
+        );
+        
+        if (feePayments.length > 0) {
+          const feeTotalPaid = feePayments.reduce((sum: number, p: any) => sum + p.amount, 0);
+          totalPaidAmount += feeTotalPaid;
+          
+          // Check if this fee has a partial payment
+          if (feeTotalPaid > 0 && feeTotalPaid < fee.amount) {
+            hasPartialPayment = true;
+          }
+        }
+      });
+      
+      // Determine payment status
+      const allFeesPaid = allFees.length > 0 && allFees.every((f: any) => f.status === 'Paid');
+      const isPartiallyPaid = !allFeesPaid && hasPartialPayment && totalPaidAmount > 0;
+      
+      // Create a map of payments by fineId for quick lookup
+      const paymentsByFineId = new Map<string, any>();
+      allPayments.forEach((payment: any) => {
+        if (payment.fineId) {
+          paymentsByFineId.set(payment.fineId, payment);
+        }
+      });
+      
       return {
         addressKey,
         address: homeowners[0].address,
@@ -327,21 +353,73 @@ const AdminScreen = () => {
         payments: allPayments,
         latestPayment,
         // Combined payment status: paid only if all fees are paid
-        allFeesPaid: allFees.length > 0 && allFees.every((f: any) => f.status === 'Paid'),
+        allFeesPaid,
         // Total fee amount
-        totalFeeAmount: allFees.reduce((sum: number, fee: any) => sum + fee.amount, 0),
+        totalFeeAmount,
+        // Partial payment info
+        totalPaidAmount,
+        isPartiallyPaid,
+        // Payments by fineId for quick lookup
+        paymentsByFineId,
       };
     });
   }, [homeownersPaymentStatus, feesByUserId, finesByResidentId, paymentsByUserId]);
 
-  // Fee statistics - cached counts
+  // Fee statistics - household-level counts (fees are per address/household)
   const feeStats = useMemo(() => {
-    return {
-      total: allFeesFromDatabase.length,
-      paid: paidFees.length,
-      unpaid: unpaidFees.length,
-    };
-  }, [allFeesFromDatabase.length, paidFees.length, unpaidFees.length]);
+    let total = 0;
+    let paid = 0;
+    let unpaid = 0;
+    homeownersGroupedByAddress.forEach((g: any) => {
+      if (g.fees.length > 0) {
+        total += 1;
+        if (g.allFeesPaid) paid += 1;
+        else unpaid += 1;
+      }
+    });
+    return { total, paid, unpaid };
+  }, [homeownersGroupedByAddress]);
+
+  // Dues management buttons: responsive layout for all resolutions
+  // Breakpoints: xs <360 | sm 360-479 | md 480-639 | lg 640-1023 | xl 1024-1279 | 2xl >=1280
+  const duesButtonLayout = useMemo((): {
+    flexBasis: '100%' | '48%' | '32%' | '24%';
+    maxWidth: '100%' | '48%' | '32%' | '24%';
+    minWidth: number | undefined;
+    paddingH: number;
+    paddingV: number;
+    fontSize: number;
+    gap: number;
+  } => {
+    const w = screenWidth;
+    if (w < 360) {
+      return { flexBasis: '100%', maxWidth: '100%', minWidth: undefined, paddingH: 12, paddingV: 10, fontSize: 11, gap: 10 };
+    }
+    if (w < 480) {
+      return { flexBasis: '48%', maxWidth: '48%', minWidth: undefined, paddingH: 10, paddingV: 10, fontSize: 11, gap: 10 };
+    }
+    if (w < 640) {
+      return { flexBasis: '48%', maxWidth: '48%', minWidth: undefined, paddingH: 12, paddingV: 11, fontSize: 11, gap: 12 };
+    }
+    if (w < 768) {
+      return { flexBasis: '32%', maxWidth: '32%', minWidth: 100, paddingH: 10, paddingV: 11, fontSize: 11, gap: 10 };
+    }
+    if (w < 1024) {
+      return { flexBasis: '32%', maxWidth: '32%', minWidth: 120, paddingH: 14, paddingV: 12, fontSize: 12, gap: 12 };
+    }
+    if (w < 1280) {
+      return { flexBasis: '24%', maxWidth: '24%', minWidth: 140, paddingH: 16, paddingV: 12, fontSize: 12, gap: 12 };
+    }
+    return { flexBasis: '24%', maxWidth: '24%', minWidth: 160, paddingH: 18, paddingV: 12, fontSize: 12, gap: 12 };
+  }, [screenWidth]);
+
+  const duesButtonWrapperStyle = useMemo(() => ({
+    flexBasis: duesButtonLayout.flexBasis,
+    flexGrow: 1 as const,
+    flexShrink: 1 as const,
+    maxWidth: duesButtonLayout.maxWidth,
+    minWidth: duesButtonLayout.minWidth,
+  }), [duesButtonLayout]);
 
   const fineStats = useMemo(() => {
     return {
@@ -385,6 +463,7 @@ const AdminScreen = () => {
   // Payment management mutations
   const verifyVenmoPayment = useMutation(api.payments.verifyVenmoPayment);
   const recordCheckOrCashPayment = useMutation(api.payments.recordCheckOrCashPayment);
+  const correctPaymentAmount = useMutation(api.payments.correctPaymentAmount);
   
   // Pet management mutations
   const deletePet = useMutation(api.pets.remove);
@@ -395,13 +474,16 @@ const AdminScreen = () => {
   
   // State
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<'SheltonHOA' | 'residents' | 'board' | 'covenants' | 'Community' | 'fees'>('SheltonHOA');
+  // activeTab moved earlier (before queries) for lazy loading
   const [postsSubTab, setPostsSubTab] = useState<'posts' | 'comments' | 'polls' | 'pets' | 'complaints'>('posts');
-  const [feesSubTab, setFeesSubTab] = useState<'dues' | 'residents'>('dues');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   
+  // Transactions modal state - declared early so it can be used in queries
+  const [showTransactionsModal, setShowTransactionsModal] = useState(false);
+  const [transactionsLimit, setTransactionsLimit] = useState(50);
+  const [transactionsSearchQuery, setTransactionsSearchQuery] = useState('');
+  
   // Accordion state for sections (collapse/expand entire sections)
-  const [isResidentsSectionExpanded, setIsResidentsSectionExpanded] = useState(true);
 
   const [showBlockModal, setShowBlockModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -424,6 +506,11 @@ const AdminScreen = () => {
   const [selectedPaymentForVerification, setSelectedPaymentForVerification] = useState<any>(null);
   const [showVerificationModal, setShowVerificationModal] = useState(false);
   const [verificationNotes, setVerificationNotes] = useState('');
+  const [adjustedPaymentAmount, setAdjustedPaymentAmount] = useState<string>('');
+  const [selectedPaymentForCorrection, setSelectedPaymentForCorrection] = useState<any>(null);
+  const [showCorrectionModal, setShowCorrectionModal] = useState(false);
+  const [correctedAmount, setCorrectedAmount] = useState<string>('');
+  const [correctionNotes, setCorrectionNotes] = useState<string>('');
   const [selectedReceiptImage, setSelectedReceiptImage] = useState<string | null>(null);
   const [showReceiptViewer, setShowReceiptViewer] = useState(false);
   
@@ -450,6 +537,45 @@ const AdminScreen = () => {
              amount.includes(query);
     });
   }, [pendingVenmoPayments, paymentSearchQuery, residentsMap]);
+
+  // Conditional query for recent payments - only fetch when transactions modal is open
+  // Moved here after state declarations to avoid initialization error
+  const recentPayments = useQuery(
+    api.payments.getRecentPayments,
+    showTransactionsModal ? { limit: transactionsLimit } : "skip"
+  ) ?? [];
+
+  // Filtered transactions (client-side filtering)
+  const filteredTransactions = useMemo(() => {
+    if (!transactionsSearchQuery.trim()) {
+      return recentPayments;
+    }
+    const query = transactionsSearchQuery.toLowerCase();
+    return recentPayments.filter((payment: any) => {
+      const resident = residentsMap.get(payment.userId);
+      const residentName = resident ? `${resident.firstName} ${resident.lastName}`.toLowerCase() : '';
+      const address = resident ? `${resident.address}${resident.unitNumber ? ` #${resident.unitNumber}` : ''}`.toLowerCase() : '';
+      const feeType = payment.feeType?.toLowerCase() || '';
+      const paymentMethod = payment.paymentMethod?.toLowerCase() || '';
+      const venmoUsername = payment.venmoUsername?.toLowerCase() || '';
+      const transactionId = (payment.transactionId || payment.venmoTransactionId || payment.checkNumber || '').toLowerCase();
+      const amount = payment.amount.toString();
+      const status = payment.status?.toLowerCase() || '';
+      const verificationStatus = payment.verificationStatus?.toLowerCase() || '';
+      const paymentDate = payment.paymentDate?.toLowerCase() || '';
+      
+      return residentName.includes(query) ||
+             address.includes(query) ||
+             feeType.includes(query) ||
+             paymentMethod.includes(query) ||
+             venmoUsername.includes(query) ||
+             transactionId.includes(query) ||
+             amount.includes(query) ||
+             status.includes(query) ||
+             verificationStatus.includes(query) ||
+             paymentDate.includes(query);
+    });
+  }, [recentPayments, transactionsSearchQuery, residentsMap]);
   
   // Fee management modal state
   const [showYearFeeModal, setShowYearFeeModal] = useState(false);
@@ -484,11 +610,71 @@ const AdminScreen = () => {
     feeId: '',
     fineId: '',
     amount: '',
-    paymentMethod: 'Check' as 'Check' | 'Cash',
+    paymentMethod: 'Check' as 'Check' | 'Cash' | 'Venmo',
     paymentDate: new Date().toISOString().split('T')[0],
     checkNumber: '',
+    venmoUsername: '',
+    venmoTransactionId: '',
     notes: '',
   });
+
+  // Homeowners grid sort (client-side only - no Convex cost)
+  const [feesGridSortOrder, setFeesGridSortOrder] = useState<'alphabet' | 'paid' | 'pending' | 'clear'>('alphabet');
+
+  // Sorted and filtered homeowners grid (client-side only - no Convex cost)
+  const sortedHomeownersGroupedByAddress = useMemo(() => {
+    const getSortKey = (g: (typeof homeownersGroupedByAddress)[0]) => {
+      const isClear = g.fees.length === 0;
+      const isPaid = g.allFeesPaid;
+      const isPending = !isClear && !isPaid;
+      const firstNameKey = g.homeowners.map((h: any) => `${h.firstName} ${h.lastName}`).join(' ').toLowerCase();
+      return { isClear, isPaid, isPending, firstNameKey, addressKey: g.addressKey.toLowerCase() };
+    };
+    const nameSort = (a: (typeof homeownersGroupedByAddress)[0], b: (typeof homeownersGroupedByAddress)[0]) =>
+      getSortKey(a).firstNameKey.localeCompare(getSortKey(b).firstNameKey);
+
+    if (feesGridSortOrder === 'alphabet') {
+      return [...homeownersGroupedByAddress].sort(nameSort);
+    }
+    if (feesGridSortOrder === 'paid') {
+      return [...homeownersGroupedByAddress].filter((g) => getSortKey(g).isPaid).sort(nameSort);
+    }
+    if (feesGridSortOrder === 'pending') {
+      return [...homeownersGroupedByAddress].filter((g) => getSortKey(g).isPending).sort(nameSort);
+    }
+    if (feesGridSortOrder === 'clear') {
+      return [...homeownersGroupedByAddress].filter((g) => getSortKey(g).isClear).sort(nameSort);
+    }
+    return homeownersGroupedByAddress;
+  }, [homeownersGroupedByAddress, feesGridSortOrder]);
+
+  // Residents grid sort (client-side only - no Convex cost)
+  const [residentsGridSortOrder, setResidentsGridSortOrder] = useState<'alphabet' | 'blocked' | 'board' | 'homeowner' | 'renter' | 'developer'>('alphabet');
+
+  const sortedResidents = useMemo(() => {
+    const firstNameKey = (r: any) => `${r.firstName} ${r.lastName}`.toLowerCase();
+    const nameSort = (a: any, b: any) => firstNameKey(a).localeCompare(firstNameKey(b));
+
+    if (residentsGridSortOrder === 'alphabet') {
+      return [...residents].sort(nameSort);
+    }
+    if (residentsGridSortOrder === 'blocked') {
+      return residents.filter((r) => r.isBlocked).sort(nameSort);
+    }
+    if (residentsGridSortOrder === 'board') {
+      return residents.filter((r) => r.isBoardMember && !r.isBlocked).sort(nameSort);
+    }
+    if (residentsGridSortOrder === 'homeowner') {
+      return residents.filter((r) => r.isResident && !r.isRenter && !r.isBlocked).sort(nameSort);
+    }
+    if (residentsGridSortOrder === 'renter') {
+      return residents.filter((r) => r.isRenter && !r.isBlocked).sort(nameSort);
+    }
+    if (residentsGridSortOrder === 'developer') {
+      return residents.filter((r) => r.isDev && !r.isBlocked).sort(nameSort);
+    }
+    return residents;
+  }, [residents, residentsGridSortOrder]);
 
   // Search state for modals
   const [fineSearchQuery, setFineSearchQuery] = useState('');
@@ -550,6 +736,8 @@ const AdminScreen = () => {
   const pollModalTranslateY = useRef(new Animated.Value(300)).current;
   const recordPaymentModalOpacity = useRef(new Animated.Value(0)).current;
   const recordPaymentModalTranslateY = useRef(new Animated.Value(300)).current;
+  const transactionsModalOpacity = useRef(new Animated.Value(0)).current;
+  const transactionsModalTranslateY = useRef(new Animated.Value(300)).current;
   const categoryDropdownOpacity = useRef(new Animated.Value(0)).current;
   const categoryDropdownScale = useRef(new Animated.Value(0.95)).current;
   const overlayOpacity = useRef(new Animated.Value(0)).current;
@@ -582,7 +770,7 @@ const AdminScreen = () => {
   const isBoardMember = user?.isBoardMember && user?.isActive;
 
   // Modern animation functions
-  const animateIn = (modalType: 'block' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll' | 'recordPayment') => {
+  const animateIn = (modalType: 'block' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll' | 'recordPayment' | 'transactions') => {
     const opacity = modalType === 'block' ? blockModalOpacity :
                    modalType === 'delete' ? deleteModalOpacity :
                    modalType === 'boardMember' ? boardMemberModalOpacity :
@@ -592,6 +780,7 @@ const AdminScreen = () => {
                    modalType === 'pastDue' ? pastDueModalOpacity :
                    modalType === 'covenant' ? covenantModalOpacity :
                    modalType === 'recordPayment' ? recordPaymentModalOpacity :
+                   modalType === 'transactions' ? transactionsModalOpacity :
                    pollModalOpacity;
     const translateY = modalType === 'block' ? blockModalTranslateY :
                       modalType === 'delete' ? deleteModalTranslateY:
@@ -602,6 +791,7 @@ const AdminScreen = () => {
                       modalType === 'pastDue' ? pastDueModalTranslateY :
                       modalType === 'covenant' ? covenantModalTranslateY :
                       modalType === 'recordPayment' ? recordPaymentModalTranslateY :
+                      modalType === 'transactions' ? transactionsModalTranslateY :
                       pollModalTranslateY;
     
     Animated.parallel([
@@ -624,7 +814,7 @@ const AdminScreen = () => {
     ]).start();
   };
 
-  const animateOut = (modalType: 'block' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll' | 'recordPayment', callback: () => void) => {
+  const animateOut = (modalType: 'block' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll' | 'recordPayment' | 'transactions', callback: () => void) => {
     const opacity = modalType === 'block' ? blockModalOpacity :
                    modalType === 'delete' ? deleteModalOpacity :
                    modalType === 'boardMember' ? boardMemberModalOpacity :
@@ -634,6 +824,7 @@ const AdminScreen = () => {
                    modalType === 'pastDue' ? pastDueModalOpacity :
                    modalType === 'covenant' ? covenantModalOpacity :
                    modalType === 'recordPayment' ? recordPaymentModalOpacity :
+                   modalType === 'transactions' ? transactionsModalOpacity :
                    pollModalOpacity;
     const translateY = modalType === 'block' ? blockModalTranslateY :
                       modalType === 'delete' ? deleteModalTranslateY :
@@ -644,6 +835,7 @@ const AdminScreen = () => {
                       modalType === 'pastDue' ? pastDueModalTranslateY :
                       modalType === 'covenant' ? covenantModalTranslateY :
                       modalType === 'recordPayment' ? recordPaymentModalTranslateY :
+                      modalType === 'transactions' ? transactionsModalTranslateY :
                       pollModalTranslateY;
     
     Animated.parallel([
@@ -818,7 +1010,7 @@ const AdminScreen = () => {
       });
 
       // Send notification for HOA info update
-      await notifyBoardUpdate('HOA Information Updated', 'HOA contact information has been updated');
+      await notifyBoardUpdate('HOA Information Updated', 'HOA contact information has been updated', convex);
 
       Alert.alert('Success', 'HOA information updated successfully.');
     } catch (error) {
@@ -884,12 +1076,12 @@ const AdminScreen = () => {
           ...memberData,
         });
         // Send notification for board member update
-        await notifyBoardUpdate('Board Member Updated', `${memberData.name} - ${memberData.position}`);
+        await notifyBoardUpdate('Board Member Updated', `${memberData.name} - ${memberData.position}`, convex);
         Alert.alert('Success', 'Board member updated successfully.');
       } else {
         await createBoardMember(memberData);
         // Send notification for new board member
-        await notifyBoardUpdate('New Board Member', `${memberData.name} - ${memberData.position}`);
+        await notifyBoardUpdate('New Board Member', `${memberData.name} - ${memberData.position}`, convex);
         Alert.alert('Success', 'Board member added successfully.');
       }
       
@@ -946,6 +1138,7 @@ const AdminScreen = () => {
       });
 
       if (result.success) {
+        // Notification sent by Convex createYearFeesForAllHomeowners (includes push)
         Alert.alert(
           'Year Fees Added', 
           result.message
@@ -995,9 +1188,7 @@ const AdminScreen = () => {
       });
 
       if (result.success) {
-        // Send notification for new fine
-        const dueDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString(); // 30 days from now
-        await notifyNewFine(fineForm.reason, amount, dueDate);
+        // Notification sent by Convex addFineToProperty (includes push)
         
         Alert.alert(
           'Fine Added', 
@@ -1049,6 +1240,8 @@ const AdminScreen = () => {
         paymentMethod: paymentForm.paymentMethod,
         paymentDate: paymentForm.paymentDate,
         checkNumber: paymentForm.checkNumber || undefined,
+        venmoUsername: paymentForm.venmoUsername || undefined,
+        venmoTransactionId: paymentForm.venmoTransactionId || undefined,
         notes: paymentForm.notes || undefined,
         feeId: undefined, // Not linking to specific fees for now
         fineId: undefined,
@@ -1067,6 +1260,8 @@ const AdminScreen = () => {
           paymentMethod: 'Check',
           paymentDate: new Date().toISOString().split('T')[0],
           checkNumber: '',
+          venmoUsername: '',
+          venmoTransactionId: '',
           notes: '',
         });
       } else {
@@ -1721,9 +1916,61 @@ const AdminScreen = () => {
                 </Text>
               </View>
             ) : (
+              <>
+                <View style={styles.feesGridSortRow}>
+                  <Text style={styles.feesGridSortLabel}>Sort:</Text>
+                  <TouchableOpacity
+                    style={[styles.feesGridSortOption, residentsGridSortOrder === 'alphabet' && styles.feesGridSortOptionActive]}
+                    onPress={() => setResidentsGridSortOrder('alphabet')}
+                  >
+                    <Ionicons name="reorder-three" size={16} color={residentsGridSortOrder === 'alphabet' ? '#ffffff' : '#6b7280'} />
+                    <Text style={[styles.feesGridSortOptionText, residentsGridSortOrder === 'alphabet' && styles.feesGridSortOptionTextActive]}>Alphabet</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.feesGridSortOption, residentsGridSortOrder === 'blocked' && styles.feesGridSortOptionActive]}
+                    onPress={() => setResidentsGridSortOrder('blocked')}
+                  >
+                    <Ionicons name="ban" size={16} color={residentsGridSortOrder === 'blocked' ? '#ffffff' : '#ef4444'} />
+                    <Text style={[styles.feesGridSortOptionText, residentsGridSortOrder === 'blocked' && styles.feesGridSortOptionTextActive]}>Blocked</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.feesGridSortOption, residentsGridSortOrder === 'board' && styles.feesGridSortOptionActive]}
+                    onPress={() => setResidentsGridSortOrder('board')}
+                  >
+                    <Ionicons name="shield" size={16} color={residentsGridSortOrder === 'board' ? '#ffffff' : '#f59e0b'} />
+                    <Text style={[styles.feesGridSortOptionText, residentsGridSortOrder === 'board' && styles.feesGridSortOptionTextActive]}>Board</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.feesGridSortOption, residentsGridSortOrder === 'homeowner' && styles.feesGridSortOptionActive]}
+                    onPress={() => setResidentsGridSortOrder('homeowner')}
+                  >
+                    <Ionicons name="people" size={16} color={residentsGridSortOrder === 'homeowner' ? '#ffffff' : '#10b981'} />
+                    <Text style={[styles.feesGridSortOptionText, residentsGridSortOrder === 'homeowner' && styles.feesGridSortOptionTextActive]}>Homeowner</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.feesGridSortOption, residentsGridSortOrder === 'renter' && styles.feesGridSortOptionActive]}
+                    onPress={() => setResidentsGridSortOrder('renter')}
+                  >
+                    <Ionicons name="home" size={16} color={residentsGridSortOrder === 'renter' ? '#ffffff' : '#3b82f6'} />
+                    <Text style={[styles.feesGridSortOptionText, residentsGridSortOrder === 'renter' && styles.feesGridSortOptionTextActive]}>Renter</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.feesGridSortOption, residentsGridSortOrder === 'developer' && styles.feesGridSortOptionActive]}
+                    onPress={() => setResidentsGridSortOrder('developer')}
+                  >
+                    <Ionicons name="code-slash" size={16} color={residentsGridSortOrder === 'developer' ? '#ffffff' : '#2563eb'} />
+                    <Text style={[styles.feesGridSortOptionText, residentsGridSortOrder === 'developer' && styles.feesGridSortOptionTextActive]}>Developer</Text>
+                  </TouchableOpacity>
+                </View>
+                {sortedResidents.length === 0 ? (
+                  <View style={styles.emptyState}>
+                    <Ionicons name="people" size={48} color="#9ca3af" />
+                    <Text style={styles.emptyStateText}>No residents match this filter</Text>
+                  </View>
+                ) : (
               <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-                {residents.map((item: any) => {
-                  // Determine primary role
+                {sortedResidents.map((item: any) => {
+                  // Determine primary role (Developer replaces Resident for devs)
                   let primaryRole = 'Resident';
                   let roleIcon = 'person';
                   let roleColor = '#6b7280';
@@ -1732,6 +1979,10 @@ const AdminScreen = () => {
                     primaryRole = 'Blocked';
                     roleIcon = 'ban';
                     roleColor = '#ef4444';
+                  } else if (item.isDev) {
+                    primaryRole = 'Developer';
+                    roleIcon = 'code-slash';
+                    roleColor = '#2563eb';
                   } else if (item.isBoardMember) {
                     primaryRole = 'Board Member';
                     roleIcon = 'shield';
@@ -1766,7 +2017,7 @@ const AdminScreen = () => {
                           {/* Main Info Row - Avatar Left, Details Right */}
                           <View style={styles.residentGridMainInfo}>
                             <ProfileImage 
-                              source={item.profileImageUrl} 
+                              source={item.profileImage} 
                               size={40}
                               initials={`${item.firstName.charAt(0)}${item.lastName.charAt(0)}`}
                               style={{ marginRight: 6 }}
@@ -1785,8 +2036,8 @@ const AdminScreen = () => {
                                       {primaryRole}
                                     </Text>
                                   </View>
-                                  {/* Additional indicators for board members */}
-                                  {item.isBoardMember && item.isResident && (
+                                  {/* Additional indicators for board members (not for devs - dev shows Developer only) */}
+                                  {!item.isDev && item.isBoardMember && item.isResident && (
                                     <View style={[styles.residentGridRoleBadge, { backgroundColor: '#10b98120' }]}>
                                       <Ionicons name="people" size={Platform.OS === 'web' ? 10 : 11} color="#10b981" />
                                       <Text style={[styles.residentGridRoleText, { color: '#10b981' }]} numberOfLines={1}>
@@ -1794,7 +2045,7 @@ const AdminScreen = () => {
                                       </Text>
                                     </View>
                                   )}
-                                  {item.isBoardMember && item.isRenter && (
+                                  {!item.isDev && item.isBoardMember && item.isRenter && (
                                     <View style={[styles.residentGridRoleBadge, { backgroundColor: '#3b82f620' }]}>
                                       <Ionicons name="home" size={Platform.OS === 'web' ? 10 : 11} color="#3b82f6" />
                                       <Text style={[styles.residentGridRoleText, { color: '#3b82f6' }]} numberOfLines={1}>
@@ -1853,6 +2104,8 @@ const AdminScreen = () => {
                   );
                 })}
               </View>
+                )}
+              </>
             )}
           </View>
         );
@@ -2280,7 +2533,7 @@ const AdminScreen = () => {
                             {/* Main Info Row - Icon Left, Details Right */}
                             <View style={styles.residentGridMainInfo}>
                               <ProfileImage 
-                                source={item.authorProfileImageUrl} 
+                                source={item.authorProfileImage} 
                                 size={48}
                                 style={{ marginRight: 12 }}
                               />
@@ -2355,7 +2608,7 @@ const AdminScreen = () => {
                           {/* Main Info Row - Icon Left, Details Right */}
                           <View style={styles.residentGridMainInfo}>
                             <ProfileImage 
-                              source={item.authorProfileImageUrl} 
+                              source={item.authorProfileImage} 
                               size={48}
                               style={{ marginRight: 12 }}
                             />
@@ -2409,6 +2662,7 @@ const AdminScreen = () => {
                     <Pressable
                       style={({ pressed }) => [
                         styles.adminFeeButton,
+                        styles.createPollButton,
                         { backgroundColor: '#3b82f6' },
                         pressed && styles.adminFeeButtonPressed
                       ]}
@@ -2419,7 +2673,7 @@ const AdminScreen = () => {
                       hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     >
                       <Ionicons name="add" size={16} color="#ffffff" />
-                      <Text style={styles.adminFeeButtonText}>Create Poll</Text>
+                      <Text style={[styles.adminFeeButtonText, styles.createPollButtonText]}>Create Poll</Text>
                     </Pressable>
                   </Animated.View>
                 </View>
@@ -2566,11 +2820,14 @@ const AdminScreen = () => {
                   <Text style={styles.emptyStateText}>No pet registrations found</Text>
                 </View>
               ) : (
-                <View style={styles.petsGridContainer}>
-                  {pets.map((item: any) => (
+                <View style={[styles.petsGridContainer, (isMobileDevice || screenWidth < 640) && styles.petsGridContainerSingleColumn]}>
+                  {pets.map((item: any) => {
+                    const petsIsSingleColumn = isMobileDevice || screenWidth < 640;
+                    return (
                     <View key={item._id} style={[
                       styles.petCardWrapper,
-                      Platform.OS === 'web' && screenWidth >= 1024 && styles.petCardWrapperDesktop
+                      Platform.OS === 'web' && screenWidth >= 1024 && !petsIsSingleColumn && styles.petCardWrapperDesktop,
+                      petsIsSingleColumn && styles.petCardWrapperSingleColumn
                     ]}>
                       <Animated.View 
                         style={[
@@ -2588,8 +2845,8 @@ const AdminScreen = () => {
                       >
                         <View style={styles.petGridCardContent}>
                           {/* Pet Image - Centered */}
-                          <View style={styles.petCardImageContainer}>
-                            <View style={styles.petImageAvatar}>
+                          <View style={[styles.petCardImageContainer, petsIsSingleColumn && styles.petCardImageContainerSingleColumn]}>
+                            <View style={[styles.petImageAvatar, petsIsSingleColumn && styles.petImageAvatarSingleColumn]}>
                               <PetImage storageId={item.image} />
                             </View>
                           </View>
@@ -2630,7 +2887,7 @@ const AdminScreen = () => {
                         </View>
                       </Animated.View>
                     </View>
-                  ))}
+                  );})}
                 </View>
               )
             )}
@@ -2665,7 +2922,7 @@ const AdminScreen = () => {
                             {/* Main Info Row - Icon Left, Details Right */}
                             <View style={styles.residentGridMainInfo}>
                               <ProfileImage 
-                                source={item.authorProfileImageUrl} 
+                                source={item.authorProfileImage} 
                                 size={48}
                                 style={{ marginRight: 12 }}
                               />
@@ -2721,40 +2978,11 @@ const AdminScreen = () => {
               <Text style={styles.sectionTitle}>Fees Management</Text>
             </View>
             
-            {/* Fees Sub-tabs */}
-            <ScrollView 
-              horizontal 
-              showsHorizontalScrollIndicator={false}
-              style={styles.feesSubTabsContainer}
-              contentContainerStyle={styles.feesSubTabsContent}
-            >
-              <TouchableOpacity
-                style={[styles.feesSubTab, feesSubTab === 'dues' && styles.activeFeesSubTabStyle]}
-                onPress={() => setFeesSubTab('dues')}
-              >
-                <Ionicons name="card" size={18} color={feesSubTab === 'dues' ? '#ec4899' : '#6b7280'} />
-                <Text style={[styles.feesSubTabText, feesSubTab === 'dues' && styles.activeFeesSubTabTextStyle]}>
-                  Dues Management
-                </Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity
-                style={[styles.feesSubTab, feesSubTab === 'residents' && styles.activeFeesSubTabStyle]}
-                onPress={() => setFeesSubTab('residents')}
-              >
-                <Ionicons name="people" size={18} color={feesSubTab === 'residents' ? '#ec4899' : '#6b7280'} />
-                <Text style={[styles.feesSubTabText, feesSubTab === 'residents' && styles.activeFeesSubTabTextStyle]}>
-                  Residents
-                </Text>
-              </TouchableOpacity>
-            </ScrollView>
-            
-            {feesSubTab === 'dues' && (
-              <View style={[styles.feesSubTabContent, Platform.OS !== 'web' && styles.feesSubTabContentMobile]}>
-                <View style={styles.adminFeeButtonsContainer}>
-                <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
+            <View style={[styles.feesSubTabContent, Platform.OS !== 'web' && styles.feesSubTabContentMobile]}>
+              <View style={[styles.adminFeeButtonsContainer, { gap: duesButtonLayout.gap }]}>
+                <Animated.View style={[{ transform: [{ scale: buttonScale }] }, duesButtonWrapperStyle] as any}>
                   <TouchableOpacity
-                    style={styles.adminFeeButton}
+                    style={[styles.adminFeeButton, { paddingHorizontal: duesButtonLayout.paddingH, paddingVertical: duesButtonLayout.paddingV }]}
                     onPress={() => {
                       animateButtonPress();
                       setShowYearFeeModal(true);
@@ -2762,12 +2990,12 @@ const AdminScreen = () => {
                     }}
                   >
                     <Ionicons name="calendar" size={16} color="#ffffff" />
-                    <Text style={styles.adminFeeButtonText}>Add Year Fees</Text>
+                    <Text style={[styles.adminFeeButtonText, { fontSize: duesButtonLayout.fontSize }]}>Add Year Fees</Text>
                   </TouchableOpacity>
                 </Animated.View>
-                <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
+                <Animated.View style={[{ transform: [{ scale: buttonScale }] }, duesButtonWrapperStyle] as any}>
                   <TouchableOpacity
-                    style={[styles.adminFeeButton, styles.addFineButton]}
+                    style={[styles.adminFeeButton, styles.addFineButton, { paddingHorizontal: duesButtonLayout.paddingH, paddingVertical: duesButtonLayout.paddingV }]}
                     onPress={() => {
                       animateButtonPress();
                       setShowAddFineModal(true);
@@ -2775,12 +3003,12 @@ const AdminScreen = () => {
                     }}
                   >
                     <Ionicons name="warning" size={16} color="#ffffff" />
-                    <Text style={styles.adminFeeButtonText}>Add Fine</Text>
+                    <Text style={[styles.adminFeeButtonText, { fontSize: duesButtonLayout.fontSize }]}>Add Fine</Text>
                   </TouchableOpacity>
                 </Animated.View>
-                <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
+                <Animated.View style={[{ transform: [{ scale: buttonScale }] }, duesButtonWrapperStyle] as any}>
                   <TouchableOpacity
-                    style={[styles.adminFeeButton, { backgroundColor: '#059669' }]}
+                    style={[styles.adminFeeButton, { backgroundColor: '#059669', paddingHorizontal: duesButtonLayout.paddingH, paddingVertical: duesButtonLayout.paddingV }]}
                     onPress={() => {
                       animateButtonPress();
                       setShowRecordPaymentModal(true);
@@ -2788,7 +3016,55 @@ const AdminScreen = () => {
                     }}
                   >
                     <Ionicons name="cash" size={16} color="#ffffff" />
-                    <Text style={styles.adminFeeButtonText}>Record Payment</Text>
+                    <Text style={[styles.adminFeeButtonText, { fontSize: duesButtonLayout.fontSize }]}>Record Payment</Text>
+                  </TouchableOpacity>
+                </Animated.View>
+                <Animated.View style={[{ transform: [{ scale: buttonScale }] }, duesButtonWrapperStyle] as any}>
+                  <TouchableOpacity
+                    style={[styles.adminFeeButton, { backgroundColor: '#3b82f6', paddingHorizontal: duesButtonLayout.paddingH, paddingVertical: duesButtonLayout.paddingV }]}
+                    onPress={() => {
+                      animateButtonPress();
+                      setTransactionsLimit(50);
+                      setShowTransactionsModal(true);
+                      animateIn('transactions');
+                    }}
+                  >
+                    <Ionicons name="receipt-outline" size={16} color="#ffffff" />
+                    <Text style={[styles.adminFeeButtonText, { fontSize: duesButtonLayout.fontSize }]}>View Transactions</Text>
+                  </TouchableOpacity>
+                </Animated.View>
+                {unpaidAnnualFees.length > 0 && (
+                  <Animated.View style={[{ transform: [{ scale: buttonScale }] }, duesButtonWrapperStyle] as any}>
+                    <TouchableOpacity
+                      style={[styles.adminFeeButton, { backgroundColor: '#8b5cf6', paddingHorizontal: duesButtonLayout.paddingH, paddingVertical: duesButtonLayout.paddingV }]}
+                      onPress={() => {
+                        animateButtonPress();
+                        const currentYear = new Date().getFullYear();
+                        const currentAmount = unpaidAnnualFees[0]?.amount || 0;
+                        setUpdateDuesForm({
+                          selectedFeeId: '',
+                          newAmount: currentAmount.toString(),
+                        });
+                        setShowUpdateDuesModal(true);
+                        animateIn('updateDues');
+                      }}
+                    >
+                      <Ionicons name="create-outline" size={16} color="#ffffff" />
+                      <Text style={[styles.adminFeeButtonText, { fontSize: duesButtonLayout.fontSize }]}>Update All Dues</Text>
+                    </TouchableOpacity>
+                  </Animated.View>
+                )}
+                <Animated.View style={[{ transform: [{ scale: buttonScale }] }, duesButtonWrapperStyle] as any}>
+                  <TouchableOpacity
+                    style={[styles.adminFeeButton, { backgroundColor: '#f59e0b', paddingHorizontal: duesButtonLayout.paddingH, paddingVertical: duesButtonLayout.paddingV }]}
+                    onPress={() => {
+                      animateButtonPress();
+                      setShowPastDueModal(true);
+                      animateIn('pastDue');
+                    }}
+                  >
+                    <Ionicons name="add-circle" size={16} color="#ffffff" />
+                    <Text style={[styles.adminFeeButtonText, { fontSize: duesButtonLayout.fontSize }]}>Add Past Due</Text>
                   </TouchableOpacity>
                 </Animated.View>
               </View>
@@ -2904,11 +3180,11 @@ const AdminScreen = () => {
                         )}
                         
                         {/* Receipt Image Button */}
-                        {payment.receiptImageUrl && (
+                        {payment.receiptImage && (
                           <TouchableOpacity
                             style={styles.viewReceiptButton}
                             onPress={() => {
-                              setSelectedReceiptImage(payment.receiptImageUrl);
+                              setSelectedReceiptImage(payment.receiptImage);
                               setShowReceiptViewer(true);
                             }}
                           >
@@ -2923,6 +3199,7 @@ const AdminScreen = () => {
                             onPress={() => {
                               setSelectedPaymentForVerification(payment);
                               setVerificationNotes('');
+                              setAdjustedPaymentAmount(payment.amount.toString());
                               setShowVerificationModal(true);
                             }}
                           >
@@ -2934,6 +3211,7 @@ const AdminScreen = () => {
                             onPress={() => {
                               setSelectedPaymentForVerification(payment);
                               setVerificationNotes('');
+                              setAdjustedPaymentAmount(payment.amount.toString());
                               setShowVerificationModal(true);
                             }}
                           >
@@ -2950,7 +3228,40 @@ const AdminScreen = () => {
             
             {/* Fees and Fines Status Grid */}
             <View style={isMobileDevice || screenWidth < 768 ? styles.feesGridContainerMobile : {}}>
-              {homeownersGroupedByAddress.length === 0 ? (
+              {sortedHomeownersGroupedByAddress.length > 0 && (
+                <View style={styles.feesGridSortRow}>
+                  <Text style={styles.feesGridSortLabel}>Sort:</Text>
+                  <TouchableOpacity
+                    style={[styles.feesGridSortOption, feesGridSortOrder === 'alphabet' && styles.feesGridSortOptionActive]}
+                    onPress={() => setFeesGridSortOrder('alphabet')}
+                  >
+                    <Ionicons name="reorder-three" size={16} color={feesGridSortOrder === 'alphabet' ? '#ffffff' : '#6b7280'} />
+                    <Text style={[styles.feesGridSortOptionText, feesGridSortOrder === 'alphabet' && styles.feesGridSortOptionTextActive]}>Alphabet</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.feesGridSortOption, feesGridSortOrder === 'paid' && styles.feesGridSortOptionActive]}
+                    onPress={() => setFeesGridSortOrder('paid')}
+                  >
+                    <Ionicons name="checkmark-circle" size={16} color={feesGridSortOrder === 'paid' ? '#ffffff' : '#10b981'} />
+                    <Text style={[styles.feesGridSortOptionText, feesGridSortOrder === 'paid' && styles.feesGridSortOptionTextActive]}>Paid</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.feesGridSortOption, feesGridSortOrder === 'pending' && styles.feesGridSortOptionActive]}
+                    onPress={() => setFeesGridSortOrder('pending')}
+                  >
+                    <Ionicons name="time" size={16} color={feesGridSortOrder === 'pending' ? '#ffffff' : '#f59e0b'} />
+                    <Text style={[styles.feesGridSortOptionText, feesGridSortOrder === 'pending' && styles.feesGridSortOptionTextActive]}>Pending</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.feesGridSortOption, feesGridSortOrder === 'clear' && styles.feesGridSortOptionActive]}
+                    onPress={() => setFeesGridSortOrder('clear')}
+                  >
+                    <Ionicons name="card" size={16} color={feesGridSortOrder === 'clear' ? '#ffffff' : '#6b7280'} />
+                    <Text style={[styles.feesGridSortOptionText, feesGridSortOrder === 'clear' && styles.feesGridSortOptionTextActive]}>Clear</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              {sortedHomeownersGroupedByAddress.length === 0 ? (
                 <View style={styles.emptyState}>
                   <Ionicons name="card" size={48} color="#9ca3af" />
                   <Text style={styles.emptyStateText}>No homeowners found</Text>
@@ -2960,8 +3271,8 @@ const AdminScreen = () => {
                 </View>
               ) : (
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-                  {homeownersGroupedByAddress.map((addressGroup: any) => {
-                    const { homeowners, fees: homeownerFees, fines: homeownerFines, latestPayment, allFeesPaid, totalFeeAmount } = addressGroup;
+                  {sortedHomeownersGroupedByAddress.map((addressGroup: any) => {
+                    const { homeowners, fees: homeownerFees, fines: homeownerFines, latestPayment, allFeesPaid, totalFeeAmount, totalPaidAmount, isPartiallyPaid, paymentsByFineId } = addressGroup;
                     const paymentMethod = latestPayment?.paymentMethod;
                     // Responsive breakpoints: sm (< 640px), md (640-1023px), lg (1024-1279px), xl (>= 1280px)
                     const isSingleColumn = isMobileDevice || screenWidth < 640;
@@ -3047,7 +3358,7 @@ const AdminScreen = () => {
                           {/* Multiple profile images for households with 2+ residents */}
                           {homeowners.length > 1 ? (
                             <View style={styles.multipleProfileImagesContainer}>
-                              {profileImagesToShow.map((profile, index) => (
+                              {profileImagesToShow.map((profile: any, index: number) => (
                                 <ProfileImage
                                   key={index}
                                   source={profile.imageUrl}
@@ -3131,10 +3442,24 @@ const AdminScreen = () => {
                             ]}>
                               {homeownerFees.length === 1 ? 'Fee' : `Fees (${homeownerFees.length})`}
                             </Text>
+                            {/* Show partial payment amount if applicable */}
+                            {isPartiallyPaid && (
+                              <Text style={[
+                                styles.gridPartialPaymentText,
+                                isSingleColumn && {
+                                  fontSize: 11,
+                                  marginBottom: 4,
+                                }
+                              ]}>
+                                Paid: ${totalPaidAmount.toFixed(2)} of ${totalFeeAmount.toFixed(2)}
+                              </Text>
+                            )}
                             <View style={[
                               styles.gridStatusBadge,
                               allFeesPaid
                                 ? styles.gridPaidBadge 
+                                : isPartiallyPaid
+                                ? styles.gridPartialPaidBadge
                                 : styles.gridPendingBadge,
                               isSingleColumn && {
                                 paddingHorizontal: 12,
@@ -3142,25 +3467,25 @@ const AdminScreen = () => {
                               }
                             ]}>
                               <Ionicons 
-                                name={allFeesPaid ? "checkmark-circle" : "time"} 
+                                name={allFeesPaid ? "checkmark-circle" : isPartiallyPaid ? "hourglass" : "time"} 
                                 size={isSingleColumn ? 16 : 14} 
-                                color={allFeesPaid ? "#10b981" : "#f59e0b"} 
+                                color={allFeesPaid ? "#10b981" : isPartiallyPaid ? "#f59e0b" : "#f59e0b"} 
                               />
                               <Text style={[
                                 styles.gridStatusText,
                                 { 
-                                  color: allFeesPaid ? "#10b981" : "#f59e0b" 
+                                  color: allFeesPaid ? "#10b981" : isPartiallyPaid ? "#f59e0b" : "#f59e0b" 
                                 },
                                 isSingleColumn && {
                                   fontSize: 12,
                                 }
                               ]}>
-                                {allFeesPaid ? 'Paid' : 'Pending'}
+                                {allFeesPaid ? 'Paid' : isPartiallyPaid ? 'Partially Paid' : 'Pending'}
                               </Text>
                             </View>
                             
-                            {/* Show payment method if paid */}
-                            {allFeesPaid && paymentMethod && (
+                            {/* Show payment method if paid or partially paid */}
+                            {(allFeesPaid || isPartiallyPaid) && paymentMethod && (
                               <View style={[
                                 styles.paymentMethodBadge,
                                 isSingleColumn && { marginTop: 6 }
@@ -3229,40 +3554,60 @@ const AdminScreen = () => {
                               <Text style={styles.gridFinesLabel}>Fines ({homeownerFines.length})</Text>
                             </View>
                             <View style={styles.gridFinesList}>
-                              {homeownerFines.map((fine: any, index: number) => (
-                                <View key={fine._id} style={[
-                                  styles.gridFineItem,
-                                  index === homeownerFines.length - 1 && styles.gridFineItemLast
-                                ]}>
-                                  <View style={styles.gridFineLeft}>
-                                    <Text style={styles.gridFineTitle} numberOfLines={2}>
-                                      {fine.violation}
-                                    </Text>
-                                    <Text style={styles.gridFineDate} numberOfLines={1}>
-                                      Issued: {fine.dateIssued}
-                                    </Text>
-                                  </View>
-                                  <View style={styles.gridFineRight}>
-                                    <Text style={styles.gridFineAmount}>${fine.amount}</Text>
-                                    <View style={[
-                                      styles.gridFineStatusBadge,
-                                      fine.status === 'Paid' ? styles.gridFineStatusPaid : styles.gridFineStatusPending
-                                    ]}>
-                                      <Ionicons 
-                                        name={fine.status === 'Paid' ? "checkmark-circle" : "warning"} 
-                                        size={10} 
-                                        color={fine.status === 'Paid' ? "#10b981" : "#dc2626"} 
-                                      />
-                                      <Text style={[
-                                        styles.gridFineStatusText,
-                                        { color: fine.status === 'Paid' ? "#10b981" : "#dc2626" }
-                                      ]}>
-                                        {fine.status || 'Pending'}
+                              {homeownerFines.map((fine: any, index: number) => {
+                                const payment = paymentsByFineId.get(fine._id);
+                                const isPartialPayment = payment &&
+                                                         payment.verificationStatus === 'Verified' &&
+                                                         payment.amount < fine.amount;
+                                const displayStatus = isPartialPayment ? 'Partially Paid' :
+                                                      fine.status === 'Paid' ? 'Paid' : 'Pending';
+                                const statusColor = isPartialPayment ? '#f59e0b' :
+                                                   fine.status === 'Paid' ? '#10b981' : '#dc2626';
+                                const statusIcon = isPartialPayment ? 'hourglass' :
+                                                  fine.status === 'Paid' ? 'checkmark-circle' : 'warning';
+                                
+                                return (
+                                  <View key={fine._id} style={[
+                                    styles.gridFineItem,
+                                    index === homeownerFines.length - 1 && styles.gridFineItemLast
+                                  ]}>
+                                    <View style={styles.gridFineLeft}>
+                                      <Text style={styles.gridFineTitle} numberOfLines={2}>
+                                        {fine.violation}
+                                      </Text>
+                                      <Text style={styles.gridFineDate} numberOfLines={1}>
+                                        Issued: {fine.dateIssued}
                                       </Text>
                                     </View>
+                                    <View style={styles.gridFineRight}>
+                                      <Text style={styles.gridFineAmount}>${fine.amount}</Text>
+                                      {isPartialPayment && (
+                                        <Text style={styles.gridFinePartialPaymentText}>
+                                          Paid: ${payment.amount.toFixed(2)} of ${fine.amount.toFixed(2)}
+                                        </Text>
+                                      )}
+                                      <View style={[
+                                        styles.gridFineStatusBadge,
+                                        fine.status === 'Paid' ? styles.gridFineStatusPaid :
+                                        isPartialPayment ? styles.gridFineStatusPartial :
+                                        styles.gridFineStatusPending
+                                      ]}>
+                                        <Ionicons 
+                                          name={statusIcon as any} 
+                                          size={10} 
+                                          color={statusColor} 
+                                        />
+                                        <Text style={[
+                                          styles.gridFineStatusText,
+                                          { color: statusColor }
+                                        ]}>
+                                          {displayStatus}
+                                        </Text>
+                                      </View>
+                                    </View>
                                   </View>
-                                </View>
-                              ))}
+                                );
+                              })}
                             </View>
                           </View>
                         )}
@@ -3275,340 +3620,6 @@ const AdminScreen = () => {
               )}
             </View>
               </View>
-            )}
-            
-            {feesSubTab === 'residents' && (
-              <View style={[styles.feesSubTabContent, Platform.OS !== 'web' && styles.feesSubTabContentMobile]}>
-                {/* Update Current Dues Section - First */}
-                <View style={[
-                  styles.section,
-                  isMobileDevice || screenWidth < 768 ? styles.residentsSectionMobile : styles.residentsSectionDesktop
-                ]}>
-                  {/* Section Header with Button */}
-                  <View style={styles.residentsSectionHeader}>
-                    <View style={styles.residentsSectionHeaderLeft}>
-                      <Ionicons name="card-outline" size={20} color="#ec4899" />
-                      <View style={styles.residentsSectionHeaderTextContainer}>
-                        <View style={styles.residentsSectionTitleRow}>
-                          <Text style={styles.residentsSectionTitle}>Update Current Dues</Text>
-                        </View>
-                        <Text style={styles.residentsSectionSubtitle}>
-                          Update annual dues amount for all homeowners
-                          {unpaidAnnualFees.length > 0 && (
-                            <Text style={styles.residentsSectionSubtitleAmount}>
-                              {' • Current: $'}{unpaidAnnualFees[0]?.amount.toFixed(2) || '0.00'}
-                            </Text>
-                          )}
-                        </Text>
-                      </View>
-                    </View>
-                    {unpaidAnnualFees.length > 0 && (
-                      <TouchableOpacity
-                        style={styles.updateAllDuesHeaderButton}
-                        onPress={() => {
-                          const currentYear = new Date().getFullYear();
-                          const currentAmount = unpaidAnnualFees[0]?.amount || 0;
-                          setUpdateDuesForm({
-                            selectedFeeId: '',
-                            newAmount: currentAmount.toString(),
-                          });
-                          setShowUpdateDuesModal(true);
-                          animateIn('updateDues');
-                        }}
-                        activeOpacity={0.8}
-                      >
-                        <Ionicons name="create-outline" size={18} color="#ffffff" />
-                        <Text style={styles.updateAllDuesHeaderButtonText}>Update All Dues</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                  
-                  {/* Section Content - Empty State Only */}
-                  {unpaidAnnualFees.length === 0 && (
-                    <View style={styles.residentsAccordionSectionContent}>
-                      <View style={styles.residentsEmptyState}>
-                        <Ionicons name="checkmark-circle" size={64} color="#10b981" />
-                        <Text style={styles.residentsEmptyStateTitle}>All dues are up to date</Text>
-                        <Text style={styles.residentsEmptyStateSubtitle}>
-                          All residents have paid their current dues
-                        </Text>
-                      </View>
-                    </View>
-                  )}
-                </View>
-
-                {/* Residents Management Section - Second */}
-                <View style={[
-                  styles.section,
-                  isMobileDevice || screenWidth < 768 ? styles.residentsSectionMobile : styles.residentsSectionDesktop
-                ]}>
-                  {/* Section Header with Button */}
-                  <View style={styles.residentsSectionHeader}>
-                    <View style={styles.residentsSectionHeaderLeft}>
-                      <Ionicons name="people" size={20} color="#ec4899" />
-                      <View style={styles.residentsSectionHeaderTextContainer}>
-                        <View style={styles.residentsSectionTitleRow}>
-                          <Text style={styles.residentsSectionTitle}>Residents Management</Text>
-                        </View>
-                        <Text style={styles.residentsSectionSubtitle}>
-                          Add past due amounts to current residents
-                        </Text>
-                      </View>
-                    </View>
-                    <TouchableOpacity
-                      style={styles.addPastDueHeaderButtonIntegrated}
-                      onPress={() => {
-                        animateButtonPress();
-                        setShowPastDueModal(true);
-                        animateIn('pastDue');
-                      }}
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons name="add-circle" size={18} color="#ffffff" />
-                      <Text style={styles.addPastDueHeaderButtonTextIntegrated}>Add Past Due</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-                
-                {/* All Residents Section - Third */}
-                <View style={[
-                  styles.section,
-                  isMobileDevice || screenWidth < 768 ? styles.residentsSectionMobile : styles.residentsSectionDesktop
-                ]}>
-                  {/* Accordion Header */}
-                  <TouchableOpacity
-                    style={styles.residentsSectionHeader}
-                    onPress={() => setIsResidentsSectionExpanded(!isResidentsSectionExpanded)}
-                    activeOpacity={0.7}
-                  >
-                    <View style={styles.residentsSectionHeaderLeft}>
-                      <Ionicons name="people-outline" size={20} color="#ec4899" />
-                      <View style={styles.residentsSectionHeaderTextContainer}>
-                        <View style={styles.residentsSectionTitleRow}>
-                          <Text style={styles.residentsSectionTitle}>All Residents</Text>
-                          <View style={styles.residentsSectionBadge}>
-                            <Text style={styles.residentsSectionBadgeText}>{homeownersGroupedByAddressForTable.length}</Text>
-                          </View>
-                        </View>
-                        <Text style={styles.residentsSectionSubtitle}>
-                          View and manage all homeowner accounts
-                        </Text>
-                      </View>
-                    </View>
-                    <Ionicons 
-                      name="chevron-down" 
-                      size={20} 
-                      color="#6b7280"
-                      style={{
-                        transform: [{ rotate: isResidentsSectionExpanded ? '180deg' : '0deg' }]
-                      }}
-                    />
-                  </TouchableOpacity>
-                  
-                  {/* Accordion Content */}
-                  {isResidentsSectionExpanded && (
-                    <View style={styles.residentsAccordionSectionContent}>
-                      {homeownersGroupedByAddressForTable.length > 0 ? (
-                        <ScrollView 
-                          horizontal 
-                          showsHorizontalScrollIndicator={false}
-                          style={styles.residentsTableScrollView}
-                          contentContainerStyle={[
-                            styles.residentsTableScrollContent,
-                            (isMobileDevice || screenWidth < 768) && { minWidth: 800 }
-                          ]}
-                        >
-                          <View style={[
-                            styles.residentsTableContainer,
-                            (isMobileDevice || screenWidth < 768) && { minWidth: 800 }
-                          ]}>
-                          {/* Table Header */}
-                          <View style={styles.residentsTableHeader}>
-                            <View style={[styles.residentsTableHeaderCell, styles.residentsTableCellName]}>
-                              <Text style={styles.residentsTableHeaderText}>Resident</Text>
-                            </View>
-                            <View style={[styles.residentsTableHeaderCell, styles.residentsTableCellAddress]}>
-                              <Text style={styles.residentsTableHeaderText}>Address</Text>
-                            </View>
-                            <View style={[styles.residentsTableHeaderCell, styles.residentsTableCellStatus]}>
-                              <Text style={styles.residentsTableHeaderText}>Status</Text>
-                            </View>
-                            <View style={[styles.residentsTableHeaderCell, styles.residentsTableCellPaymentMethod]}>
-                              <Text style={styles.residentsTableHeaderText}>Payment Method</Text>
-                            </View>
-                            <View style={[styles.residentsTableHeaderCell, styles.residentsTableCellAmount]}>
-                              <Text style={styles.residentsTableHeaderText}>Amount</Text>
-                            </View>
-                            <View style={[styles.residentsTableHeaderCell, styles.residentsTableCellAction]}>
-                              <Text style={styles.residentsTableHeaderText}>Action</Text>
-                            </View>
-                          </View>
-
-                          {/* Table Rows */}
-                          {homeownersGroupedByAddressForTable.map((addressGroup: any, index: number) => {
-                            const { homeowners, fees: allFees, latestPayment, totalAmount, unpaidCount, allFeesPaid } = addressGroup;
-                            const hasOutstanding = unpaidCount > 0;
-                            const residentPaymentMethod = latestPayment?.paymentMethod;
-                            
-                            // Create display name for multiple residents
-                            const residentsDisplay = homeowners.length === 1
-                              ? `${homeowners[0].firstName} ${homeowners[0].lastName}`
-                              : homeowners.length === 2
-                              ? homeowners.map((h: any) => `${h.firstName} ${h.lastName}`).join(' & ')
-                              : homeowners.map((h: any, idx: number) => {
-                                  if (idx === homeowners.length - 1) {
-                                    return `& ${h.firstName} ${h.lastName}`;
-                                  }
-                                  return `${h.firstName} ${h.lastName}`;
-                                }).join(', ');
-                            
-                            // Get profile images for display (limit to 2 to keep costs low)
-                            const profileImagesToShow = homeowners.slice(0, 2).map((h: any) => ({
-                              imageUrl: h.profileImage, // Use profileImage (storage ID) directly
-                              initials: `${h.firstName.charAt(0)}${h.lastName.charAt(0)}`
-                            }));
-                            
-                            return (
-                              <View 
-                                key={addressGroup.addressKey}
-                                style={[
-                                  styles.residentsTableRow,
-                                  index % 2 === 0 && styles.residentsTableRowEven
-                                ]}
-                              >
-                                {/* Name Column */}
-                                <View style={[styles.residentsTableCell, styles.residentsTableCellName]}>
-                                  <View style={styles.residentsTableNameContent}>
-                                    {/* Multiple profile images for households with 2+ residents */}
-                                    {homeowners.length > 1 ? (
-                                      <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 8 }}>
-                                        {profileImagesToShow.map((profile, imgIndex) => (
-                                          <ProfileImage
-                                            key={imgIndex}
-                                            source={profile.imageUrl}
-                                            size={32}
-                                            initials={profile.initials}
-                                            style={[
-                                              { borderWidth: 2, borderColor: '#ffffff' },
-                                              imgIndex > 0 && { marginLeft: -8 }
-                                            ]}
-                                          />
-                                        ))}
-                                      </View>
-                                    ) : (
-                                      <ProfileImage 
-                                        source={profileImagesToShow[0]?.imageUrl} 
-                                        size={36}
-                                        initials={profileImagesToShow[0]?.initials}
-                                        style={styles.residentsTableProfileImage}
-                                      />
-                                    )}
-                                    <View style={styles.residentsTableNameText}>
-                                      <Text style={styles.residentsTableName} numberOfLines={homeowners.length === 1 ? 1 : 2}>
-                                        {residentsDisplay}
-                                      </Text>
-                                      {homeowners.length > 1 && (
-                                        <Text style={[styles.residentsTableAddress, { fontSize: 11, marginTop: 2 }]} numberOfLines={1}>
-                                          {homeowners.length} Residents
-                                        </Text>
-                                      )}
-                                    </View>
-                                  </View>
-                                </View>
-
-                                {/* Address Column */}
-                                <View style={[styles.residentsTableCell, styles.residentsTableCellAddress]}>
-                                  <Text style={styles.residentsTableAddress} numberOfLines={1}>
-                                    {addressGroup.address}{addressGroup.unitNumber ? ` Unit ${addressGroup.unitNumber}` : ''}
-                                  </Text>
-                                </View>
-
-                                {/* Status Column */}
-                                <View style={[styles.residentsTableCell, styles.residentsTableCellStatus]}>
-                                  {hasOutstanding ? (
-                                    <View style={styles.residentsTableStatusContent}>
-                                      <Ionicons name="alert-circle" size={16} color="#6b7280" />
-                                      <Text style={styles.residentsTableStatusText}>
-                                        {unpaidCount} unpaid
-                                      </Text>
-                                    </View>
-                                  ) : (
-                                    <View style={styles.residentsTableStatusContent}>
-                                      <Ionicons name="checkmark-circle" size={16} color="#10b981" />
-                                      <Text style={[styles.residentsTableStatusText, { color: '#10b981' }]}>
-                                        Paid
-                                      </Text>
-                                    </View>
-                                  )}
-                                </View>
-
-                                {/* Payment Method Column */}
-                                <View style={[styles.residentsTableCell, styles.residentsTableCellPaymentMethod]}>
-                                  {!hasOutstanding && residentPaymentMethod ? (
-                                    <View style={styles.residentsTablePaymentMethodContent}>
-                                      <Ionicons 
-                                        name={residentPaymentMethod === 'Venmo' ? 'logo-venmo' : residentPaymentMethod === 'Check' ? 'document-text' : 'cash'} 
-                                        size={14} 
-                                        color={residentPaymentMethod === 'Venmo' ? '#008CFF' : residentPaymentMethod === 'Check' ? '#6366f1' : '#10b981'} 
-                                      />
-                                      <Text style={[
-                                        styles.residentsTablePaymentMethodText,
-                                        { color: residentPaymentMethod === 'Venmo' ? '#008CFF' : residentPaymentMethod === 'Check' ? '#6366f1' : '#10b981' }
-                                      ]}>
-                                        {residentPaymentMethod}
-                                      </Text>
-                                    </View>
-                                  ) : (
-                                    <Text style={styles.residentsTablePaymentMethodText}>—</Text>
-                                  )}
-                                </View>
-
-                                {/* Amount Column */}
-                                <View style={[styles.residentsTableCell, styles.residentsTableCellAmount]}>
-                                  <Text style={styles.residentsTableAmount}>
-                                    ${totalAmount.toFixed(2)}
-                                  </Text>
-                                </View>
-
-                                {/* Action Column */}
-                                <View style={[styles.residentsTableCell, styles.residentsTableCellAction]}>
-                                  <TouchableOpacity
-                                    style={styles.residentsTableActionButton}
-                                    onPress={() => {
-                                      // Use the first homeowner's ID for past due form (for backward compatibility)
-                                      setPastDueForm({
-                                        selectedResidentId: homeowners[0]._id,
-                                        amount: '',
-                                        description: '',
-                                        dueDate: new Date().toISOString().split('T')[0],
-                                      });
-                                      setShowPastDueModal(true);
-                                      animateIn('pastDue');
-                                    }}
-                                    activeOpacity={0.7}
-                                  >
-                                    <Ionicons name="add-circle-outline" size={18} color="#2563eb" />
-                                  </TouchableOpacity>
-                                </View>
-                              </View>
-                            );
-                          })}
-                          </View>
-                        </ScrollView>
-                      ) : (
-                        <View style={styles.residentsEmptyState}>
-                          <Ionicons name="people-outline" size={64} color="#9ca3af" />
-                          <Text style={styles.residentsEmptyStateTitle}>No residents found</Text>
-                          <Text style={styles.residentsEmptyStateSubtitle}>
-                            Residents will appear here once they register
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-                  )}
-                </View>
-              </View>
-            )}
           </View>
         );
       
@@ -3665,11 +3676,11 @@ const AdminScreen = () => {
           })}
         >
           {/* Header with ImageBackground */}
-          <View style={styles.headerContainerIOS}>
+          <View style={[styles.headerContainerIOS, { width: screenWidth }]}>
             <ImageBackground
               source={require('../../assets/hoa-4k.jpg')}
               style={styles.header}
-              imageStyle={styles.headerImage}
+              imageStyle={[styles.headerImage, { width: screenWidth }]}
               resizeMode="stretch"
             >
             <View style={styles.headerOverlay} />
@@ -3741,7 +3752,7 @@ const AdminScreen = () => {
           >
             <Ionicons name="people" size={20} color={activeTab === 'residents' ? '#f97316' : '#6b7280'} />
             <Text style={[styles.folderTabText, activeTab === 'residents' && styles.activeFolderTabText, activeTab === 'residents' && { color: '#f97316' }]}>
-              Residents ({residents.length})
+              Residents
             </Text>
           </TouchableOpacity>
           
@@ -3755,7 +3766,7 @@ const AdminScreen = () => {
           >
             <Ionicons name="shield" size={20} color={activeTab === 'board' ? '#eab308' : '#6b7280'} />
             <Text style={[styles.folderTabText, activeTab === 'board' && styles.activeFolderTabText, activeTab === 'board' && { color: '#eab308' }]}>
-              Board ({boardMembers.length})
+              Board
             </Text>
           </TouchableOpacity>
           
@@ -3769,7 +3780,7 @@ const AdminScreen = () => {
           >
             <Ionicons name="document-text" size={20} color={activeTab === 'covenants' ? '#22c55e' : '#6b7280'} />
             <Text style={[styles.folderTabText, activeTab === 'covenants' && styles.activeFolderTabText, activeTab === 'covenants' && { color: '#22c55e' }]}>
-              Covenants ({covenants.length})
+              Covenants
             </Text>
           </TouchableOpacity>
           
@@ -3783,7 +3794,7 @@ const AdminScreen = () => {
           >
             <Ionicons name="chatbubbles" size={20} color={activeTab === 'Community' ? '#3b82f6' : '#6b7280'} />
             <Text style={[styles.folderTabText, activeTab === 'Community' && styles.activeFolderTabText, activeTab === 'Community' && { color: '#3b82f6' }]}>
-              Community ({communityPosts.length + comments.length + polls.length})
+              Community
             </Text>
           </TouchableOpacity>
           
@@ -3797,7 +3808,7 @@ const AdminScreen = () => {
           >
             <Ionicons name="card" size={20} color={activeTab === 'fees' ? '#ec4899' : '#6b7280'} />
               <Text style={[styles.folderTabText, activeTab === 'fees' && styles.activeFolderTabText, activeTab === 'fees' && { color: '#ec4899' }]}>
-                Fees & Payments ({allFeesFromDatabase.length + allFinesFromDatabase.length})
+                Fees & Payments
               </Text>
           </TouchableOpacity>
         </ScrollView>
@@ -3822,6 +3833,7 @@ const AdminScreen = () => {
                 transform: [{ translateY: blockModalTranslateY }],
               }
             ]}>
+              <View style={styles.modalBodyPadding}>
               <Text style={styles.modalTitle}>Block Resident</Text>
               <Text style={styles.modalSubtitle}>
                 Blocking {selectedItem?.firstName} {selectedItem?.lastName}
@@ -3853,6 +3865,7 @@ const AdminScreen = () => {
                   <Text style={styles.confirmButtonText}>Block Resident</Text>
                 </TouchableOpacity>
               </View>
+              </View>
             </Animated.View>
           </Animated.View>
         </Modal>
@@ -3872,6 +3885,7 @@ const AdminScreen = () => {
                 transform: [{ translateY: deleteModalTranslateY }],
               }
             ]}>
+              <View style={styles.modalBodyPadding}>
               <Text style={styles.modalTitle}>Delete Item</Text>
               <Text style={styles.modalSubtitle}>
                 Are you sure you want to delete this {selectedItem?.type}?
@@ -3895,6 +3909,7 @@ const AdminScreen = () => {
                 >
                   <Text style={styles.deleteButtonText}>Delete</Text>
                 </TouchableOpacity>
+              </View>
               </View>
             </Animated.View>
           </Animated.View>
@@ -4473,7 +4488,7 @@ const AdminScreen = () => {
               }
             ]}>
               <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Record Check/Cash Payment</Text>
+                <Text style={styles.modalTitle}>Record Payment</Text>
                 <TouchableOpacity
                   style={styles.closeButton}
                   onPress={() => animateOut('recordPayment', () => setShowRecordPaymentModal(false))}
@@ -4577,6 +4592,19 @@ const AdminScreen = () => {
                         paymentForm.paymentMethod === 'Cash' && styles.paymentMethodTextSelected
                       ]}>Cash</Text>
                     </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.paymentMethodOption,
+                        paymentForm.paymentMethod === 'Venmo' && styles.paymentMethodSelected
+                      ]}
+                      onPress={() => setPaymentForm(prev => ({ ...prev, paymentMethod: 'Venmo' }))}
+                    >
+                      <Ionicons name="logo-venmo" size={20} color={paymentForm.paymentMethod === 'Venmo' ? '#ffffff' : '#6b7280'} />
+                      <Text style={[
+                        styles.paymentMethodText,
+                        paymentForm.paymentMethod === 'Venmo' && styles.paymentMethodTextSelected
+                      ]}>Venmo</Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
 
@@ -4589,6 +4617,32 @@ const AdminScreen = () => {
                       value={paymentForm.checkNumber}
                       onChangeText={(text) => setPaymentForm(prev => ({ ...prev, checkNumber: text }))}
                       placeholder="Enter check number"
+                    />
+                  </View>
+                )}
+
+                {/* Venmo Username (only show for Venmo payments) */}
+                {paymentForm.paymentMethod === 'Venmo' && (
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Venmo Username (Optional)</Text>
+                    <TextInput
+                      style={styles.textInput}
+                      value={paymentForm.venmoUsername}
+                      onChangeText={(text) => setPaymentForm(prev => ({ ...prev, venmoUsername: text }))}
+                      placeholder="Enter Venmo username"
+                    />
+                  </View>
+                )}
+
+                {/* Venmo Transaction ID (only show for Venmo payments) */}
+                {paymentForm.paymentMethod === 'Venmo' && (
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Venmo Transaction ID (Optional)</Text>
+                    <TextInput
+                      style={styles.textInput}
+                      value={paymentForm.venmoTransactionId}
+                      onChangeText={(text) => setPaymentForm(prev => ({ ...prev, venmoTransactionId: text }))}
+                      placeholder="Enter transaction ID"
                     />
                   </View>
                 )}
@@ -4635,6 +4689,651 @@ const AdminScreen = () => {
               </ScrollView>
             </Animated.View>
           </Animated.View>
+        </Modal>
+
+        {/* Transactions History Modal */}
+        <Modal
+          visible={showTransactionsModal}
+          transparent={true}
+          animationType="none"
+          onRequestClose={() => {
+            setTransactionsSearchQuery('');
+            setTransactionsLimit(50);
+            animateOut('transactions', () => setShowTransactionsModal(false));
+          }}
+        >
+          <Animated.View style={[styles.modalOverlay, { opacity: overlayOpacity }]}>
+            <Animated.View style={[
+              styles.formModalContent,
+              {
+                opacity: transactionsModalOpacity,
+                transform: [{ translateY: transactionsModalTranslateY }],
+                maxHeight: Platform.OS === 'web' ? '90%' : Dimensions.get('window').height * 0.85,
+                height: Platform.OS === 'ios' ? Dimensions.get('window').height * 0.85 : undefined,
+              }
+            ]}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Transaction History</Text>
+                <TouchableOpacity
+                  style={styles.closeButton}
+                  onPress={() => {
+                    setTransactionsSearchQuery('');
+                    setTransactionsLimit(50);
+                    animateOut('transactions', () => setShowTransactionsModal(false));
+                  }}
+                >
+                  <Ionicons name="close" size={24} color="#6b7280" />
+                </TouchableOpacity>
+              </View>
+              
+              {/* Search Input */}
+              <View style={styles.paymentSearchContainer}>
+                <Ionicons name="search" size={20} color="#6b7280" style={styles.paymentSearchIcon} />
+                <TextInput
+                  style={styles.paymentSearchInput}
+                  placeholder="Search by name, transaction ID, amount, date, payment method..."
+                  value={transactionsSearchQuery}
+                  onChangeText={setTransactionsSearchQuery}
+                  placeholderTextColor="#9ca3af"
+                />
+                {transactionsSearchQuery.length > 0 && (
+                  <TouchableOpacity
+                    onPress={() => setTransactionsSearchQuery('')}
+                    style={styles.paymentSearchClear}
+                  >
+                    <Ionicons name="close-circle" size={20} color="#6b7280" />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Transactions List */}
+              <View style={{ flex: 1 }}>
+                <ScrollView 
+                  style={styles.transactionsList}
+                  contentContainerStyle={styles.transactionsListContent}
+                  showsVerticalScrollIndicator={true}
+                  nestedScrollEnabled={true}
+                >
+                {filteredTransactions.length === 0 ? (
+                  <View style={styles.emptyState}>
+                    <Ionicons name="receipt-outline" size={48} color="#9ca3af" />
+                    <Text style={styles.emptyStateText}>
+                      {transactionsSearchQuery ? 'No transactions found' : 'No transactions yet'}
+                    </Text>
+                    {transactionsSearchQuery && (
+                      <Text style={styles.emptyStateSubtext}>
+                        Try adjusting your search query
+                      </Text>
+                    )}
+                  </View>
+                ) : (
+                  <>
+                    {filteredTransactions.map((payment: any) => {
+                    const resident = residentsMap.get(payment.userId);
+                    const paymentDate = payment.paymentDate || new Date(payment.createdAt).toISOString().split('T')[0];
+                    const formattedDate = new Date(payment.createdAt).toLocaleDateString('en-US', {
+                      year: 'numeric',
+                      month: 'short',
+                      day: 'numeric',
+                    });
+                    const formattedTime = new Date(payment.createdAt).toLocaleTimeString('en-US', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    });
+                    
+                    // Status badge colors
+                    const statusColor = payment.status === 'Paid' ? '#10b981' : 
+                                       payment.status === 'Pending' ? '#f59e0b' : '#dc2626';
+                    const verificationColor = payment.verificationStatus === 'Verified' ? '#10b981' :
+                                              payment.verificationStatus === 'Rejected' ? '#dc2626' : '#6b7280';
+                    
+                    return (
+                      <View key={payment._id} style={styles.transactionCard}>
+                        <View style={styles.transactionHeader}>
+                          <View style={styles.transactionHeaderLeft}>
+                            <View style={[styles.transactionStatusBadge, { backgroundColor: statusColor + '20' }]}>
+                              <Ionicons 
+                                name={payment.status === 'Paid' ? 'checkmark-circle' : payment.status === 'Pending' ? 'time' : 'close-circle'} 
+                                size={14} 
+                                color={statusColor} 
+                              />
+                              <Text style={[styles.transactionStatusText, { color: statusColor }]}>
+                                {payment.status}
+                              </Text>
+                            </View>
+                            {payment.verificationStatus && (
+                              <View style={[styles.transactionVerificationBadge, { backgroundColor: verificationColor + '20' }]}>
+                                <Ionicons 
+                                  name={payment.verificationStatus === 'Verified' ? 'shield-checkmark' : payment.verificationStatus === 'Rejected' ? 'close-circle' : 'shield-outline'} 
+                                  size={12} 
+                                  color={verificationColor} 
+                                />
+                                <Text style={[styles.transactionVerificationText, { color: verificationColor }]}>
+                                  {payment.verificationStatus}
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+                          <Text style={styles.transactionAmount}>
+                            ${payment.amount.toFixed(2)}
+                          </Text>
+                        </View>
+                        
+                        <View style={styles.transactionDetails}>
+                          <View style={styles.transactionDetailRow}>
+                            <Ionicons name="person" size={14} color="#6b7280" />
+                            <Text style={styles.transactionDetailText}>
+                              {resident ? `${resident.firstName} ${resident.lastName}` : 'Unknown'}
+                            </Text>
+                          </View>
+                          
+                          {resident && (
+                            <View style={styles.transactionDetailRow}>
+                              <Ionicons name="home" size={14} color="#6b7280" />
+                              <Text style={styles.transactionDetailText}>
+                                {resident.address}{resident.unitNumber ? ` #${resident.unitNumber}` : ''}
+                              </Text>
+                            </View>
+                          )}
+                          
+                          <View style={styles.transactionDetailRow}>
+                            <Ionicons name="card" size={14} color="#6b7280" />
+                            <Text style={styles.transactionDetailText}>
+                              {payment.feeType}
+                            </Text>
+                          </View>
+                          
+                          <View style={styles.transactionDetailRow}>
+                            <Ionicons 
+                              name={payment.paymentMethod === 'Venmo' ? 'logo-venmo' : payment.paymentMethod === 'Check' ? 'document-text' : 'cash'} 
+                              size={14} 
+                              color="#6b7280" 
+                            />
+                            <Text style={styles.transactionDetailText}>
+                              {payment.paymentMethod}
+                              {payment.checkNumber && ` • Check #${payment.checkNumber}`}
+                              {payment.venmoUsername && ` • @${payment.venmoUsername}`}
+                            </Text>
+                          </View>
+                          
+                          {(payment.transactionId || payment.venmoTransactionId) && (
+                            <View style={styles.transactionDetailRow}>
+                              <Ionicons name="receipt" size={14} color="#6b7280" />
+                              <Text style={styles.transactionDetailText} numberOfLines={1}>
+                                ID: {payment.transactionId || payment.venmoTransactionId}
+                              </Text>
+                            </View>
+                          )}
+                          
+                          <View style={styles.transactionDetailRow}>
+                            <Ionicons name="calendar" size={14} color="#6b7280" />
+                            <Text style={styles.transactionDetailText}>
+                              {formattedDate} at {formattedTime}
+                            </Text>
+                          </View>
+                          
+                          {payment.adminNotes && (
+                            <View style={styles.transactionDetailRow}>
+                              <Ionicons name="document-text" size={14} color="#6b7280" />
+                              <Text style={styles.transactionDetailText}>
+                                Notes: {payment.adminNotes}
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                        
+                        {/* Correction Button for Verified Payments */}
+                        {payment.verificationStatus === 'Verified' && (
+                          <TouchableOpacity
+                            style={styles.correctAmountButton}
+                            onPress={() => {
+                              setSelectedPaymentForCorrection(payment);
+                              setCorrectedAmount(payment.amount.toString());
+                              setCorrectionNotes('');
+                              setShowCorrectionModal(true);
+                            }}
+                          >
+                            <Ionicons name="create-outline" size={16} color="#2563eb" />
+                            <Text style={styles.correctAmountButtonText}>Correct Amount</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    );
+                    })}
+                    
+                    {/* Footer: Load More or All loaded - always show when there are transactions and no search */}
+                    {!transactionsSearchQuery.trim() && recentPayments.length > 0 && (
+                      <View style={styles.loadMoreContainer}>
+                        {recentPayments.length >= transactionsLimit ? (
+                          <TouchableOpacity
+                            style={styles.loadMoreButton}
+                            onPress={() => setTransactionsLimit(prev => prev + 50)}
+                          >
+                            <Ionicons name="chevron-down" size={18} color="#2563eb" />
+                            <Text style={styles.loadMoreButtonText}>Load More</Text>
+                          </TouchableOpacity>
+                        ) : (
+                          <Text style={styles.loadMoreAllText}>All transactions loaded</Text>
+                        )}
+                      </View>
+                    )}
+                  </>
+                )}
+                </ScrollView>
+              </View>
+            </Animated.View>
+          </Animated.View>
+        </Modal>
+
+        {/* Payment Correction Modal */}
+        <Modal
+          visible={showCorrectionModal}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setShowCorrectionModal(false)}
+        >
+          {Platform.OS === 'web' ? (
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Correct Payment Amount</Text>
+                <TouchableOpacity onPress={() => {
+                  setShowCorrectionModal(false);
+                  setSelectedPaymentForCorrection(null);
+                  setCorrectedAmount('');
+                  setCorrectionNotes('');
+                }}>
+                  <Ionicons name="close" size={24} color="#6b7280" />
+                </TouchableOpacity>
+              </View>
+              {selectedPaymentForCorrection && (
+                <ScrollView style={styles.modalScrollView}>
+                  <View style={styles.verificationPaymentInfo}>
+                    <Text style={styles.verificationPaymentLabel}>Resident:</Text>
+                    <Text style={styles.verificationPaymentValue}>
+                      {(() => {
+                        const resident = residentsMap.get(selectedPaymentForCorrection.userId);
+                        return resident ? `${resident.firstName} ${resident.lastName}` : 'Unknown';
+                      })()}
+                    </Text>
+                  </View>
+                  <View style={styles.verificationPaymentInfo}>
+                    <Text style={styles.verificationPaymentLabel}>Current Amount:</Text>
+                    <Text style={styles.verificationPaymentValue}>
+                      ${selectedPaymentForCorrection.amount.toFixed(2)}
+                    </Text>
+                  </View>
+                  <View style={styles.verificationPaymentInfo}>
+                    <Text style={styles.verificationPaymentLabel}>Fee Type:</Text>
+                    <Text style={styles.verificationPaymentValue}>
+                      {selectedPaymentForCorrection.feeType}
+                    </Text>
+                  </View>
+                  
+                  {/* Corrected Amount Input */}
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Corrected Amount *</Text>
+                    <TextInput
+                      style={styles.textInput}
+                      placeholder="Enter correct amount"
+                      value={correctedAmount}
+                      onChangeText={(text) => {
+                        // Allow only numbers and decimal point
+                        const cleaned = text.replace(/[^0-9.]/g, '');
+                        // Ensure only one decimal point
+                        const parts = cleaned.split('.');
+                        const formatted = parts.length > 2 
+                          ? parts[0] + '.' + parts.slice(1).join('')
+                          : cleaned;
+                        setCorrectedAmount(formatted);
+                      }}
+                      keyboardType="decimal-pad"
+                      placeholderTextColor="#9ca3af"
+                    />
+                    <Text style={styles.inputDescription}>
+                      Original amount: ${selectedPaymentForCorrection.amount.toFixed(2)}
+                    </Text>
+                  </View>
+
+                  {/* Fee Amount Comparison */}
+                  {(() => {
+                    const feeId = selectedPaymentForCorrection.feeId;
+                    const fineId = selectedPaymentForCorrection.fineId;
+                    let feeAmount: number | null = null;
+                    let feeName: string | null = null;
+                    
+                    if (feeId && allFeesFromDatabase) {
+                      const fee = allFeesFromDatabase.find((f: any) => f._id === feeId);
+                      if (fee) {
+                        feeAmount = fee.amount;
+                        feeName = fee.name;
+                      }
+                    } else if (fineId && allFinesFromDatabase) {
+                      const fine = allFinesFromDatabase.find((f: any) => f._id === fineId);
+                      if (fine) {
+                        feeAmount = fine.amount;
+                        feeName = fine.violation;
+                      }
+                    }
+                    
+                    const correctedAmountNum = parseFloat(correctedAmount) || 0;
+                    const isPartialPayment = feeAmount !== null && correctedAmountNum > 0 && correctedAmountNum < feeAmount;
+                    const isFullPayment = feeAmount !== null && correctedAmountNum >= feeAmount;
+                    
+                    return feeAmount !== null ? (
+                      <View style={styles.inputGroup}>
+                        <View style={styles.verificationPaymentInfo}>
+                          <Text style={styles.verificationPaymentLabel}>Fee Amount:</Text>
+                          <Text style={styles.verificationPaymentValue}>
+                            ${feeAmount.toFixed(2)} ({feeName})
+                          </Text>
+                        </View>
+                        {correctedAmountNum > 0 && (
+                          <View style={[
+                            styles.paymentComparisonContainer,
+                            isPartialPayment && styles.partialPaymentWarning,
+                            isFullPayment && styles.fullPaymentSuccess
+                          ]}>
+                            {isPartialPayment && (
+                              <>
+                                <Ionicons name="warning" size={20} color="#f59e0b" />
+                                <View style={{ flex: 1 }}>
+                                  <Text style={styles.paymentComparisonText}>
+                                    Partial payment. Fee will remain Pending.
+                                  </Text>
+                                  <Text style={styles.paymentComparisonSubtext}>
+                                    Remaining: ${(feeAmount - correctedAmountNum).toFixed(2)}
+                                  </Text>
+                                </View>
+                              </>
+                            )}
+                            {isFullPayment && (
+                              <>
+                                <Ionicons name="checkmark-circle" size={20} color="#10b981" />
+                                <View style={{ flex: 1 }}>
+                                  <Text style={styles.paymentComparisonText}>
+                                    Full payment. Fee will be marked as Paid.
+                                  </Text>
+                                  {correctedAmountNum > feeAmount && (
+                                    <Text style={styles.paymentComparisonSubtext}>
+                                      Overpayment: ${(correctedAmountNum - feeAmount).toFixed(2)} (will be ignored)
+                                    </Text>
+                                  )}
+                                </View>
+                              </>
+                            )}
+                          </View>
+                        )}
+                      </View>
+                    ) : null;
+                  })()}
+                  
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Correction Notes (Optional)</Text>
+                    <TextInput
+                      style={[styles.textInput, styles.textArea]}
+                      placeholder="Add notes about this correction..."
+                      value={correctionNotes}
+                      onChangeText={setCorrectionNotes}
+                      multiline
+                      numberOfLines={3}
+                      textAlignVertical="top"
+                    />
+                  </View>
+
+                  <View style={styles.verificationActions}>
+                    <TouchableOpacity
+                      style={[styles.rejectButton, { backgroundColor: '#6b7280' }]}
+                      onPress={() => {
+                        setShowCorrectionModal(false);
+                        setSelectedPaymentForCorrection(null);
+                        setCorrectedAmount('');
+                        setCorrectionNotes('');
+                      }}
+                    >
+                      <Ionicons name="close-circle" size={20} color="#ffffff" />
+                      <Text style={styles.rejectButtonText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.verifyButton, { backgroundColor: '#2563eb' }]}
+                      onPress={async () => {
+                        try {
+                          // Validate corrected amount
+                          const correctedAmountNum = parseFloat(correctedAmount);
+                          if (isNaN(correctedAmountNum) || correctedAmountNum <= 0) {
+                            Alert.alert('Invalid Amount', 'Please enter a valid payment amount greater than 0.');
+                            return;
+                          }
+
+                          const result = await correctPaymentAmount({
+                            paymentId: selectedPaymentForCorrection._id,
+                            correctedAmount: correctedAmountNum,
+                            adminNotes: correctionNotes.trim() || undefined,
+                          });
+
+                          Alert.alert('Success', result.message || 'Payment amount corrected successfully!');
+                          setShowCorrectionModal(false);
+                          setSelectedPaymentForCorrection(null);
+                          setCorrectedAmount('');
+                          setCorrectionNotes('');
+                          await handleRefresh();
+                        } catch (error) {
+                          console.error('Correction error:', error);
+                          Alert.alert('Error', 'Failed to correct payment amount.');
+                        }
+                      }}
+                    >
+                      <Ionicons name="checkmark-circle" size={20} color="#ffffff" />
+                      <Text style={styles.verifyButtonText}>Correct Amount</Text>
+                    </TouchableOpacity>
+                  </View>
+                </ScrollView>
+              )}
+            </View>
+          </View>
+        ) : (
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.modalOverlay}
+          >
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Correct Payment Amount</Text>
+                <TouchableOpacity onPress={() => {
+                  setShowCorrectionModal(false);
+                  setSelectedPaymentForCorrection(null);
+                  setCorrectedAmount('');
+                  setCorrectionNotes('');
+                }}>
+                  <Ionicons name="close" size={24} color="#6b7280" />
+                </TouchableOpacity>
+              </View>
+              {selectedPaymentForCorrection && (
+                <ScrollView style={styles.modalScrollView}>
+                  <View style={styles.verificationPaymentInfo}>
+                    <Text style={styles.verificationPaymentLabel}>Resident:</Text>
+                    <Text style={styles.verificationPaymentValue}>
+                      {(() => {
+                        const resident = residentsMap.get(selectedPaymentForCorrection.userId);
+                        return resident ? `${resident.firstName} ${resident.lastName}` : 'Unknown';
+                      })()}
+                    </Text>
+                  </View>
+                  <View style={styles.verificationPaymentInfo}>
+                    <Text style={styles.verificationPaymentLabel}>Current Amount:</Text>
+                    <Text style={styles.verificationPaymentValue}>
+                      ${selectedPaymentForCorrection.amount.toFixed(2)}
+                    </Text>
+                  </View>
+                  <View style={styles.verificationPaymentInfo}>
+                    <Text style={styles.verificationPaymentLabel}>Fee Type:</Text>
+                    <Text style={styles.verificationPaymentValue}>
+                      {selectedPaymentForCorrection.feeType}
+                    </Text>
+                  </View>
+                  
+                  {/* Corrected Amount Input */}
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Corrected Amount *</Text>
+                    <TextInput
+                      style={styles.textInput}
+                      placeholder="Enter correct amount"
+                      value={correctedAmount}
+                      onChangeText={(text) => {
+                        // Allow only numbers and decimal point
+                        const cleaned = text.replace(/[^0-9.]/g, '');
+                        // Ensure only one decimal point
+                        const parts = cleaned.split('.');
+                        const formatted = parts.length > 2 
+                          ? parts[0] + '.' + parts.slice(1).join('')
+                          : cleaned;
+                        setCorrectedAmount(formatted);
+                      }}
+                      keyboardType="decimal-pad"
+                      placeholderTextColor="#9ca3af"
+                    />
+                    <Text style={styles.inputDescription}>
+                      Original amount: ${selectedPaymentForCorrection.amount.toFixed(2)}
+                    </Text>
+                  </View>
+
+                  {/* Fee Amount Comparison */}
+                  {(() => {
+                    const feeId = selectedPaymentForCorrection.feeId;
+                    const fineId = selectedPaymentForCorrection.fineId;
+                    let feeAmount: number | null = null;
+                    let feeName: string | null = null;
+                    
+                    if (feeId && allFeesFromDatabase) {
+                      const fee = allFeesFromDatabase.find((f: any) => f._id === feeId);
+                      if (fee) {
+                        feeAmount = fee.amount;
+                        feeName = fee.name;
+                      }
+                    } else if (fineId && allFinesFromDatabase) {
+                      const fine = allFinesFromDatabase.find((f: any) => f._id === fineId);
+                      if (fine) {
+                        feeAmount = fine.amount;
+                        feeName = fine.violation;
+                      }
+                    }
+                    
+                    const correctedAmountNum = parseFloat(correctedAmount) || 0;
+                    const isPartialPayment = feeAmount !== null && correctedAmountNum > 0 && correctedAmountNum < feeAmount;
+                    const isFullPayment = feeAmount !== null && correctedAmountNum >= feeAmount;
+                    
+                    return feeAmount !== null ? (
+                      <View style={styles.inputGroup}>
+                        <View style={styles.verificationPaymentInfo}>
+                          <Text style={styles.verificationPaymentLabel}>Fee Amount:</Text>
+                          <Text style={styles.verificationPaymentValue}>
+                            ${feeAmount.toFixed(2)} ({feeName})
+                          </Text>
+                        </View>
+                        {correctedAmountNum > 0 && (
+                          <View style={[
+                            styles.paymentComparisonContainer,
+                            isPartialPayment && styles.partialPaymentWarning,
+                            isFullPayment && styles.fullPaymentSuccess
+                          ]}>
+                            {isPartialPayment && (
+                              <>
+                                <Ionicons name="warning" size={20} color="#f59e0b" />
+                                <View style={{ flex: 1 }}>
+                                  <Text style={styles.paymentComparisonText}>
+                                    Partial payment. Fee will remain Pending.
+                                  </Text>
+                                  <Text style={styles.paymentComparisonSubtext}>
+                                    Remaining: ${(feeAmount - correctedAmountNum).toFixed(2)}
+                                  </Text>
+                                </View>
+                              </>
+                            )}
+                            {isFullPayment && (
+                              <>
+                                <Ionicons name="checkmark-circle" size={20} color="#10b981" />
+                                <View style={{ flex: 1 }}>
+                                  <Text style={styles.paymentComparisonText}>
+                                    Full payment. Fee will be marked as Paid.
+                                  </Text>
+                                  {correctedAmountNum > feeAmount && (
+                                    <Text style={styles.paymentComparisonSubtext}>
+                                      Overpayment: ${(correctedAmountNum - feeAmount).toFixed(2)} (will be ignored)
+                                    </Text>
+                                  )}
+                                </View>
+                              </>
+                            )}
+                          </View>
+                        )}
+                      </View>
+                    ) : null;
+                  })()}
+                  
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Correction Notes (Optional)</Text>
+                    <TextInput
+                      style={[styles.textInput, styles.textArea]}
+                      placeholder="Add notes about this correction..."
+                      value={correctionNotes}
+                      onChangeText={setCorrectionNotes}
+                      multiline
+                      numberOfLines={3}
+                      textAlignVertical="top"
+                    />
+                  </View>
+
+                  <View style={styles.verificationActions}>
+                    <TouchableOpacity
+                      style={[styles.rejectButton, { backgroundColor: '#6b7280' }]}
+                      onPress={() => {
+                        setShowCorrectionModal(false);
+                        setSelectedPaymentForCorrection(null);
+                        setCorrectedAmount('');
+                        setCorrectionNotes('');
+                      }}
+                    >
+                      <Ionicons name="close-circle" size={20} color="#ffffff" />
+                      <Text style={styles.rejectButtonText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.verifyButton, { backgroundColor: '#2563eb' }]}
+                      onPress={async () => {
+                        try {
+                          // Validate corrected amount
+                          const correctedAmountNum = parseFloat(correctedAmount);
+                          if (isNaN(correctedAmountNum) || correctedAmountNum <= 0) {
+                            Alert.alert('Invalid Amount', 'Please enter a valid payment amount greater than 0.');
+                            return;
+                          }
+
+                          const result = await correctPaymentAmount({
+                            paymentId: selectedPaymentForCorrection._id,
+                            correctedAmount: correctedAmountNum,
+                            adminNotes: correctionNotes.trim() || undefined,
+                          });
+
+                          Alert.alert('Success', result.message || 'Payment amount corrected successfully!');
+                          setShowCorrectionModal(false);
+                          setSelectedPaymentForCorrection(null);
+                          setCorrectedAmount('');
+                          setCorrectionNotes('');
+                          await handleRefresh();
+                        } catch (error) {
+                          console.error('Correction error:', error);
+                          Alert.alert('Error', 'Failed to correct payment amount.');
+                        }
+                      }}
+                    >
+                      <Ionicons name="checkmark-circle" size={20} color="#ffffff" />
+                      <Text style={styles.verifyButtonText}>Correct Amount</Text>
+                    </TouchableOpacity>
+                  </View>
+                </ScrollView>
+              )}
+            </View>
+          </KeyboardAvoidingView>
+        )}
         </Modal>
 
         {/* Covenant Modal */}
@@ -4944,16 +5643,18 @@ const AdminScreen = () => {
         animationType="slide"
         onRequestClose={() => setShowVerificationModal(false)}
       >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.modalOverlay}
-        >
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
+        {Platform.OS === 'web' ? (
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>
                 {selectedPaymentForVerification ? 'Verify Payment' : ''}
               </Text>
-              <TouchableOpacity onPress={() => setShowVerificationModal(false)}>
+              <TouchableOpacity onPress={() => {
+                setShowVerificationModal(false);
+                setAdjustedPaymentAmount('');
+                setVerificationNotes('');
+              }}>
                 <Ionicons name="close" size={24} color="#6b7280" />
               </TouchableOpacity>
             </View>
@@ -4969,12 +5670,6 @@ const AdminScreen = () => {
                   </Text>
                 </View>
                 <View style={styles.verificationPaymentInfo}>
-                  <Text style={styles.verificationPaymentLabel}>Amount:</Text>
-                  <Text style={styles.verificationPaymentValue}>
-                    ${selectedPaymentForVerification.amount.toFixed(2)}
-                  </Text>
-                </View>
-                <View style={styles.verificationPaymentInfo}>
                   <Text style={styles.verificationPaymentLabel}>Fee Type:</Text>
                   <Text style={styles.verificationPaymentValue}>
                     {selectedPaymentForVerification.feeType}
@@ -4986,6 +5681,104 @@ const AdminScreen = () => {
                     {selectedPaymentForVerification.venmoTransactionId || selectedPaymentForVerification.transactionId}
                   </Text>
                 </View>
+                
+                {/* Payment Amount Input */}
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Payment Amount *</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="Enter actual amount paid"
+                    value={adjustedPaymentAmount}
+                    onChangeText={(text) => {
+                      // Allow only numbers and decimal point
+                      const cleaned = text.replace(/[^0-9.]/g, '');
+                      // Ensure only one decimal point
+                      const parts = cleaned.split('.');
+                      const formatted = parts.length > 2 
+                        ? parts[0] + '.' + parts.slice(1).join('')
+                        : cleaned;
+                      setAdjustedPaymentAmount(formatted);
+                    }}
+                    keyboardType="decimal-pad"
+                    placeholderTextColor="#9ca3af"
+                  />
+                  <Text style={styles.inputDescription}>
+                    Original amount: ${selectedPaymentForVerification.amount.toFixed(2)}
+                  </Text>
+                </View>
+
+                {/* Fee Amount Comparison */}
+                {(() => {
+                  const feeId = selectedPaymentForVerification.feeId;
+                  const fineId = selectedPaymentForVerification.fineId;
+                  let feeAmount: number | null = null;
+                  let feeName: string | null = null;
+                  
+                  if (feeId && allFeesFromDatabase) {
+                    const fee = allFeesFromDatabase.find((f: any) => f._id === feeId);
+                    if (fee) {
+                      feeAmount = fee.amount;
+                      feeName = fee.name;
+                    }
+                  } else if (fineId && allFinesFromDatabase) {
+                    const fine = allFinesFromDatabase.find((f: any) => f._id === fineId);
+                    if (fine) {
+                      feeAmount = fine.amount;
+                      feeName = fine.violation;
+                    }
+                  }
+                  
+                  const adjustedAmount = parseFloat(adjustedPaymentAmount) || 0;
+                  const isPartialPayment = feeAmount !== null && adjustedAmount > 0 && adjustedAmount < feeAmount;
+                  const isFullPayment = feeAmount !== null && adjustedAmount >= feeAmount;
+                  
+                  return feeAmount !== null ? (
+                    <View style={styles.inputGroup}>
+                      <View style={styles.verificationPaymentInfo}>
+                        <Text style={styles.verificationPaymentLabel}>Fee Amount:</Text>
+                        <Text style={styles.verificationPaymentValue}>
+                          ${feeAmount.toFixed(2)} ({feeName})
+                        </Text>
+                      </View>
+                      {adjustedAmount > 0 && (
+                        <View style={[
+                          styles.paymentComparisonContainer,
+                          isPartialPayment && styles.partialPaymentWarning,
+                          isFullPayment && styles.fullPaymentSuccess
+                        ]}>
+                          {isPartialPayment && (
+                            <>
+                              <Ionicons name="warning" size={20} color="#f59e0b" />
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.paymentComparisonText}>
+                                  Partial payment. Fee will remain Pending.
+                                </Text>
+                                <Text style={styles.paymentComparisonSubtext}>
+                                  Remaining: ${(feeAmount - adjustedAmount).toFixed(2)}
+                                </Text>
+                              </View>
+                            </>
+                          )}
+                          {isFullPayment && (
+                            <>
+                              <Ionicons name="checkmark-circle" size={20} color="#10b981" />
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.paymentComparisonText}>
+                                  Full payment. Fee will be marked as Paid.
+                                </Text>
+                                {adjustedAmount > feeAmount && (
+                                  <Text style={styles.paymentComparisonSubtext}>
+                                    Overpayment: ${(adjustedAmount - feeAmount).toFixed(2)} (will be ignored)
+                                  </Text>
+                                )}
+                              </View>
+                            </>
+                          )}
+                        </View>
+                      )}
+                    </View>
+                  ) : null;
+                })()}
                 
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>Admin Notes (Optional)</Text>
@@ -5015,6 +5808,7 @@ const AdminScreen = () => {
                         setShowVerificationModal(false);
                         setSelectedPaymentForVerification(null);
                         setVerificationNotes('');
+                        setAdjustedPaymentAmount('');
                         await handleRefresh();
                       } catch (error) {
                         Alert.alert('Error', 'Failed to reject payment.');
@@ -5028,18 +5822,62 @@ const AdminScreen = () => {
                     style={styles.verifyButton}
                     onPress={async () => {
                       try {
+                        // Validate adjusted amount
+                        const adjustedAmount = parseFloat(adjustedPaymentAmount);
+                        if (isNaN(adjustedAmount) || adjustedAmount <= 0) {
+                          Alert.alert('Invalid Amount', 'Please enter a valid payment amount greater than 0.');
+                          return;
+                        }
+
+                        // Get fee amount for comparison
+                        const feeId = selectedPaymentForVerification.feeId;
+                        const fineId = selectedPaymentForVerification.fineId;
+                        let feeAmount: number | null = null;
+                        
+                        if (feeId && allFeesFromDatabase) {
+                          const fee = allFeesFromDatabase.find((f: any) => f._id === feeId);
+                          if (fee) {
+                            feeAmount = fee.amount;
+                          }
+                        } else if (fineId && allFinesFromDatabase) {
+                          const fine = allFinesFromDatabase.find((f: any) => f._id === fineId);
+                          if (fine) {
+                            feeAmount = fine.amount;
+                          }
+                        }
+
+                        // Determine if this is a partial payment
+                        const isPartial = feeAmount !== null && adjustedAmount < feeAmount;
+                        const finalStatus = isPartial ? "Pending" : "Paid";
+                        
+                        // Build admin notes
+                        let finalAdminNotes = verificationNotes.trim();
+                        if (isPartial && feeAmount !== null) {
+                          const remaining = feeAmount - adjustedAmount;
+                          finalAdminNotes = finalAdminNotes 
+                            ? `${finalAdminNotes}\n\nPartial payment: $${adjustedAmount.toFixed(2)} of $${feeAmount.toFixed(2)}. Remaining: $${remaining.toFixed(2)}.`
+                            : `Partial payment: $${adjustedAmount.toFixed(2)} of $${feeAmount.toFixed(2)}. Remaining: $${remaining.toFixed(2)}.`;
+                        }
+
                         await verifyVenmoPayment({
                           paymentId: selectedPaymentForVerification._id,
-                          status: "Paid",
+                          status: finalStatus,
                           verificationStatus: "Verified",
-                          adminNotes: verificationNotes.trim() || undefined,
+                          adjustedAmount: adjustedAmount,
+                          adminNotes: finalAdminNotes || undefined,
                         });
-                        Alert.alert('Success', 'Payment verified successfully!');
+                        
+                        const successMessage = isPartial 
+                          ? `Payment verified (partial). Fee remains Pending.`
+                          : 'Payment verified successfully!';
+                        Alert.alert('Success', successMessage);
                         setShowVerificationModal(false);
                         setSelectedPaymentForVerification(null);
                         setVerificationNotes('');
+                        setAdjustedPaymentAmount('');
                         await handleRefresh();
                       } catch (error) {
+                        console.error('Verification error:', error);
                         Alert.alert('Error', 'Failed to verify payment.');
                       }
                     }}
@@ -5051,7 +5889,258 @@ const AdminScreen = () => {
               </ScrollView>
             )}
           </View>
-        </KeyboardAvoidingView>
+        </View>
+        ) : (
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.modalOverlay}
+          >
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>
+                  {selectedPaymentForVerification ? 'Verify Payment' : ''}
+                </Text>
+                <TouchableOpacity onPress={() => {
+                  setShowVerificationModal(false);
+                  setAdjustedPaymentAmount('');
+                  setVerificationNotes('');
+                }}>
+                  <Ionicons name="close" size={24} color="#6b7280" />
+                </TouchableOpacity>
+              </View>
+              {selectedPaymentForVerification && (
+                <ScrollView style={styles.modalScrollView}>
+                  <View style={styles.verificationPaymentInfo}>
+                    <Text style={styles.verificationPaymentLabel}>Resident:</Text>
+                    <Text style={styles.verificationPaymentValue}>
+                      {(() => {
+                        const resident = residentsMap.get(selectedPaymentForVerification.userId);
+                        return resident ? `${resident.firstName} ${resident.lastName}` : 'Unknown';
+                      })()}
+                    </Text>
+                  </View>
+                  <View style={styles.verificationPaymentInfo}>
+                    <Text style={styles.verificationPaymentLabel}>Fee Type:</Text>
+                    <Text style={styles.verificationPaymentValue}>
+                      {selectedPaymentForVerification.feeType}
+                    </Text>
+                  </View>
+                  <View style={styles.verificationPaymentInfo}>
+                    <Text style={styles.verificationPaymentLabel}>Transaction ID:</Text>
+                    <Text style={styles.verificationPaymentValue}>
+                      {selectedPaymentForVerification.venmoTransactionId || selectedPaymentForVerification.transactionId}
+                    </Text>
+                  </View>
+                  
+                  {/* Payment Amount Input */}
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Payment Amount *</Text>
+                    <TextInput
+                      style={styles.textInput}
+                      placeholder="Enter actual amount paid"
+                      value={adjustedPaymentAmount}
+                      onChangeText={(text) => {
+                        // Allow only numbers and decimal point
+                        const cleaned = text.replace(/[^0-9.]/g, '');
+                        // Ensure only one decimal point
+                        const parts = cleaned.split('.');
+                        const formatted = parts.length > 2 
+                          ? parts[0] + '.' + parts.slice(1).join('')
+                          : cleaned;
+                        setAdjustedPaymentAmount(formatted);
+                      }}
+                      keyboardType="decimal-pad"
+                      placeholderTextColor="#9ca3af"
+                    />
+                    <Text style={styles.inputDescription}>
+                      Original amount: ${selectedPaymentForVerification.amount.toFixed(2)}
+                    </Text>
+                  </View>
+
+                  {/* Fee Amount Comparison */}
+                  {(() => {
+                    const feeId = selectedPaymentForVerification.feeId;
+                    const fineId = selectedPaymentForVerification.fineId;
+                    let feeAmount: number | null = null;
+                    let feeName: string | null = null;
+                    
+                    if (feeId && allFeesFromDatabase) {
+                      const fee = allFeesFromDatabase.find((f: any) => f._id === feeId);
+                      if (fee) {
+                        feeAmount = fee.amount;
+                        feeName = fee.name;
+                      }
+                    } else if (fineId && allFinesFromDatabase) {
+                      const fine = allFinesFromDatabase.find((f: any) => f._id === fineId);
+                      if (fine) {
+                        feeAmount = fine.amount;
+                        feeName = fine.violation;
+                      }
+                    }
+                    
+                    const adjustedAmount = parseFloat(adjustedPaymentAmount) || 0;
+                    const isPartialPayment = feeAmount !== null && adjustedAmount > 0 && adjustedAmount < feeAmount;
+                    const isFullPayment = feeAmount !== null && adjustedAmount >= feeAmount;
+                    
+                    return feeAmount !== null ? (
+                      <View style={styles.inputGroup}>
+                        <View style={styles.verificationPaymentInfo}>
+                          <Text style={styles.verificationPaymentLabel}>Fee Amount:</Text>
+                          <Text style={styles.verificationPaymentValue}>
+                            ${feeAmount.toFixed(2)} ({feeName})
+                          </Text>
+                        </View>
+                        {adjustedAmount > 0 && (
+                          <View style={[
+                            styles.paymentComparisonContainer,
+                            isPartialPayment && styles.partialPaymentWarning,
+                            isFullPayment && styles.fullPaymentSuccess
+                          ]}>
+                            {isPartialPayment && (
+                              <>
+                                <Ionicons name="warning" size={20} color="#f59e0b" />
+                                <View style={{ flex: 1 }}>
+                                  <Text style={styles.paymentComparisonText}>
+                                    Partial payment. Fee will remain Pending.
+                                  </Text>
+                                  <Text style={styles.paymentComparisonSubtext}>
+                                    Remaining: ${(feeAmount - adjustedAmount).toFixed(2)}
+                                  </Text>
+                                </View>
+                              </>
+                            )}
+                            {isFullPayment && (
+                              <>
+                                <Ionicons name="checkmark-circle" size={20} color="#10b981" />
+                                <View style={{ flex: 1 }}>
+                                  <Text style={styles.paymentComparisonText}>
+                                    Full payment. Fee will be marked as Paid.
+                                  </Text>
+                                  {adjustedAmount > feeAmount && (
+                                    <Text style={styles.paymentComparisonSubtext}>
+                                      Overpayment: ${(adjustedAmount - feeAmount).toFixed(2)} (will be ignored)
+                                    </Text>
+                                  )}
+                                </View>
+                              </>
+                            )}
+                          </View>
+                        )}
+                      </View>
+                    ) : null;
+                  })()}
+                  
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Admin Notes (Optional)</Text>
+                    <TextInput
+                      style={[styles.textInput, styles.textArea]}
+                      placeholder="Add notes about verification decision..."
+                      value={verificationNotes}
+                      onChangeText={setVerificationNotes}
+                      multiline
+                      numberOfLines={3}
+                      textAlignVertical="top"
+                    />
+                  </View>
+
+                  <View style={styles.verificationActions}>
+                    <TouchableOpacity
+                      style={styles.rejectButton}
+                      onPress={async () => {
+                        try {
+                          await verifyVenmoPayment({
+                            paymentId: selectedPaymentForVerification._id,
+                            status: "Overdue",
+                            verificationStatus: "Rejected",
+                            adminNotes: verificationNotes.trim() || undefined,
+                          });
+                          Alert.alert('Success', 'Payment rejected.');
+                          setShowVerificationModal(false);
+                          setSelectedPaymentForVerification(null);
+                          setVerificationNotes('');
+                          setAdjustedPaymentAmount('');
+                          await handleRefresh();
+                        } catch (error) {
+                          Alert.alert('Error', 'Failed to reject payment.');
+                        }
+                      }}
+                    >
+                      <Ionicons name="close-circle" size={20} color="#ffffff" />
+                      <Text style={styles.rejectButtonText}>Reject Payment</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.verifyButton}
+                      onPress={async () => {
+                        try {
+                          // Validate adjusted amount
+                          const adjustedAmount = parseFloat(adjustedPaymentAmount);
+                          if (isNaN(adjustedAmount) || adjustedAmount <= 0) {
+                            Alert.alert('Invalid Amount', 'Please enter a valid payment amount greater than 0.');
+                            return;
+                          }
+
+                          // Get fee amount for comparison
+                          const feeId = selectedPaymentForVerification.feeId;
+                          const fineId = selectedPaymentForVerification.fineId;
+                          let feeAmount: number | null = null;
+                          
+                          if (feeId && allFeesFromDatabase) {
+                            const fee = allFeesFromDatabase.find((f: any) => f._id === feeId);
+                            if (fee) {
+                              feeAmount = fee.amount;
+                            }
+                          } else if (fineId && allFinesFromDatabase) {
+                            const fine = allFinesFromDatabase.find((f: any) => f._id === fineId);
+                            if (fine) {
+                              feeAmount = fine.amount;
+                            }
+                          }
+
+                          // Determine if this is a partial payment
+                          const isPartial = feeAmount !== null && adjustedAmount < feeAmount;
+                          const finalStatus = isPartial ? "Pending" : "Paid";
+                          
+                          // Build admin notes
+                          let finalAdminNotes = verificationNotes.trim();
+                          if (isPartial && feeAmount !== null) {
+                            const remaining = feeAmount - adjustedAmount;
+                            finalAdminNotes = finalAdminNotes 
+                              ? `${finalAdminNotes}\n\nPartial payment: $${adjustedAmount.toFixed(2)} of $${feeAmount.toFixed(2)}. Remaining: $${remaining.toFixed(2)}.`
+                              : `Partial payment: $${adjustedAmount.toFixed(2)} of $${feeAmount.toFixed(2)}. Remaining: $${remaining.toFixed(2)}.`;
+                          }
+
+                          await verifyVenmoPayment({
+                            paymentId: selectedPaymentForVerification._id,
+                            status: finalStatus,
+                            verificationStatus: "Verified",
+                            adjustedAmount: adjustedAmount,
+                            adminNotes: finalAdminNotes || undefined,
+                          });
+                          
+                          const successMessage = isPartial 
+                            ? `Payment verified (partial). Fee remains Pending.`
+                            : 'Payment verified successfully!';
+                          Alert.alert('Success', successMessage);
+                          setShowVerificationModal(false);
+                          setSelectedPaymentForVerification(null);
+                          setVerificationNotes('');
+                          setAdjustedPaymentAmount('');
+                          await handleRefresh();
+                        } catch (error) {
+                          console.error('Verification error:', error);
+                          Alert.alert('Error', 'Failed to verify payment.');
+                        }
+                      }}
+                    >
+                      <Ionicons name="checkmark-circle" size={20} color="#ffffff" />
+                      <Text style={styles.verifyButtonText}>Verify Payment</Text>
+                    </TouchableOpacity>
+                  </View>
+                </ScrollView>
+              )}
+            </View>
+          </KeyboardAvoidingView>
+        )}
       </Modal>
 
       {/* Receipt Image Viewer Modal */}
@@ -5070,10 +6159,11 @@ const AdminScreen = () => {
           </View>
           {selectedReceiptImage && (
             <View style={styles.receiptViewerContent}>
-              <Image
-                source={{ uri: selectedReceiptImage }}
+              <OptimizedImage
+                source={selectedReceiptImage?.startsWith('http') ? selectedReceiptImage : undefined}
+                storageId={selectedReceiptImage?.startsWith('http') ? undefined : selectedReceiptImage}
                 style={styles.receiptViewerImage}
-                resizeMode="contain"
+                contentFit="contain"
               />
             </View>
           )}
@@ -5505,6 +6595,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
     marginRight: 12,
   },
+  modalBodyPadding: {
+    padding: Platform.OS === 'web' ? 24 : 20,
+    paddingHorizontal: Platform.OS === 'web' ? 24 : 20,
+  },
   modalTitle: {
     fontSize: 20,
     fontWeight: 'bold',
@@ -5782,13 +6876,16 @@ const styles = StyleSheet.create({
   formModalContent: {
     backgroundColor: '#ffffff',
     borderRadius: 20,
-    width: '90%',
-    maxHeight: '80%',
+    width: Platform.OS === 'web' ? '90%' : '95%',
+    maxHeight: Platform.OS === 'web' ? '80%' : Dimensions.get('window').height * 0.85,
+    maxWidth: Platform.OS === 'web' ? 600 : '95%',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.25,
     shadowRadius: 20,
     elevation: 10,
+    flexDirection: 'column',
+    overflow: 'hidden',
   },
   alertHeader: {
     flexDirection: 'row',
@@ -6024,6 +7121,43 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 20,
   },
+  feesGridSortRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 16,
+    marginHorizontal: 16,
+  },
+  feesGridSortLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6b7280',
+    marginRight: 4,
+  },
+  feesGridSortOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#f3f4f6',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  feesGridSortOptionActive: {
+    backgroundColor: '#ec4899',
+    borderColor: '#ec4899',
+  },
+  feesGridSortOptionText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#6b7280',
+  },
+  feesGridSortOptionTextActive: {
+    color: '#ffffff',
+  },
   // Fees grid container for mobile/ narrow desktop
   feesGridContainerMobile: {
     // No negative margin needed - cards have their own margins
@@ -6118,6 +7252,9 @@ const styles = StyleSheet.create({
   gridPaidBadge: {
     backgroundColor: '#d1fae5',
   },
+  gridPartialPaidBadge: {
+    backgroundColor: '#fef3c7',
+  },
   gridNoFeeBadge: {
     backgroundColor: '#f3f4f6',
   },
@@ -6128,6 +7265,12 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
     marginLeft: 4,
+  },
+  gridPartialPaymentText: {
+    fontSize: 11,
+    color: '#f59e0b',
+    fontWeight: '500',
+    marginBottom: 4,
   },
   paymentMethodBadge: {
     flexDirection: 'row',
@@ -6150,24 +7293,28 @@ const styles = StyleSheet.create({
   },
   adminFeeButtonsContainer: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 12,
     marginTop: 16,
-    paddingHorizontal: 20,
-    justifyContent: Platform.OS === 'web' ? 'flex-start' : 'center',
+    paddingHorizontal: Platform.OS === 'web' ? 20 : 16,
+    justifyContent: 'flex-start',
+    alignItems: 'stretch',
   },
   adminFeeButton: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#ec4899',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
     borderRadius: 8,
     gap: 6,
-    minWidth: 44,
     minHeight: 44,
-    justifyContent: 'center',
+    alignSelf: 'stretch',
     zIndex: 10,
     elevation: 10,
+  },
+  createPollButton: {
+    paddingHorizontal: 16,
+    flexShrink: 0,
   },
   adminFeeButtonPressed: {
     opacity: 0.7,
@@ -6177,8 +7324,11 @@ const styles = StyleSheet.create({
   },
   adminFeeButtonText: {
     color: '#ffffff',
-    fontSize: 12,
     fontWeight: '600',
+    flexShrink: 1,
+  },
+  createPollButtonText: {
+    flexShrink: 0,
   },
   paymentMethodContainer: {
     flexDirection: 'row',
@@ -6519,6 +7669,9 @@ const styles = StyleSheet.create({
   gridFineStatusPaid: {
     backgroundColor: '#d1fae5',
   },
+  gridFineStatusPartial: {
+    backgroundColor: '#fef3c7',
+  },
   gridFineStatusPending: {
     backgroundColor: '#fef2f2',
   },
@@ -6528,6 +7681,12 @@ const styles = StyleSheet.create({
     marginLeft: 3,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  gridFinePartialPaymentText: {
+    fontSize: 9,
+    color: '#f59e0b',
+    fontWeight: '500',
+    marginBottom: 2,
   },
   // Role statistics styles
   roleStatsContainer: {
@@ -6932,12 +8091,26 @@ const styles = StyleSheet.create({
     gap: 16,
     padding: 8,
   },
+  petsGridContainerSingleColumn: {
+    paddingHorizontal: 16,
+  },
   petCardWrapper: {
     width: '47%',
     minWidth: 200,
   },
+  petCardWrapperSingleColumn: {
+    width: '100%',
+    minWidth: 0,
+  },
   petCardWrapperDesktop: {
     width: '30%',
+  },
+  petCardImageContainerSingleColumn: {
+    marginBottom: 16,
+  },
+  petImageAvatarSingleColumn: {
+    width: 160,
+    height: 160,
   },
   petGridCard: {
     width: '100%',
@@ -7904,6 +9077,109 @@ const styles = StyleSheet.create({
   paymentSearchClear: {
     marginLeft: 8,
   },
+  transactionsList: {
+    flex: 1,
+    marginTop: 8,
+  },
+  transactionsListContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 24,
+  },
+  loadMoreContainer: {
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+  },
+  loadMoreButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#2563eb',
+    gap: 8,
+    minWidth: 140,
+  },
+  loadMoreButtonText: {
+    color: '#2563eb',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  loadMoreAllText: {
+    color: '#6b7280',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  transactionCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  transactionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  transactionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+  transactionStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    gap: 4,
+  },
+  transactionStatusText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  transactionVerificationBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 4,
+    gap: 3,
+  },
+  transactionVerificationText: {
+    fontSize: 10,
+    fontWeight: '500',
+  },
+  transactionAmount: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1f2937',
+  },
+  transactionDetails: {
+    gap: 8,
+  },
+  transactionDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  transactionDetailText: {
+    fontSize: 13,
+    color: '#6b7280',
+    flex: 1,
+  },
   pendingPaymentsHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -7937,14 +9213,15 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    padding: Platform.OS === 'web' ? 20 : 10,
   },
   modalContent: {
     backgroundColor: '#ffffff',
     borderRadius: 16,
     width: '100%',
-    maxWidth: 500,
-    maxHeight: '80%',
+    maxWidth: Platform.OS === 'web' ? 500 : '95%',
+    maxHeight: Platform.OS === 'web' ? '80%' : '90%',
+    marginHorizontal: Platform.OS === 'web' ? 0 : 10,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
@@ -7952,7 +9229,7 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   modalScrollView: {
-    padding: 20,
+    padding: Platform.OS === 'web' ? 20 : 16,
   },
   verificationPaymentInfo: {
     flexDirection: 'row',
@@ -7982,7 +9259,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#ef4444',
-    paddingVertical: 14,
+    paddingVertical: Platform.OS === 'web' ? 14 : 16,
+    minHeight: Platform.OS === 'web' ? undefined : 44,
     borderRadius: 8,
     gap: 8,
   },
@@ -7997,13 +9275,63 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#10b981',
-    paddingVertical: 14,
+    paddingVertical: Platform.OS === 'web' ? 14 : 16,
+    minHeight: Platform.OS === 'web' ? undefined : 44,
     borderRadius: 8,
     gap: 8,
   },
   verifyButtonText: {
     color: '#ffffff',
     fontSize: 16,
+    fontWeight: '600',
+  },
+  paymentComparisonContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 8,
+    gap: 8,
+  },
+  partialPaymentWarning: {
+    backgroundColor: '#fef3c7',
+    borderWidth: 1,
+    borderColor: '#f59e0b',
+  },
+  fullPaymentSuccess: {
+    backgroundColor: '#d1fae5',
+    borderWidth: 1,
+    borderColor: '#10b981',
+  },
+  paymentComparisonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    flex: 1,
+  },
+  paymentComparisonSubtext: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 4,
+    width: '100%',
+  },
+  correctAmountButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#2563eb',
+    paddingVertical: Platform.OS === 'web' ? 8 : 12,
+    paddingHorizontal: 12,
+    minHeight: Platform.OS === 'web' ? undefined : 44,
+    borderRadius: 8,
+    marginTop: 12,
+    gap: 6,
+  },
+  correctAmountButtonText: {
+    color: '#2563eb',
+    fontSize: 14,
     fontWeight: '600',
   },
   receiptViewerOverlay: {

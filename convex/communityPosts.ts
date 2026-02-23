@@ -1,24 +1,6 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
-
-// Helper function to batch resolve storage URLs
-async function resolveStorageUrls(ctx: any, storageIds: string[]): Promise<Map<string, string>> {
-  const urls = new Map<string, string>();
-  const uniqueIds = Array.from(new Set(storageIds.filter(Boolean)));
-
-  await Promise.all(
-    uniqueIds.map(async (id) => {
-      try {
-        const url = await ctx.storage.getUrl(id);
-        if (url) urls.set(id, url);
-      } catch (error) {
-        console.log(`Failed to resolve URL for storage ID ${id}:`, error);
-      }
-    })
-  );
-
-  return urls;
-}
+import { api } from "./_generated/api";
 
 export const getAll = query({
   args: {},
@@ -58,33 +40,29 @@ export const getAll = query({
       }
     });
 
-    // Sort comments within each post and add profile images
-    const postsWithComments = await Promise.all(posts.map(async (post) => {
+    // Sort comments within each post and add profile image storage IDs
+    const postsWithComments = posts.map((post) => {
       const comments = (commentsByPostId.get(post._id) || [])
         .sort((a: any, b: any) => a.createdAt - b.createdAt); // Order ascending
 
-        // Get author profile image for each comment
-      const commentsWithProfileImages = await Promise.all(comments.map(async (comment: any) => {
+        // Get author profile image storage ID for each comment
+      const commentsWithProfileImages = comments.map((comment: any) => {
           const authorResident = residentsByName.get(comment.author);
           return {
             ...comment,
-            authorProfileImageUrl: authorResident?.profileImage
-              ? await ctx.storage.getUrl(authorResident.profileImage)
-              : null
+            authorProfileImage: authorResident?.profileImage || null
           };
-        }));
+        });
 
-        // Get author profile image for the post
+        // Get author profile image storage ID for the post
         const authorResident = residentsByName.get(post.author);
 
         return {
           ...post,
           comments: commentsWithProfileImages,
-          authorProfileImageUrl: authorResident?.profileImage
-            ? await ctx.storage.getUrl(authorResident.profileImage)
-            : null
+          authorProfileImage: authorResident?.profileImage || null
         };
-    }));
+    });
 
     return postsWithComments;
   },
@@ -127,17 +105,15 @@ export const getPaginated = query({
       residentsByName.set(fullName, resident);
     });
     
-    // Get author profile image for each post (no comments loaded)
-    const postsWithProfileImages = await Promise.all(paginatedPosts.map(async (post) => {
+    // Get author profile image storage ID for each post (no comments loaded)
+    const postsWithProfileImages = paginatedPosts.map((post) => {
       const authorResident = residentsByName.get(post.author);
       return {
         ...post,
         comments: [], // Empty comments array for lazy loading
-        authorProfileImageUrl: authorResident?.profileImage
-          ? await ctx.storage.getUrl(authorResident.profileImage)
-          : null
+        authorProfileImage: authorResident?.profileImage || null
       };
-    }));
+    });
     
     return {
       items: postsWithProfileImages,
@@ -191,33 +167,29 @@ export const getByCategory = query({
       }
     });
 
-    // Sort comments within each post and add profile images
-    const postsWithComments = await Promise.all(posts.map(async (post) => {
+    // Sort comments within each post and add profile image storage IDs
+    const postsWithComments = posts.map((post) => {
       const comments = (commentsByPostId.get(post._id) || [])
         .sort((a: any, b: any) => a.createdAt - b.createdAt); // Order ascending
 
-        // Get author profile image for each comment
-      const commentsWithProfileImages = await Promise.all(comments.map(async (comment: any) => {
+        // Get author profile image storage ID for each comment
+      const commentsWithProfileImages = comments.map((comment: any) => {
           const authorResident = residentsByName.get(comment.author);
           return {
             ...comment,
-            authorProfileImageUrl: authorResident?.profileImage
-              ? await ctx.storage.getUrl(authorResident.profileImage)
-              : null
+            authorProfileImage: authorResident?.profileImage || null
           };
-        }));
+        });
 
-        // Get author profile image for the post
+        // Get author profile image storage ID for the post
         const authorResident = residentsByName.get(post.author);
 
         return {
           ...post,
           comments: commentsWithProfileImages,
-          authorProfileImageUrl: authorResident?.profileImage
-            ? await ctx.storage.getUrl(authorResident.profileImage)
-            : null
+          authorProfileImage: authorResident?.profileImage || null
         };
-    }));
+    });
 
     return postsWithComments;
   },
@@ -252,6 +224,7 @@ export const create = mutation({
       v.literal("Lost & Found")
     ),
     images: v.optional(v.array(v.string())),
+    videos: v.optional(v.array(v.string())),
     link: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -279,6 +252,7 @@ export const update = mutation({
       v.literal("Lost & Found")
     )),
     images: v.optional(v.array(v.string())),
+    videos: v.optional(v.array(v.string())),
     link: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -307,7 +281,7 @@ export const remove = mutation({
       await ctx.db.delete(comment._id);
     }
     
-    // Delete storage files associated with the post (images)
+    // Delete storage files associated with the post (images and videos)
     if (post?.images && Array.isArray(post.images)) {
       for (const imageStorageId of post.images) {
         try {
@@ -315,6 +289,16 @@ export const remove = mutation({
         } catch (error) {
           // Log but don't fail if storage deletion fails (file may not exist)
           console.log(`Failed to delete storage file ${imageStorageId}:`, error);
+        }
+      }
+    }
+    if (post?.videos && Array.isArray(post.videos)) {
+      for (const videoStorageId of post.videos) {
+        try {
+          await ctx.storage.delete(videoStorageId as any);
+        } catch (error) {
+          // Log but don't fail if storage deletion fails (file may not exist)
+          console.log(`Failed to delete storage file ${videoStorageId}:`, error);
         }
       }
     }
@@ -346,11 +330,33 @@ export const addComment = mutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+
+    const post = await ctx.db.get(args.postId);
+    if (!post) throw new Error("Post not found");
+
     const commentId = await ctx.db.insert("comments", {
       ...args,
       createdAt: now,
       updatedAt: now,
     });
+
+    // Notify post author of new comment (skip if commenter is the author)
+    if (post.author !== args.author) {
+      const residents = await ctx.db.query("residents").collect();
+      const postAuthorResident = residents.find(
+        (r) => `${r.firstName} ${r.lastName}` === post.author
+      );
+      if (postAuthorResident?.isActive) {
+        await ctx.runMutation(api.notifications.createNotificationForUsers, {
+          userIds: [postAuthorResident._id.toString()],
+          type: "community_post",
+          title: "New Comment",
+          body: `${args.author} commented on: ${post.title}`,
+          data: { author: args.author, postTitle: post.title },
+        });
+      }
+    }
+
     return commentId;
   },
 });
@@ -385,16 +391,14 @@ export const getCommentsByPost = query({
       residentsByName.set(fullName, resident);
     });
     
-    // Get author profile image for each comment
-    const commentsWithProfileImages = await Promise.all(comments.map(async comment => {
+    // Get author profile image storage ID for each comment
+    const commentsWithProfileImages = comments.map(comment => {
       const authorResident = residentsByName.get(comment.author);
       return {
         ...comment,
-        authorProfileImageUrl: authorResident?.profileImage
-          ? await ctx.storage.getUrl(authorResident.profileImage)
-          : null
+        authorProfileImage: authorResident?.profileImage || null
       };
-    }));
+    });
     
     return commentsWithProfileImages;
   },
@@ -422,7 +426,7 @@ export const getAllComments = query({
       residentsByName.set(fullName, resident);
     });
     
-    // Get post information and author profile image for each comment
+    // Get post information and author profile image storage ID for each comment
     const commentsWithPosts = await Promise.all(
       comments.map(async (comment) => {
         const post = await ctx.db.get(comment.postId);
@@ -431,9 +435,7 @@ export const getAllComments = query({
         return { 
           ...comment, 
           postTitle: post?.title || 'Deleted Post',
-          authorProfileImageUrl: authorResident?.profileImage
-            ? await ctx.storage.getUrl(authorResident.profileImage)
-            : null
+          authorProfileImage: authorResident?.profileImage || null
         };
       })
     );

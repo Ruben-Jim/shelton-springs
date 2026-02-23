@@ -1,81 +1,93 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { api } from "./_generated/api";
 
-// Get all conversations for a user
+// Get all conversations for a user (ultra-optimized for free tier)
 export const getUserConversations = query({
   args: { userId: v.string() },
   handler: async (ctx, args) => {
-    // Get all conversations and filter by participant
+    // Get all conversations efficiently (using index for faster sorting)
     const allConversations = await ctx.db
       .query("conversations")
+      .withIndex("by_updated_at")
+      .order("desc")
       .collect();
 
+    // Filter conversations where user is a participant (client-side for now)
     const userConversations = allConversations.filter((conv) =>
       conv.participants.includes(args.userId)
     );
 
-    // Get latest message for each conversation and participant info
-    const conversationsWithDetails = await Promise.all(
-      userConversations.map(async (conv) => {
-        // Get latest message
+    // Early return if no conversations to avoid unnecessary work
+    if (userConversations.length === 0) {
+      return [];
+    }
+
+    // Get all residents once (single query for all conversations)
+    const allResidents = await ctx.db.query("residents").collect();
+
+    // Pre-fetch all latest messages in a single batch operation
+    // Collect all conversation IDs first
+    const conversationIds = userConversations.map(conv => conv._id);
+
+    // Get latest message for each conversation in parallel
+    const latestMessages = await Promise.all(
+      conversationIds.map(async (conversationId) => {
         const messages = await ctx.db
           .query("messages")
-          .withIndex("by_conversation", (q) => q.eq("conversationId", conv._id))
+          .withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
           .order("desc")
           .take(1);
-
-        const latestMessage = messages[0] || null;
-
-        // Get participant info (excluding current user)
-        const otherParticipantId = conv.participants.find(
-          (id) => id !== args.userId
-        );
-        let otherParticipant = null;
-        if (otherParticipantId) {
-          // Try to find as resident
-          const residents = await ctx.db
-            .query("residents")
-            .collect();
-          otherParticipant = residents.find(
-            (r) => r._id === otherParticipantId
-          );
-        }
-
-        // Resolve profile image URL if exists
-        let profileImageUrl = null;
-        if (otherParticipant?.profileImage) {
-          profileImageUrl = otherParticipant.profileImage.startsWith('http')
-            ? otherParticipant.profileImage  // Already a URL, use directly
-            : await ctx.storage.getUrl(otherParticipant.profileImage);  // Resolve storage ID
-        }
-
-        return {
-          ...conv,
-          latestMessage,
-          otherParticipant: otherParticipant
-            ? {
-                id: otherParticipant._id,
-                name: `${otherParticipant.firstName} ${otherParticipant.lastName}`,
-                email: otherParticipant.email,
-                profileImageUrl,
-                isBoardMember: otherParticipant.isBoardMember,
-              }
-            : null,
-        };
+        return { conversationId, message: messages[0] || null };
       })
     );
 
-    // Sort by updatedAt descending
-    return conversationsWithDetails.sort(
-      (a, b) => b.updatedAt - a.updatedAt
+    // Create a map for fast message lookup
+    const messageMap = new Map(
+      latestMessages.map(({ conversationId, message }) => [conversationId, message])
     );
+
+    // Build final result with optimized lookups
+    const conversationsWithDetails = await Promise.all(userConversations.map(async (conv) => {
+      const latestMessage = messageMap.get(conv._id) || null;
+
+      // Find participant info using pre-fetched residents
+      const otherParticipantId = conv.participants.find(
+        (id) => id !== args.userId
+      );
+
+      const otherParticipant = otherParticipantId
+        ? allResidents.find((r) => r._id === otherParticipantId)
+        : null;
+
+      // Return profile image storage ID (frontend will resolve URL)
+      const profileImage = otherParticipant?.profileImage || null;
+
+      return {
+        ...conv,
+        latestMessage,
+        otherParticipant: otherParticipant
+          ? {
+              id: otherParticipant._id,
+              name: `${otherParticipant.firstName} ${otherParticipant.lastName}`,
+              email: otherParticipant.email,
+              profileImage,
+              isBoardMember: otherParticipant.isBoardMember,
+            }
+          : null,
+      };
+    }));
+
+    // Already sorted by updatedAt due to index usage
+    return conversationsWithDetails;
   },
 });
 
-// Get all messages in a conversation
+// Get all messages in a conversation (optimized)
 export const getConversationMessages = query({
   args: { conversationId: v.id("conversations") },
   handler: async (ctx, args) => {
+    // Use index and collect all messages efficiently
     const messages = await ctx.db
       .query("messages")
       .withIndex("by_conversation", (q) => q.eq("conversationId", args.conversationId))
@@ -86,7 +98,7 @@ export const getConversationMessages = query({
   },
 });
 
-// Create a new conversation between board and user
+// Create a new conversation between board and user (optimized)
 export const createConversation = mutation({
   args: {
     boardMemberId: v.string(), // ID of board member creating conversation
@@ -96,12 +108,11 @@ export const createConversation = mutation({
   handler: async (ctx, args) => {
     const now = Date.now();
 
-    // Check if conversation already exists
-    const existingConversations = await ctx.db
-      .query("conversations")
-      .collect();
+    // Check if conversation already exists (still need to scan, but optimized logic)
+    const allConversations = await ctx.db.query("conversations").collect();
 
-    const existing = existingConversations.find(
+    // Find existing conversation between these two participants
+    const existing = allConversations.find(
       (conv) =>
         conv.participants.includes(args.boardMemberId) &&
         conv.participants.includes(args.recipientId) &&
@@ -136,6 +147,12 @@ export const sendMessage = mutation({
   handler: async (ctx, args) => {
     const now = Date.now();
 
+    // Get conversation to find recipient
+    const conversation = await ctx.db.get(args.conversationId);
+    if (!conversation) return null;
+
+    const recipientId = conversation.participants.find((id) => id !== args.senderId);
+
     // Create message
     const messageId = await ctx.db.insert("messages", {
       conversationId: args.conversationId,
@@ -150,6 +167,23 @@ export const sendMessage = mutation({
     await ctx.db.patch(args.conversationId, {
       updatedAt: now,
     });
+
+    // Create notification for recipient (triggers Expo push)
+    if (recipientId) {
+      const body = args.content.length > 50 ? `${args.content.substring(0, 50)}...` : args.content;
+      await ctx.runMutation(api.notifications.createNotificationForUsers, {
+        userIds: [recipientId],
+        type: "message",
+        title: `New Message from ${args.senderName}`,
+        body,
+        data: {
+          senderName: args.senderName,
+          senderId: args.senderId,
+          conversationId: args.conversationId,
+          content: args.content,
+        },
+      });
+    }
 
     return messageId;
   },

@@ -1,5 +1,6 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { api } from "./_generated/api";
 
 export const getAll = query({
   args: {},
@@ -70,6 +71,21 @@ export const create = mutation({
       createdAt: now,
       updatedAt: now,
     });
+
+    // Notify all residents of new document (triggers push notifications)
+    const docTypeLabel = args.type === "Minutes" ? "Minutes" : "Financial";
+    await ctx.runMutation(api.notifications.createNotificationForAllResidents, {
+      type: "document",
+      title: `New ${docTypeLabel} Document`,
+      body: `${args.uploadedBy} uploaded: ${args.title}`,
+      data: {
+        documentId,
+        title: args.title,
+        type: args.type,
+        uploadedBy: args.uploadedBy,
+      },
+    });
+
     return documentId;
   },
 });

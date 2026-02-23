@@ -54,22 +54,20 @@ const SignupScreen = () => {
   // ScrollView ref for better control
   const scrollViewRef = useRef<ScrollView>(null);
 
-  // Format phone number: +1 (123) 456-7890
+  // Format phone number: (555) 555-5555 (no +1 forced)
   const formatPhoneNumber = (text: string): string => {
-    // Remove any non-numeric characters
     const numbers = text.replace(/\D/g, '');
-    
-    // Format as +1 (123) 456-7890
-    if (numbers.length === 0) {
-      return '';
-    } else if (numbers.length <= 1) {
-      return `+${numbers}`;
-    } else if (numbers.length <= 4) {
-      return `+1 (${numbers.slice(1)}`;
-    } else if (numbers.length <= 7) {
-      return `+1 (${numbers.slice(1, 4)}) ${numbers.slice(4)}`;
+    if (numbers.length === 0) return '';
+
+    // Use last 10 digits if 11 digits and starts with 1 (e.g. 15596537380)
+    const digits = numbers.length === 11 && numbers[0] === '1' ? numbers.slice(1) : numbers;
+
+    if (digits.length <= 3) {
+      return digits.length > 0 ? `(${digits}` : digits;
+    } else if (digits.length <= 6) {
+      return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
     } else {
-      return `+1 (${numbers.slice(1, 4)}) ${numbers.slice(4, 7)}-${numbers.slice(7, 11)}`;
+      return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6, 10)}`;
     }
   };
 
@@ -411,14 +409,15 @@ const SignupScreen = () => {
             <Text style={styles.label}>Phone Number *</Text>
             <TextInput
               style={[styles.input, errors.phone ? styles.inputError : null]}
-              placeholder="Enter phone number"
+              placeholder="(555) 123-4567"
               value={formData.phone}
-              onChangeText={(text) => {
-                const formatted = formatPhoneNumber(text);
-                updateFormData('phone', formatted);
+              onChangeText={(text) => updateFormData('phone', text)}
+              onBlur={() => {
+                const formatted = formatPhoneNumber(formData.phone);
+                if (formatted) updateFormData('phone', formatted);
               }}
               keyboardType="phone-pad"
-              maxLength={17}
+              maxLength={14}
             />
             {errors.phone ? <Text style={styles.errorText}>{errors.phone}</Text> : null}
 

@@ -1,5 +1,6 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 
 // Get all residents
 export const getAll = query({
@@ -7,17 +8,8 @@ export const getAll = query({
   handler: async (ctx) => {
     const residents = await ctx.db.query("residents").collect();
 
-    // Resolve profile image URLs
-    const residentsWithUrls = await Promise.all(residents.map(async (resident) => ({
-      ...resident,
-      profileImageUrl: resident.profileImage
-        ? (resident.profileImage.startsWith('http')
-            ? resident.profileImage  // Already a URL, use directly
-            : await ctx.storage.getUrl(resident.profileImage))  // Resolve storage ID
-        : null
-    })));
-
-    return residentsWithUrls;
+    // Return residents with profileImage storage ID (frontend will resolve URLs)
+    return residents;
   },
 });
 
@@ -172,17 +164,45 @@ export const getActive = query({
       .filter((q) => q.eq(q.field("isActive"), true))
       .collect();
 
-    // Resolve profile image URLs
-    const residentsWithUrls = await Promise.all(residents.map(async (resident) => ({
-      ...resident,
-      profileImageUrl: resident.profileImage
-        ? (resident.profileImage.startsWith('http')
-            ? resident.profileImage  // Already a URL, use directly
-            : await ctx.storage.getUrl(resident.profileImage))  // Resolve storage ID
-        : null
-    })));
+    // Return residents with profileImage storage ID (frontend will resolve URLs)
+    return residents;
+  },
+});
 
-    return residentsWithUrls;
+// Update push token for remote notifications (Expo Push)
+export const updatePushToken = mutation({
+  args: {
+    userId: v.id("residents"),
+    expoPushToken: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    await ctx.db.patch(args.userId, {
+      expoPushToken: args.expoPushToken ?? undefined,
+      updatedAt: now,
+    });
+    return { success: true };
+  },
+});
+
+// Internal: Get push tokens for user IDs (used by push action)
+export const getPushTokensForUserIds = internalQuery({
+  args: {
+    userIds: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const tokens: { userId: string; token: string }[] = [];
+    for (const userId of args.userIds) {
+      try {
+        const resident = await ctx.db.get(userId as Id<"residents">);
+        if (resident?.expoPushToken) {
+          tokens.push({ userId, token: resident.expoPushToken });
+        }
+      } catch {
+        // Skip invalid IDs
+      }
+    }
+    return tokens;
   },
 });
 

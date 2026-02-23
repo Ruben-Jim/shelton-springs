@@ -27,6 +27,7 @@ import type * as notifications from "../notifications.js";
 import type * as payments from "../payments.js";
 import type * as pets from "../pets.js";
 import type * as polls from "../polls.js";
+import type * as push from "../push.js";
 import type * as residentNotifications from "../residentNotifications.js";
 import type * as residents from "../residents.js";
 import type * as storage from "../storage.js";
@@ -55,6 +56,7 @@ declare const fullApi: ApiFromModules<{
   payments: typeof payments;
   pets: typeof pets;
   polls: typeof polls;
+  push: typeof push;
   residentNotifications: typeof residentNotifications;
   residents: typeof residents;
   storage: typeof storage;

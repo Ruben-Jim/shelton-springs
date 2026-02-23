@@ -7,6 +7,7 @@ import {
   Animated,
   Platform,
   Dimensions,
+  Keyboard,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,7 +21,10 @@ const MinimizedMessageBubble: React.FC<MinimizedMessageBubbleProps> = ({ onPress
   const { hasUnreadMessages, latestMessagePreview, conversations } = useMessaging();
   const insets = useSafeAreaInsets();
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
+  const keyboardOffset = React.useRef(new Animated.Value(0)).current;
+  const [keyboardVisible, setKeyboardVisible] = React.useState(false);
   const screenWidth = Dimensions.get('window').width;
+  const isDesktop = screenWidth >= 1024;
 
   // Debug logging for iOS
   const handlePress = React.useCallback(() => {
@@ -46,6 +50,41 @@ const MinimizedMessageBubble: React.FC<MinimizedMessageBubbleProps> = ({ onPress
     }
   }, [hasUnreadMessages, latestMessagePreview]);
 
+  // Handle keyboard show/hide for mobile positioning
+  React.useEffect(() => {
+    if (isDesktop || Platform.OS === 'web') return;
+
+    const keyboardWillShow = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (e) => {
+        setKeyboardVisible(true);
+        // Use negative value to move up (translateY moves down with positive values)
+        Animated.timing(keyboardOffset, {
+          toValue: -e.endCoordinates.height,
+          duration: Platform.OS === 'ios' ? (e.duration || 250) : 250,
+          useNativeDriver: Platform.OS !== 'web',
+        }).start();
+      }
+    );
+
+    const keyboardWillHide = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      (e) => {
+        setKeyboardVisible(false);
+        Animated.timing(keyboardOffset, {
+          toValue: 0,
+          duration: Platform.OS === 'ios' ? (e.duration || 250) : 250,
+          useNativeDriver: Platform.OS !== 'web',
+        }).start();
+      }
+    );
+
+    return () => {
+      keyboardWillShow.remove();
+      keyboardWillHide.remove();
+    };
+  }, [keyboardOffset, isDesktop]);
+
   if (!hasUnreadMessages || conversations.length === 0) {
     return null;
   }
@@ -59,8 +98,11 @@ const MinimizedMessageBubble: React.FC<MinimizedMessageBubbleProps> = ({ onPress
         styles.container,
         {
           bottom: Platform.OS === 'ios' ? Math.max(insets.bottom, 16) + 60 : 80,
-          right: 16,
-          transform: [{ scale: scaleAnim }],
+          left: 16,
+          transform: [
+            { scale: scaleAnim },
+            { translateY: keyboardOffset },
+          ],
           maxWidth: screenWidth < 400 ? screenWidth - 32 : 320,
         },
       ]}

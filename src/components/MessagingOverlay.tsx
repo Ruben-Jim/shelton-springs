@@ -18,8 +18,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMessaging } from '../context/MessagingContext';
 import { useAuth } from '../context/AuthContext';
+import { useCachedResidents } from '../context/QueryCacheContext';
 import { useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
+import { useStorageUrl } from '../hooks/useStorageUrl';
 import ProfileImage from './ProfileImage';
 import { Id } from '../../convex/_generated/dataModel';
 
@@ -38,6 +40,9 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
     sendMessage,
     createConversationWithUser,
   } = useMessaging();
+
+  // Storage URL hooks for resolving profile images
+  const currentConversation = conversations.find((c) => c._id === activeConversationId);
   const insets = useSafeAreaInsets();
   const screenWidth = Dimensions.get('window').width;
   const isDesktop = screenWidth >= 1024;
@@ -49,11 +54,11 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
   const scrollViewRef = useRef<ScrollView>(null);
   const messageInputRef = useRef<TextInput>(null);
 
-  // Get all residents for board member to select from
-  const allResidents = useQuery(api.residents.getAll) || [];
+  // Get all residents for board member to select from - use cached to prevent duplicates
+  const allResidents = useCachedResidents();
 
   // Animation values
-  const slideAnim = useRef(new Animated.Value(isDesktop ? screenWidth : Dimensions.get('window').height)).current;
+  const slideAnim = useRef(new Animated.Value(isDesktop ? screenWidth : (Platform.OS === 'android' ? Dimensions.get('window').height : Dimensions.get('window').height))).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
   const keyboardOffset = useRef(new Animated.Value(0)).current;
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -151,12 +156,16 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
   const handleSendMessage = async () => {
     if (!messageText.trim() || !activeConversationId) return;
 
+    const textToSend = messageText.trim();
+    setMessageText(''); // Clear input immediately for better UX
+    messageInputRef.current?.blur();
+
     try {
-      await sendMessage(messageText);
-      setMessageText('');
-      messageInputRef.current?.blur();
+      await sendMessage(textToSend);
     } catch (error) {
       console.error('Error sending message:', error);
+      // Restore text on error for user to retry
+      setMessageText(textToSend);
     }
   };
 
@@ -191,12 +200,12 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
     return fullName.includes(query) || email.includes(query);
   });
 
-  const currentConversation = conversations.find((c) => c._id === activeConversationId);
   const otherParticipant = currentConversation?.otherParticipant;
 
   // Add console log for debugging on iOS
   useEffect(() => {
   }, [visible]);
+
 
   if (!visible) {
     return null;
@@ -238,11 +247,11 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                     { translateY: slideAnim },
                     { translateY: keyboardOffset },
                   ],
-              maxHeight: isDesktop ? '80vh' : '90%',
+              maxHeight: isDesktop ? '80%' : '90%',
               bottom: isDesktop ? 0 : 0,
               right: isDesktop ? 0 : undefined,
               paddingBottom: Platform.OS === 'ios' ? insets.bottom : 0,
-              ...(Platform.OS === 'ios' && {
+              ...((Platform.OS === 'ios' || Platform.OS === 'android') && {
                 position: 'absolute' as any,
                 left: 0,
                 right: 0,
@@ -250,7 +259,7 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
             },
           ]}
         >
-          <SafeAreaView edges={['top']} style={styles.safeArea}>
+          <SafeAreaView edges={Platform.OS === 'ios' ? ['top'] : []} style={styles.safeArea}>
             {/* Header */}
             <View style={styles.header}>
               <View style={styles.headerLeft}>
@@ -279,7 +288,11 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                     {otherParticipant && isBoardMember && (
                       <View style={[styles.conversationHeader, styles.conversationHeaderCentered]}>
                         <ProfileImage
-                          source={otherParticipant.profileImageUrl}
+                          source={
+                            otherParticipant.profileImage || 
+                            (allResidents?.find((r: any) => r._id === otherParticipant.id)?.profileImage) || 
+                            null
+                          }
                           size={40}
                           initials={otherParticipant.name
                             .split(' ')
@@ -339,7 +352,6 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                     placeholder="Search users..."
                     value={searchQuery}
                     onChangeText={setSearchQuery}
-                    autoFocus
                   />
                   {searchQuery.length > 0 && (
                     <TouchableOpacity onPress={() => setSearchQuery('')}>
@@ -355,7 +367,7 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                       onPress={() => handleSelectUser(resident._id)}
                     >
                       <ProfileImage
-                        source={resident.profileImageUrl}
+                        source={resident.profileImage}
                         size={48}
                         initials={`${resident.firstName[0]}${resident.lastName[0]}`}
                       />
@@ -409,7 +421,11 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                         onPress={() => openConversation(conversation._id)}
                       >
                         <ProfileImage
-                          source={other?.profileImageUrl}
+                          source={
+                            other?.profileImage || 
+                            (allResidents?.find((r: any) => r._id === other?.id)?.profileImage) || 
+                            null
+                          }
                           size={48}
                           initials={
                             other
@@ -474,7 +490,9 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                               source={
                                 isFromBoard
                                   ? undefined
-                                  : currentConversation?.otherParticipant?.profileImage
+                                  : (currentConversation?.otherParticipant?.profileImage || 
+                                     (allResidents?.find((r: any) => r._id === currentConversation?.otherParticipant?.id)?.profileImage) || 
+                                     null)
                               }
                               size={32}
                               initials={
@@ -492,7 +510,7 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                           {isCurrentUser && isBoardMember && (
                             <ProfileImage
                               source={
-                                user?.profileImageUrl
+                                user?.profileImage
                               }
                               size={32}
                               initials={
@@ -590,7 +608,7 @@ const styles = StyleSheet.create({
       right: 0,
       bottom: 0,
     }),
-    ...(Platform.OS === 'ios' && {
+    ...((Platform.OS === 'ios' || Platform.OS === 'android') && {
       position: 'absolute' as any,
       top: 0,
       left: 0,
@@ -604,10 +622,13 @@ const styles = StyleSheet.create({
       position: 'fixed' as any,
       zIndex: 10000,
     }),
+    ...(Platform.OS === 'android' && {
+      elevation: 10,
+    }),
   },
   desktopContainer: {
     width: 400,
-    maxWidth: '90vw',
+    maxWidth: '90%',
     height: '100%',
     borderLeftWidth: 1,
     borderLeftColor: '#e5e7eb',
@@ -626,12 +647,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 8,
     elevation: 8,
-    ...(Platform.OS === 'ios' && {
+    ...(Platform.OS === 'ios' || Platform.OS === 'android') && {
       position: 'absolute' as any,
       bottom: 0,
       left: 0,
       right: 0,
-    }),
+    },
   },
   safeArea: {
     flex: 1,
@@ -661,8 +682,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#eff6ff',
     borderRadius: 8,
     ...(Platform.OS === 'web' && {
-      cursor: 'pointer' as any,
-    }),
+      cursor: 'pointer',
+    } as any),
   },
   newMessageText: {
     fontSize: 14,
@@ -741,8 +762,8 @@ const styles = StyleSheet.create({
     borderBottomColor: '#f3f4f6',
     gap: 12,
     ...(Platform.OS === 'web' && {
-      cursor: 'pointer' as any,
-    }),
+      cursor: 'pointer',
+    } as any),
   },
   userItemInfo: {
     flex: 1,
@@ -790,8 +811,8 @@ const styles = StyleSheet.create({
     borderBottomColor: '#f3f4f6',
     gap: 12,
     ...(Platform.OS === 'web' && {
-      cursor: 'pointer' as any,
-    }),
+      cursor: 'pointer',
+    } as any),
   },
   conversationItemInfo: {
     flex: 1,
@@ -952,8 +973,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     ...(Platform.OS === 'web' && {
-      cursor: 'pointer' as any,
-    }),
+      cursor: 'pointer',
+    } as any),
   },
   sendButtonDisabled: {
     backgroundColor: '#e5e7eb',
@@ -970,8 +991,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#2563eb',
     borderRadius: 8,
     ...(Platform.OS === 'web' && {
-      cursor: 'pointer' as any,
-    }),
+      cursor: 'pointer',
+    } as any),
   },
   autoOpenText: {
     fontSize: 16,

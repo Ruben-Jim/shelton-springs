@@ -83,7 +83,8 @@ export default defineSchema({
       v.literal("Suggestion"),
       v.literal("Lost & Found")
     ),
-    images: v.optional(v.array(v.string())), // Array of image URLs
+    images: v.optional(v.array(v.string())), // Array of image storage IDs
+    videos: v.optional(v.array(v.string())), // Array of video storage IDs
     link: v.optional(v.string()), // Optional link URL
     likes: v.number(),
     createdAt: v.number(),
@@ -128,6 +129,7 @@ export default defineSchema({
     blockReason: v.optional(v.string()),
     password: v.optional(v.string()), // In production, this should be hashed
     profileImage: v.optional(v.string()), // URL to profile image
+    expoPushToken: v.optional(v.string()), // Expo push token for mobile push notifications
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_email", ["email"]),
@@ -230,7 +232,7 @@ export default defineSchema({
     createdBy: v.string(), // ID of board member who started conversation
     createdAt: v.number(),
     updatedAt: v.number(),
-  }),
+  }).index("by_updated_at", ["updatedAt"]),
 
   messages: defineTable({
     conversationId: v.id("conversations"),

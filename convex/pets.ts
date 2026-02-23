@@ -26,38 +26,17 @@ export const getAll = query({
       }
     });
     
-    // Collect all storage IDs for batch resolution
-    const allStorageIds: string[] = [];
-    pets.forEach((pet) => {
-      const resident = residentsById.get(pet.residentId);
-      if (pet.image) allStorageIds.push(pet.image);
-      if (resident?.profileImage) allStorageIds.push(resident.profileImage);
-    });
-
-    // Resolve all URLs in batch
-    const urlMap = new Map();
-    await Promise.all(
-      Array.from(new Set(allStorageIds)).map(async (id) => {
-        try {
-          const url = await ctx.storage.getUrl(id);
-          if (url) urlMap.set(id, url);
-        } catch (error) {
-          console.log(`Failed to resolve URL for storage ID ${id}:`, error);
-        }
-      })
-    );
-
-    // Join with resident data using the map
+    // Join with resident data and return storage IDs (frontend will resolve URLs)
     const petsWithResidentInfo = pets.map((pet) => {
       const resident = residentsById.get(pet.residentId);
         return {
           ...pet,
-          imageUrl: pet.image ? urlMap.get(pet.image) || null : null,
+          image: pet.image || null,
           residentName: resident ? `${resident.firstName} ${resident.lastName}` : 'Unknown',
           residentAddress: resident
             ? `${resident.address}${resident.unitNumber ? ` #${resident.unitNumber}` : ''}`
             : '',
-          profileImageUrl: resident?.profileImage ? urlMap.get(resident.profileImage) || null : null,
+          profileImage: resident?.profileImage || null,
         };
     });
     

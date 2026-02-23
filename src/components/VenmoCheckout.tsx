@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator,
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
+import { useCachedResidents } from '../context/QueryCacheContext';
 import QRCode from 'react-native-qrcode-svg';
 import { Id } from '../../convex/_generated/dataModel';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -32,7 +33,7 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
   const convex = useConvex();
   const createVenmoPayment = useMutation(api.payments.createVenmoPayment);
   const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
-  const residents = useQuery(api.residents.getAll) ?? [];
+  const residents = useCachedResidents();
   const [venmoUsername, setVenmoUsername] = useState('');
   const [venmoTransactionId, setVenmoTransactionId] = useState('');
   const [loading, setLoading] = useState(false);
