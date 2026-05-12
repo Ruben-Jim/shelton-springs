@@ -77,6 +77,7 @@ export const create = mutation({
     ),
     lastUpdated: v.string(),
     pdfUrl: v.optional(v.string()),
+    fileStorageId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -102,13 +103,39 @@ export const update = mutation({
       v.literal("General")
     )),
     lastUpdated: v.optional(v.string()),
-    pdfUrl: v.optional(v.string()),
+    pdfUrl: v.optional(v.union(v.string(), v.null())),
+    fileStorageId: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, args) => {
     const { id, ...updates } = args;
+    const existing = await ctx.db.get(id);
+    if (!existing) {
+      throw new Error("Covenant not found");
+    }
     const now = Date.now();
-    await ctx.db.patch(id, {
-      ...updates,
+
+    const nextFileStorageId =
+      updates.fileStorageId === undefined
+        ? existing.fileStorageId
+        : updates.fileStorageId === null
+          ? undefined
+          : updates.fileStorageId;
+
+    const nextPdfUrl =
+      updates.pdfUrl === undefined
+        ? existing.pdfUrl
+        : updates.pdfUrl === null
+          ? undefined
+          : updates.pdfUrl;
+
+    await ctx.db.replace(id, {
+      title: updates.title ?? existing.title,
+      description: updates.description ?? existing.description,
+      category: updates.category ?? existing.category,
+      lastUpdated: updates.lastUpdated ?? existing.lastUpdated,
+      pdfUrl: nextPdfUrl,
+      fileStorageId: nextFileStorageId,
+      createdAt: existing.createdAt,
       updatedAt: now,
     });
   },

@@ -499,4 +499,94 @@ export const correctPaymentAmount = mutation({
   },
 });
 
+/** Consolidate verified payments for a fee to match admin-entered amount paid. */
+export const adminReconcileVerifiedPaidForFee = mutation({
+  args: {
+    feeId: v.id("fees"),
+    userId: v.string(),
+    targetVerifiedTotal: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const fee = await ctx.db.get(args.feeId);
+    if (!fee) throw new Error("Fee not found");
+
+    const cap = Math.max(0, fee.amount);
+    const target = Math.min(Math.max(0, args.targetVerifiedTotal), cap);
+
+    const all = await ctx.db.query("payments").collect();
+    const linked = all.filter(
+      (p) => p.feeId === args.feeId && p.verificationStatus === "Verified",
+    );
+
+    for (const p of linked) {
+      await ctx.db.delete(p._id);
+    }
+
+    const now = Date.now();
+    if (target > 0.005) {
+      await ctx.db.insert("payments", {
+        userId: args.userId,
+        feeType: "Fee payment (admin adjusted)",
+        amount: target,
+        paymentDate: new Date().toISOString().split("T")[0],
+        status: "Paid",
+        paymentMethod: "Cash",
+        transactionId: `ADM-FEE-${args.feeId}-${now}`,
+        verificationStatus: "Verified",
+        feeId: args.feeId,
+        notes: "Consolidated verified total set from admin fee editor",
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    return { success: true, targetVerifiedTotal: target };
+  },
+});
+
+/** Consolidate verified payments for a fine to match admin-entered amount paid. */
+export const adminReconcileVerifiedPaidForFine = mutation({
+  args: {
+    fineId: v.id("fines"),
+    userId: v.string(),
+    targetVerifiedTotal: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const fine = await ctx.db.get(args.fineId);
+    if (!fine) throw new Error("Fine not found");
+
+    const cap = Math.max(0, fine.amount);
+    const target = Math.min(Math.max(0, args.targetVerifiedTotal), cap);
+
+    const all = await ctx.db.query("payments").collect();
+    const linked = all.filter(
+      (p) => p.fineId === args.fineId && p.verificationStatus === "Verified",
+    );
+
+    for (const p of linked) {
+      await ctx.db.delete(p._id);
+    }
+
+    const now = Date.now();
+    if (target > 0.005) {
+      await ctx.db.insert("payments", {
+        userId: args.userId,
+        feeType: "Fine payment (admin adjusted)",
+        amount: target,
+        paymentDate: new Date().toISOString().split("T")[0],
+        status: "Paid",
+        paymentMethod: "Cash",
+        transactionId: `ADM-FINE-${args.fineId}-${now}`,
+        verificationStatus: "Verified",
+        fineId: args.fineId,
+        notes: "Consolidated verified total set from admin fine editor",
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    return { success: true, targetVerifiedTotal: target };
+  },
+});
+
 

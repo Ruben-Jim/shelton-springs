@@ -1,6 +1,7 @@
 import { query, mutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { api } from "./_generated/api";
 
 // Get all residents
 export const getAll = query({
@@ -69,7 +70,13 @@ export const create = mutation({
       createdAt: now,
       updatedAt: now,
     });
-    
+
+    if (args.isResident && !args.isRenter) {
+      await ctx.runMutation(api.fees.ensureAnnualFeeForHomeowner, {
+        residentId: id,
+      });
+    }
+
     return id;
   },
 });
@@ -112,7 +119,14 @@ export const update = mutation({
       ...updates,
       updatedAt: now,
     });
-    
+
+    const updated = await ctx.db.get(id);
+    if (updated?.isResident && !updated.isRenter) {
+      await ctx.runMutation(api.fees.ensureAnnualFeeForHomeowner, {
+        residentId: id,
+      });
+    }
+
     return id;
   },
 });

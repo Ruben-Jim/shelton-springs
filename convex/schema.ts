@@ -27,6 +27,8 @@ export default defineSchema({
     ),
     lastUpdated: v.string(),
     pdfUrl: v.optional(v.string()),
+    /** Convex file storage ID for attached document or optimized image */
+    fileStorageId: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_category", ["category"]),
@@ -50,6 +52,7 @@ export default defineSchema({
     type: v.optional(v.string()), // 'Fee' or 'Fine'
     status: v.optional(v.union(
       v.literal("Pending"),
+      v.literal("Partial"),
       v.literal("Paid"),
       v.literal("Overdue")
     )),
@@ -63,6 +66,7 @@ export default defineSchema({
     dateIssued: v.string(),
     status: v.union(
       v.literal("Pending"),
+      v.literal("Partial"),
       v.literal("Paid"),
       v.literal("Overdue")
     ),
@@ -253,4 +257,11 @@ export default defineSchema({
     createdAt: v.number(), // Timestamp
   }).index("by_user", ["userId"])
     .index("by_user_unread", ["userId", "isRead"]),
+
+  passwordResetTokens: defineTable({
+    token: v.string(),
+    email: v.string(),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+  }).index("by_token", ["token"]).index("by_email", ["email"]),
 }); 

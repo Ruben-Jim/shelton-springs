@@ -44,6 +44,70 @@ export const getAll = query({
   },
 });
 
+// Get all pets grouped by resident (one "post" per household)
+export const getAllGroupedByResident = query({
+  args: {},
+  handler: async (ctx) => {
+    const pets = await ctx.db
+      .query("pets")
+      .order("desc")
+      .collect();
+
+    // Batch fetch all unique resident IDs
+    const residentIds = [...new Set(pets.map((pet) => pet.residentId))];
+    const residents = await Promise.all(residentIds.map((id) => ctx.db.get(id)));
+    const residentsById = new Map();
+    residents.forEach((resident) => {
+      if (resident) residentsById.set(resident._id, resident);
+    });
+
+    // Group pets by residentId
+    const grouped = new Map<
+      string,
+      {
+        residentId: string;
+        residentName: string;
+        residentAddress: string;
+        profileImage: string | null;
+        pets: Array<{
+          _id: string;
+          name: string;
+          image: string | null;
+          createdAt: number;
+          updatedAt: number;
+        }>;
+      }
+    >();
+
+    for (const pet of pets) {
+      const resident = residentsById.get(pet.residentId);
+      const residentName = resident ? `${resident.firstName} ${resident.lastName}` : "Unknown";
+      const residentAddress = resident
+        ? `${resident.address}${resident.unitNumber ? ` #${resident.unitNumber}` : ""}`
+        : "";
+      const key = pet.residentId.toString();
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          residentId: key,
+          residentName,
+          residentAddress,
+          profileImage: resident?.profileImage ?? null,
+          pets: [],
+        });
+      }
+      grouped.get(key)!.pets.push({
+        _id: pet._id,
+        name: pet.name,
+        image: pet.image || null,
+        createdAt: pet.createdAt,
+        updatedAt: pet.updatedAt,
+      });
+    }
+
+    return Array.from(grouped.values());
+  },
+});
+
 // Get pets by resident
 export const getByResident = query({
   args: {

@@ -73,6 +73,7 @@ export const update = mutation({
     status: v.optional(
       v.union(
         v.literal("Pending"),
+        v.literal("Partial"),
         v.literal("Paid"),
         v.literal("Overdue")
       )
@@ -453,6 +454,11 @@ export const createYearFeesForAllHomeowners = mutation({
         .filter(fee => fee.address)
         .map(fee => fee.address!)
     );
+    const existingUserIds = new Set(
+      existingFees
+        .filter(fee => fee.userId)
+        .map(fee => String(fee.userId))
+    );
     
     const now = Date.now();
     const feeRecords = [];
@@ -460,8 +466,13 @@ export const createYearFeesForAllHomeowners = mutation({
 
     // Create one fee record per unique address
     for (const [addressKey, homeownersAtAddress] of addressMap.entries()) {
-      // Skip if fee already exists for this address and year
-      if (existingAddresses.has(addressKey)) {
+      // Skip if fee already exists for this address and year.
+      // Also skip when a legacy userId-based annual fee already exists
+      // for any homeowner at this address (backward compatibility guard).
+      const hasLegacyUserFeeAtAddress = homeownersAtAddress.some((homeowner) =>
+        existingUserIds.has(String(homeowner._id))
+      );
+      if (existingAddresses.has(addressKey) || hasLegacyUserFeeAtAddress) {
         continue;
       }
       
@@ -508,6 +519,146 @@ export const createYearFeesForAllHomeowners = mutation({
       feesCreated: feeRecords.length,
       message: `Created ${feeRecords.length} annual fees for year ${args.year} (grouped by address)`,
     };
+  },
+});
+
+/** Add one annual fee row for a single property (admin full-record / manual catch-up). */
+export const createAnnualFeeForAddress = mutation({
+  args: {
+    year: v.number(),
+    amount: v.number(),
+    description: v.string(),
+    addressKey: v.string(),
+    primaryResidentId: v.id("residents"),
+  },
+  handler: async (ctx, args) => {
+    const existingFees = await ctx.db
+      .query("fees")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("frequency"), "Annually"),
+          q.eq(q.field("year"), args.year)
+        )
+      )
+      .collect();
+
+    if (existingFees.some((f) => f.address === args.addressKey)) {
+      throw new Error(
+        `An annual fee for ${args.year} already exists for this address.`
+      );
+    }
+
+    const existingUserIds = new Set(
+      existingFees.filter((fee) => fee.userId).map((fee) => String(fee.userId))
+    );
+    if (existingUserIds.has(String(args.primaryResidentId))) {
+      throw new Error(
+        `This resident already has an annual fee record for ${args.year}.`
+      );
+    }
+
+    const now = Date.now();
+    const dueDate = `${args.year}-12-31`;
+    const feeId = await ctx.db.insert("fees", {
+      name: `${args.description} ${args.year}`,
+      amount: args.amount,
+      frequency: "Annually",
+      dueDate,
+      description: args.description,
+      isLate: false,
+      userId: args.primaryResidentId,
+      address: args.addressKey,
+      year: args.year,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await ctx.runMutation(api.notifications.createNotificationForUsers, {
+      userIds: [args.primaryResidentId.toString()],
+      type: "fee",
+      title: "New Annual Fee",
+      body: `${args.description} ${args.year} - $${args.amount.toFixed(2)} (Due: ${dueDate})`,
+      data: {
+        year: args.year,
+        amount: args.amount,
+        description: args.description,
+        dueDate,
+      },
+    });
+
+    return {
+      success: true,
+      feeId,
+      message: `Annual fee for ${args.year} added for this address.`,
+    };
+  },
+});
+
+/**
+ * Create the year's annual HOA fee for a homeowner if missing (new signups / role changes).
+ * Defaults: current calendar year, $300, "Annual HOA Fee".
+ */
+export const ensureAnnualFeeForHomeowner = mutation({
+  args: {
+    residentId: v.id("residents"),
+    year: v.optional(v.number()),
+    amount: v.optional(v.number()),
+    description: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const resident = await ctx.db.get(args.residentId);
+    if (!resident || !resident.isResident || resident.isRenter) {
+      return { created: false, reason: "not_homeowner" as const };
+    }
+
+    const year = args.year ?? new Date().getFullYear();
+    const amount = args.amount ?? 300;
+    const description = args.description ?? "Annual HOA Fee";
+    const addressKey = `${resident.address}${resident.unitNumber ? ` Unit ${resident.unitNumber}` : ""}`;
+
+    const annualForYear = await ctx.db
+      .query("fees")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("frequency"), "Annually"),
+          q.eq(q.field("year"), year)
+        )
+      )
+      .collect();
+
+    const hasForAddress = annualForYear.some((f) => f.address === addressKey);
+    const hasForUser = annualForYear.some(
+      (f) => f.userId && String(f.userId) === String(resident._id)
+    );
+    if (hasForAddress || hasForUser) {
+      return { created: false, reason: "already_exists" as const };
+    }
+
+    const now = Date.now();
+    const dueDate = `${year}-12-31`;
+    await ctx.db.insert("fees", {
+      name: `${description} ${year}`,
+      amount,
+      frequency: "Annually",
+      dueDate,
+      description,
+      isLate: false,
+      userId: resident._id,
+      address: addressKey,
+      year,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await ctx.runMutation(api.notifications.createNotificationForUsers, {
+      userIds: [resident._id.toString()],
+      type: "fee",
+      title: "New Annual Fee",
+      body: `${description} ${year} - $${amount.toFixed(2)} (Due: ${dueDate})`,
+      data: { year, amount, description, dueDate },
+    });
+
+    return { created: true, reason: "inserted" as const };
   },
 });
 
@@ -622,7 +773,12 @@ export const getFinesForHomeowner = query({
 export const updateFineStatus = mutation({
   args: {
     fineId: v.id("fines"),
-    status: v.union(v.literal("Paid"), v.literal("Pending"), v.literal("Overdue")),
+    status: v.union(
+      v.literal("Paid"),
+      v.literal("Pending"),
+      v.literal("Partial"),
+      v.literal("Overdue"),
+    ),
   },
   handler: async (ctx, args) => {
     const fine = await ctx.db.get(args.fineId);

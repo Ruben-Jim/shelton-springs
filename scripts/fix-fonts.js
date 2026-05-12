@@ -100,3 +100,4 @@ if (fs.existsSync(contactPath)) {
 } else {
   console.log('⚠️ contact.html not found in project root');
 }
+

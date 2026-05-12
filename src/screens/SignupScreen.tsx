@@ -25,6 +25,7 @@ import { AuthStackParamList } from '../navigation/AuthNavigator';
 import { simpleAlert } from '../utils/webCompatibleAlert';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
+import { useResetTokenRedirect } from '../hooks/useResetTokenRedirect';
 import { getUploadReadyImage } from '../utils/imageUpload';
 
 type SignupScreenNavigationProp = StackNavigationProp<AuthStackParamList, 'Signup'>;
@@ -32,6 +33,7 @@ type SignupScreenNavigationProp = StackNavigationProp<AuthStackParamList, 'Signu
 const SignupScreen = () => {
   const navigation = useNavigation<SignupScreenNavigationProp>();
   const { signUp } = useAuth();
+  useResetTokenRedirect();
   const convex = useConvex();
   const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
   const [profileImage, setProfileImage] = useState<string | null>(null);

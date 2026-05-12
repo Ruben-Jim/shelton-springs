@@ -2,7 +2,7 @@
   "expo": {
     "name": "Shelton Springs",
     "slug": "shelton-springs",
-    "version": "1.5.6",
+    "version": "1.9.8",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "sheltonsprings",
@@ -55,6 +55,8 @@
     },
     "extra": {
       "convexUrl": "${EXPO_PUBLIC_CONVEX_URL}",
+      "iosAppStoreUrl": "${EXPO_PUBLIC_IOS_APP_STORE_URL}",
+      "iosAppStoreId": "6755036217",
       "router": {
         "origin": "https://sheltonsprings.homes"
       },

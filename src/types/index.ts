@@ -15,6 +15,8 @@ export interface Covenant {
   category: string;
   lastUpdated: string;
   pdfUrl?: string;
+  /** Convex storage ID for attached document or optimized image */
+  fileStorageId?: string;
 }
 
 export interface Fee {
@@ -33,7 +35,7 @@ export interface Fine {
   amount: number;
   dateIssued: string;
   dueDate: string;
-  status: 'Pending' | 'Paid' | 'Overdue';
+  status: 'Pending' | 'Partial' | 'Paid' | 'Overdue';
   description: string;
   residentId?: string;
 }

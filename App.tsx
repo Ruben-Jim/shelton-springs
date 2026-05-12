@@ -219,6 +219,28 @@ export default function App() {
   React.useEffect(() => {
     const restoreState = async () => {
       try {
+        // If reset token is in URL, set initial state to show ResetPassword directly
+        // (works for localhost and production - more reliable than redirect hook)
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          const params = new URLSearchParams(window.location.search);
+          const resetToken = params.get('resetToken');
+          if (resetToken) {
+            setInitialState({
+              routes: [
+                { name: 'Login' },
+                { name: 'ResetPassword', params: { resetToken } },
+              ],
+              index: 1,
+            });
+            // Clear token from URL so redirect hook won't fire if LoginScreen mounts
+            const url = new URL(window.location.href);
+            url.searchParams.delete('resetToken');
+            window.history.replaceState({}, '', url.pathname + url.search);
+            setIsReady(true);
+            return;
+          }
+        }
+
         if (Platform.OS === 'web') {
           const savedState = localStorage.getItem('navState');
           if (savedState !== null) {
@@ -252,6 +274,16 @@ export default function App() {
     );
   }
 
+  if (!isReady) {
+    return (
+      <SafeAreaProvider>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Loading...</Text>
+        </View>
+      </SafeAreaProvider>
+    );
+  }
+
   // Show error screen if required environment variables are missing
   if (!hasRequiredEnvVars) {
     return (
@@ -259,16 +291,6 @@ export default function App() {
         <ErrorBoundary>
           <EnvironmentErrorScreen debugInfo={debugInfo} />
         </ErrorBoundary>
-      </SafeAreaProvider>
-    );
-  }
-
-  if (!isReady) {
-    return (
-      <SafeAreaProvider>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Loading...</Text>
-        </View>
       </SafeAreaProvider>
     );
   }

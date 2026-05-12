@@ -219,10 +219,21 @@ const FeesScreen = () => {
     isFocused ? { limit: feesLimit, offset: 0 } : "skip"
   );
   const allFeesFromDatabase = feesData?.items ?? [];
+  const currentUserAddressKey = currentUser
+    ? `${currentUser.address}${currentUser.unitNumber ? ` Unit ${currentUser.unitNumber}` : ''}`
+    : null;
   
-  // Filter fees for the current user if they are a homeowner or developer
+  // Filter fees for the current user (direct userId) plus household fees (address-based annual dues).
+  // Annual fees are created one-per-address and can be linked to a different homeowner at that address.
   const fees = user && ((user.isResident && !user.isRenter) || user.isDev) 
-    ? allFeesFromDatabase.filter((fee: any) => fee.userId === user._id)
+    ? allFeesFromDatabase.filter((fee: any) => {
+        const matchesUser = fee.userId === user._id;
+        const matchesAddress =
+          !!currentUserAddressKey &&
+          !!fee.address &&
+          fee.address === currentUserAddressKey;
+        return matchesUser || matchesAddress;
+      })
     : [];
 
   // Get fines for the user (if any)
@@ -288,7 +299,7 @@ const FeesScreen = () => {
           contentContainerStyle={[styles.scrollContent, Platform.OS === 'web' && styles.webScrollContent]}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
-          showsVerticalScrollIndicator={true}
+          showsVerticalScrollIndicator={false}
           bounces={true}
           scrollEnabled={true}
           alwaysBounceVertical={false}

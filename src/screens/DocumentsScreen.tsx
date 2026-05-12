@@ -381,7 +381,7 @@ const DocumentsScreen = () => {
           contentContainerStyle={[styles.scrollContent, Platform.OS === 'web' && styles.webScrollContent]}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
-          showsVerticalScrollIndicator={true}
+          showsVerticalScrollIndicator={false}
           bounces={true}
           scrollEnabled={true}
           alwaysBounceVertical={false}

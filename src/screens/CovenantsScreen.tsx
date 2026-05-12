@@ -27,6 +27,47 @@ import MobileTabBar from '../components/MobileTabBar';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
 
+function CovenantAttachmentButton({
+  fileStorageId,
+  pdfUrl,
+}: {
+  fileStorageId?: string;
+  pdfUrl?: string;
+}) {
+  const resolvedUrl = useStorageUrl(fileStorageId || null);
+
+  if (!fileStorageId && !pdfUrl) {
+    return null;
+  }
+
+  const open = () => {
+    if (fileStorageId) {
+      if (resolvedUrl) {
+        Linking.openURL(resolvedUrl);
+      } else {
+        Alert.alert('Please wait', 'Loading document link…');
+      }
+    } else if (pdfUrl) {
+      Linking.openURL(pdfUrl);
+    }
+  };
+
+  const loading = !!fileStorageId && resolvedUrl === undefined;
+
+  return (
+    <TouchableOpacity style={styles.pdfButton} onPress={open} disabled={loading}>
+      {loading ? (
+        <ActivityIndicator size="small" color="#2563eb" />
+      ) : (
+        <>
+          <Ionicons name="document" size={16} color="#2563eb" />
+          <Text style={styles.pdfButtonText}>View attachment</Text>
+        </>
+      )}
+    </TouchableOpacity>
+  );
+}
+
 const CovenantsScreen = () => {
   const { user } = useAuth();
   const isFocused = useIsFocused();
@@ -155,7 +196,7 @@ const CovenantsScreen = () => {
         contentContainerStyle={[styles.scrollContent, Platform.OS === 'web' && styles.webScrollContent]}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
-        showsVerticalScrollIndicator={true}
+        showsVerticalScrollIndicator={false}
         bounces={true}
         scrollEnabled={true}
         alwaysBounceVertical={false}
@@ -363,12 +404,10 @@ const CovenantsScreen = () => {
                 <Text style={styles.covenantDate}>
                   Last updated: {formatDate(covenant.lastUpdated)}
                 </Text>
-                {covenant.pdfUrl && (
-                  <TouchableOpacity style={styles.pdfButton}>
-                    <Ionicons name="document" size={16} color="#2563eb" />
-                    <Text style={styles.pdfButtonText}>View PDF</Text>
-                  </TouchableOpacity>
-                )}
+                <CovenantAttachmentButton
+                  fileStorageId={covenant.fileStorageId}
+                  pdfUrl={covenant.pdfUrl}
+                />
               </View>
             </View>
           ))
@@ -379,11 +418,9 @@ const CovenantsScreen = () => {
       <View style={styles.infoSection}>
         <Text style={styles.infoTitle}>About Covenants</Text>
         <Text style={styles.infoText}>
-        <Text style={styles.infoText}>
           Please be aware that the summaries provided above are brief highlights of the community regulations;
           for a complete and authoritative understanding of all rules, rights, and obligations,
           you should refer to the full descriptions contained within the official Shelton Springs CC&R PDF.
-        </Text>
         </Text>
         <Text style={styles.infoText}>
           Covenants, Conditions, and Restrictions (CC&Rs) are the rules and regulations that govern our community. 

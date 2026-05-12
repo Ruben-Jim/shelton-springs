@@ -18,6 +18,7 @@ import { AuthStackParamList } from '../navigation/AuthNavigator';
 import { simpleAlert } from '../utils/webCompatibleAlert';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
+import { useResetTokenRedirect } from '../hooks/useResetTokenRedirect';
 import { useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 
@@ -26,6 +27,7 @@ type LoginScreenNavigationProp = StackNavigationProp<AuthStackParamList, 'Login'
 const LoginScreen = () => {
   const navigation = useNavigation<LoginScreenNavigationProp>();
   const { signIn } = useAuth();
+  useResetTokenRedirect();
   const convex = useConvex();
   const [formData, setFormData] = useState({
     email: '',
@@ -146,6 +148,14 @@ const LoginScreen = () => {
             />
             {errors.password ? <Text style={styles.errorText}>{errors.password}</Text> : null}
 
+            {/* Forgot Password Link */}
+            <TouchableOpacity
+              style={styles.forgotPasswordLink}
+              onPress={() => navigation.navigate('ForgotPassword')}
+            >
+              <Text style={styles.forgotPasswordLinkText}>Forgot password?</Text>
+            </TouchableOpacity>
+
             {/* Login Button */}
             <TouchableOpacity 
               style={[styles.loginButton, isLoading && styles.loginButtonDisabled]} 
@@ -240,6 +250,16 @@ const styles = StyleSheet.create({
     marginTop: -16,
     marginBottom: 16,
     marginLeft: 4,
+  },
+  forgotPasswordLink: {
+    alignSelf: 'flex-end',
+    marginTop: -8,
+    marginBottom: 12,
+  },
+  forgotPasswordLinkText: {
+    fontSize: 14,
+    color: '#2563eb',
+    fontWeight: '500',
   },
   loginButton: {
     backgroundColor: '#2563eb',

@@ -42,6 +42,28 @@ import { useMessaging } from '../context/MessagingContext';
 import * as Linking from 'expo-linking';
 import { notifyNewCommunityPost, notifyNewComment, notifyNewPoll, notifyResidentNotification } from '../utils/notificationHelpers';
 
+// Stable component reference so list re-renders don't remount images (prevents image flash)
+const PostImage = ({
+  storageId,
+  onPress,
+  wrapperStyle,
+  imageStyle,
+}: {
+  storageId: string;
+  onPress: () => void;
+  wrapperStyle: object;
+  imageStyle: object;
+}) => (
+  <TouchableOpacity onPress={onPress} activeOpacity={0.9} style={wrapperStyle}>
+    <OptimizedImage
+      storageId={storageId}
+      style={imageStyle}
+      contentFit="cover"
+      priority="high"
+    />
+  </TouchableOpacity>
+);
+
 const CommunityScreen = () => {
   const { user } = useAuth();
   const { setShowOverlay } = useMessaging();
@@ -231,8 +253,8 @@ const CommunityScreen = () => {
   );
   // Use cached residents to prevent duplicate queries
   const residents = useCachedResidents();
-  const pets = useQuery(
-    api.pets.getAll,
+  const petsGrouped = useQuery(
+    api.pets.getAllGroupedByResident,
     isFocused ? {} : "skip"
   ) || [];
   
@@ -944,24 +966,10 @@ const CommunityScreen = () => {
     }
   };
 
-  // Helper component for displaying images with URL resolution
-  const PostImage = ({ storageId }: { storageId: string }) => (
-    <TouchableOpacity
-      onPress={() => {
-        setSelectedImageStorageId(storageId);
-        setShowImageModal(true);
-      }}
-      activeOpacity={0.9}
-      style={styles.postImageWrapper}
-    >
-      <OptimizedImage
-        storageId={storageId}
-        style={styles.postImage}
-        contentFit="cover"
-        priority="high"
-      />
-    </TouchableOpacity>
-  );
+  const handlePostImagePress = (storageId: string) => {
+    setSelectedImageStorageId(storageId);
+    setShowImageModal(true);
+  };
 
   // Helper component for notification house images
   const HouseImage = ({ storageId, isFullScreen = false }: { storageId: string; isFullScreen?: boolean }) => {
@@ -1528,6 +1536,144 @@ const CommunityScreen = () => {
     }
   };
 
+  // Fixed top (header + nav + sub-tabs) - rendered outside FlatList to prevent flash when list data updates
+  const renderFixedTopContent = () => (
+    <>
+      <Animated.View
+        style={[
+          { opacity: fadeAnim },
+          styles.headerContainerIOS,
+          { width: screenWidth },
+        ]}
+      >
+        <ImageBackground
+          source={Platform.OS === 'ios' ? require('../../assets/hoa-1k.jpg') : require('../../assets/hoa-2k.jpg')}
+          style={[styles.header, !isBoardMember && styles.headerNonMember]}
+          imageStyle={[styles.headerImage, { width: screenWidth }]}
+          resizeMode="stretch"
+        >
+          <View style={styles.headerOverlay} />
+          <View style={styles.headerTop}>
+            {showMobileNav && (
+              <TouchableOpacity style={styles.menuButton} onPress={() => setIsMenuOpen(true)}>
+                <Ionicons name="menu" size={24} color="#ffffff" />
+              </TouchableOpacity>
+            )}
+            <View style={styles.headerLeft}>
+              <View style={styles.titleContainer}>
+                <Text style={styles.headerTitle}>Community Forum</Text>
+              </View>
+              <Text style={styles.headerSubtitle}>Connect with your neighbors and stay informed</Text>
+              <View style={styles.indicatorsContainer}>
+                <DeveloperIndicator />
+                <BoardMemberIndicator />
+              </View>
+            </View>
+            {!isBoardMember && <View style={styles.headerSpacer} />}
+            {isBoardMember && (
+              <View style={styles.headerRight}>
+                <MessagingButton onPress={() => setShowOverlay(true)} />
+              </View>
+            )}
+          </View>
+        </ImageBackground>
+      </Animated.View>
+      {showDesktopNav && (
+        <Animated.View style={{ opacity: fadeAnim }}>
+          <CustomTabBar />
+        </Animated.View>
+      )}
+      <Animated.View style={[styles.subTabContainer, { opacity: fadeAnim }]}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.subTabContent}
+          style={styles.subTabScrollView}
+        >
+          <TouchableOpacity
+            style={[styles.subTabButton, activeSubTab === 'posts' && styles.subTabButtonActive]}
+            onPress={() => setActiveSubTab('posts')}
+          >
+            <Ionicons name="chatbubbles" size={18} color={activeSubTab === 'posts' ? '#eab308' : '#6b7280'} />
+            <Text style={[styles.subTabButtonText, activeSubTab === 'posts' && styles.subTabButtonTextActive]}>Posts</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.subTabButton, activeSubTab === 'polls' && styles.subTabButtonActive]}
+            onPress={() => setActiveSubTab('polls')}
+          >
+            <Ionicons name="bar-chart" size={18} color={activeSubTab === 'polls' ? '#eab308' : '#6b7280'} />
+            <Text style={[styles.subTabButtonText, activeSubTab === 'polls' && styles.subTabButtonTextActive]}>Polls</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.subTabButton, activeSubTab === 'notifications' && styles.subTabButtonActive]}
+            onPress={() => setActiveSubTab('notifications')}
+          >
+            <Ionicons name="home" size={18} color={activeSubTab === 'notifications' ? '#eab308' : '#6b7280'} />
+            <Text style={[styles.subTabButtonText, activeSubTab === 'notifications' && styles.subTabButtonTextActive]}>Moving/Leaving</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.subTabButton, activeSubTab === 'pets' && styles.subTabButtonActive]}
+            onPress={() => setActiveSubTab('pets')}
+          >
+            <Ionicons name="paw" size={18} color={activeSubTab === 'pets' ? '#eab308' : '#6b7280'} />
+            <Text style={[styles.subTabButtonText, activeSubTab === 'pets' && styles.subTabButtonTextActive]}>Pet Registration</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </Animated.View>
+    </>
+  );
+
+  // List header for posts tab only (filter row) - keeps header/nav out of list to avoid flash
+  const renderPostsListHeader = () => (
+    <Animated.View style={[styles.categoryContainer, { opacity: fadeAnim }]}>
+      <View style={styles.filterRow}>
+        <View style={styles.filterLabelContainer}>
+          <Ionicons name="filter" size={16} color="#6b7280" style={styles.filterIcon} />
+          <Text style={styles.filterLabel}>Filter:</Text>
+        </View>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.categoryContent}
+          style={styles.categoryScrollView}
+        >
+          <TouchableOpacity
+            style={[styles.categoryButton, !selectedCategory && styles.categoryButtonActive]}
+            onPress={() => setSelectedCategory(null)}
+          >
+            <Text style={[styles.categoryButtonText, !selectedCategory && styles.categoryButtonTextActive]}>All</Text>
+          </TouchableOpacity>
+          {categories.map((category) => (
+            <TouchableOpacity
+              key={category}
+              style={[styles.categoryButton, selectedCategory === category && styles.categoryButtonActive]}
+              onPress={() => setSelectedCategory(category)}
+            >
+              <Text style={[styles.categoryButtonText, selectedCategory === category && styles.categoryButtonTextActive]}>{category}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+        {showDesktopNav && (
+          <View style={styles.actionButtonsContainer}>
+            <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
+              <TouchableOpacity
+                style={styles.newPostButton}
+                onPress={() => {
+                  animateButtonPress();
+                  setShowNewPostModal(true);
+                  animateIn('post');
+                }}
+              >
+                <Ionicons name="add" size={18} color="#ffffff" />
+                <Text style={styles.newPostButtonText}>New Post</Text>
+              </TouchableOpacity>
+            </Animated.View>
+          </View>
+        )}
+      </View>
+    </Animated.View>
+  );
+
   const renderTopContent = () => (
     <>
       {/* Header */}
@@ -1898,21 +2044,10 @@ const CommunityScreen = () => {
 
   const renderPostItem = ({ item, index }: { item: any; index: number }) => (
     <View style={styles.postItemWrapper}>
-      <Animated.View
+      <View
         style={[
           styles.postCard,
-          {
-            borderLeftColor: borderColors[index % borderColors.length],
-            opacity: fadeAnim,
-            transform: [
-              {
-                translateY: fadeAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [50, 0],
-                }),
-              },
-            ],
-          },
+          { borderLeftColor: borderColors[index % borderColors.length] },
         ]}
       >
         <View style={styles.postHeader}>
@@ -1963,7 +2098,13 @@ const CommunityScreen = () => {
         {item.images && item.images.length > 0 && (
           <View style={styles.postImagesContainer}>
             {item.images.map((imageStorageId: string, imageIndex: number) => (
-              <PostImage key={imageStorageId ?? imageIndex} storageId={imageStorageId} />
+              <PostImage
+                key={imageStorageId ?? imageIndex}
+                storageId={imageStorageId}
+                onPress={() => handlePostImagePress(imageStorageId)}
+                wrapperStyle={styles.postImageWrapper}
+                imageStyle={styles.postImage}
+              />
             ))}
           </View>
         )}
@@ -1994,18 +2135,6 @@ const CommunityScreen = () => {
           <View style={styles.commentsSection}>
             <View style={styles.commentsHeader}>
               <Text style={styles.commentsTitle}>Comments ({item.comments.length})</Text>
-              {item.comments.length > COMMENTS_PREVIEW_LIMIT && (
-                <TouchableOpacity style={styles.viewAllButton} onPress={() => toggleComments(item._id)}>
-                  <Text style={styles.viewAllButtonText}>
-                    {expandedComments.has(item._id) ? 'Show Less' : 'View All'}
-                  </Text>
-                  <Ionicons
-                    name={expandedComments.has(item._id) ? 'chevron-up' : 'chevron-down'}
-                    size={16}
-                    color="#2563eb"
-                  />
-                </TouchableOpacity>
-              )}
             </View>
 
             {item.comments.slice(0, COMMENTS_PREVIEW_LIMIT).map((comment: any, commentIndex: number) => (
@@ -2086,9 +2215,23 @@ const CommunityScreen = () => {
                 </ScrollView>
               </View>
             )}
+            {item.comments.length > COMMENTS_PREVIEW_LIMIT && (
+              <View style={styles.viewAllButtonRow}>
+                <TouchableOpacity style={styles.viewAllButton} onPress={() => toggleComments(item._id)}>
+                  <Text style={styles.viewAllButtonText}>
+                    {expandedComments.has(item._id) ? 'Show Less' : 'View All Comments'}
+                  </Text>
+                  <Ionicons
+                    name={expandedComments.has(item._id) ? 'chevron-up' : 'chevron-down'}
+                    size={16}
+                    color="#2563eb"
+                  />
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         )}
-      </Animated.View>
+      </View>
     </View>
   );
 
@@ -2103,15 +2246,17 @@ const CommunityScreen = () => {
         />
       )}
       
-      {/* Posts List */}
+      {/* Posts List - header/nav outside list to prevent flash when data loads */}
       {activeSubTab === 'posts' ? (
-        <Animated.FlatList
-          ref={listRef}
-          data={postsContent}
-          keyExtractor={(item: any) => item._id}
-          renderItem={renderPostItem}
-          ListHeaderComponent={renderTopContent}
-          ListEmptyComponent={renderPostsEmpty}
+        <>
+          {renderFixedTopContent()}
+          <Animated.FlatList
+            ref={listRef}
+            data={postsContent}
+            keyExtractor={(item: any) => item._id}
+            renderItem={renderPostItem}
+            ListHeaderComponent={renderPostsListHeader}
+            ListEmptyComponent={renderPostsEmpty}
           ListFooterComponent={
             canLoadMorePosts ? (
               <View style={styles.listFooter}>
@@ -2136,7 +2281,8 @@ const CommunityScreen = () => {
           windowSize={5}
           removeClippedSubviews={false}
           nestedScrollEnabled={true}
-        />
+          />
+        </>
       ) : (
         <ScrollView
           style={[styles.postsContainer, Platform.OS === 'web' && styles.webScrollContainer]}
@@ -2451,14 +2597,14 @@ const CommunityScreen = () => {
               </View>
             )
           ) : activeSubTab === 'pets' ? (
-            pets.length > 0 ? (
+            petsGrouped.length > 0 ? (
               <View style={[
                 styles.petsCardsContainer,
                 showMobileNav && styles.petsCardsContainerMobile
               ]}>
-                {pets.map((pet: any) => (
-                  <Animated.View 
-                    key={pet._id} 
+                {petsGrouped.map((group: any) => (
+                  <Animated.View
+                    key={group.residentId}
                     style={[
                       styles.petCard,
                       showMobileNav && styles.petCardMobile,
@@ -2475,22 +2621,28 @@ const CommunityScreen = () => {
                   >
                     <View style={styles.petCardContent}>
                       <View style={styles.petCardHeader}>
-                        {pet.residentId === user?._id && (
-                          <TouchableOpacity
-                            onPress={() => handleEditPet(pet)}
-                            style={styles.editButtonTopRight}
-                          >
-                            <Ionicons name="create-outline" size={18} color="#6b7280" />
-                          </TouchableOpacity>
-                        )}
-                        <View style={styles.petImageContainer}>
-                          <PetImage storageId={pet.image} />
-                        </View>
-                        <Text style={styles.petCardName}>{pet.name}</Text>
                         <Text style={styles.petCardOwner}>
-                          Owner: {pet.residentName || 'Unknown'}
+                          Owner: {group.residentName || 'Unknown'}
                         </Text>
-                        <Text style={styles.petCardAddress}>{pet.residentAddress || ''}</Text>
+                        <Text style={styles.petCardAddress}>{group.residentAddress || ''}</Text>
+                        <View style={styles.petsInGroupContainer}>
+                          {group.pets.map((pet: any) => (
+                            <View key={pet._id} style={styles.petInGroupItem}>
+                              {String(group.residentId) === String(user?._id ?? '') && (
+                                <TouchableOpacity
+                                  onPress={() => handleEditPet(pet)}
+                                  style={styles.editButtonTopRight}
+                                >
+                                  <Ionicons name="create-outline" size={18} color="#6b7280" />
+                                </TouchableOpacity>
+                              )}
+                              <View style={styles.petInGroupImageContainer}>
+                                <PetImage storageId={pet.image} />
+                              </View>
+                              <Text style={styles.petCardName}>{pet.name}</Text>
+                            </View>
+                          ))}
+                        </View>
                       </View>
                     </View>
                   </Animated.View>
@@ -3418,6 +3570,8 @@ const styles = StyleSheet.create({
     marginLeft: 0,
     marginRight: 0,
     marginHorizontal: 0,
+    zIndex: 1,
+    elevation: 1,
   },
   header: {
     height: 180,
@@ -3760,7 +3914,6 @@ const styles = StyleSheet.create({
   },
   commentsHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 8,
   },
@@ -3769,13 +3922,18 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#374151',
   },
+  viewAllButtonRow: {
+    alignItems: 'flex-end',
+    marginTop: 2,
+    marginBottom: 4,
+  },
   viewAllButton: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#e0e7ff',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
   },
   viewAllButtonText: {
     fontSize: 12,
@@ -4310,6 +4468,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
+    zIndex: 10,
+    elevation: 5,
+    minHeight: 48,
   },
   subTabRow: {
     flexDirection: 'row',
@@ -4317,7 +4478,8 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   subTabScrollView: {
-    flex: 1,
+    // Don't use flex: 1 - it causes the ScrollView to collapse to 0 height on iOS
+    // when the parent derives height from content (circular dependency)
   },
   subTabContent: {
     paddingHorizontal: 15,
@@ -4333,7 +4495,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   subTabButtonActive: {
-    backgroundColor: '#eff6ff',
+    backgroundColor: '#eab308' + '20',
   },
   subTabButtonText: {
     fontSize: 14,
@@ -4823,6 +4985,28 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#9ca3af',
     textAlign: 'center',
+    marginBottom: 12,
+  },
+  petsInGroupContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 16,
+    marginTop: 8,
+  },
+  petInGroupItem: {
+    alignItems: 'center',
+    position: 'relative',
+    minWidth: 120,
+  },
+  petInGroupImageContainer: {
+    width: 120,
+    height: 120,
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginBottom: 8,
+    borderWidth: 2,
+    borderColor: '#e5e7eb',
   },
   petImageLoading: {
     width: '100%',

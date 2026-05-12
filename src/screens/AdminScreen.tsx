@@ -18,10 +18,16 @@ import {
   Platform,
   ImageBackground,
   ActivityIndicator,
+  Linking,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 import { Ionicons } from '@expo/vector-icons';
+import QRCode from 'react-native-qrcode-svg';
+import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery, useMutation } from 'convex/react';
 import { useConvex } from 'convex/react';
@@ -39,6 +45,12 @@ import {
   notifyNewPoll,
   notifyBoardUpdate
 } from '../utils/notificationHelpers';
+import HomeownerRecordsModal from '../components/HomeownerRecordsModal';
+import {
+  WEBSITE_URL,
+  ANDROID_PLAY_STORE_URL,
+  getIosAppStoreUrl,
+} from '../constants/publicLinks';
 
 const AdminScreen = () => {
   const { user } = useAuth();
@@ -52,6 +64,7 @@ const AdminScreen = () => {
   const isMobileDevice = Platform.OS === 'ios' || Platform.OS === 'android';
   const showMobileNav = isMobileDevice || screenWidth < 1024; // Always mobile on mobile devices, responsive on web
   const showDesktopNav = !isMobileDevice && screenWidth >= 1024; // Only desktop nav on web when wide enough
+  const iosAppStoreUrl = getIosAppStoreUrl();
   
   // Listen for window/dimension changes (web resize, tablet rotation, etc.)
   useEffect(() => {
@@ -68,6 +81,17 @@ const AdminScreen = () => {
   
   // State (define early so it can be used in conditional queries)
   const [activeTab, setActiveTab] = useState<'SheltonHOA' | 'residents' | 'board' | 'covenants' | 'Community' | 'fees'>('SheltonHOA');
+  const shareLinkItems = useMemo(
+    () =>
+      [
+        { key: 'website', label: 'Website', url: WEBSITE_URL },
+        { key: 'android', label: 'Google Play (Android)', url: ANDROID_PLAY_STORE_URL },
+        iosAppStoreUrl ? { key: 'ios', label: 'App Store (iOS)', url: iosAppStoreUrl } : null,
+      ].filter(Boolean) as Array<{ key: string; label: string; url: string }>,
+    [iosAppStoreUrl]
+  );
+  const [expandedShareQrKey, setExpandedShareQrKey] = useState<string | null>('website');
+  const shareQrRefs = useRef<Record<string, any>>({});
   
   // Data queries - using paginated queries for large lists
   // Always loaded: residents, boardMembers (needed for all tabs)
@@ -100,10 +124,11 @@ const AdminScreen = () => {
   );
   const polls = pollsData?.items ?? [];
   
-  const pets = useQuery(
-    api.pets.getAll,
+  const petsGrouped = useQuery(
+    api.pets.getAllGroupedByResident,
     activeTab === 'Community' ? {} : "skip"
   ) ?? [];
+  const totalPetsCount = petsGrouped.reduce((n: number, g: any) => n + g.pets.length, 0);
   
   const homeownersPaymentStatus = useQuery(
     api.fees.getAllHomeownersPaymentStatus,
@@ -287,53 +312,81 @@ const AdminScreen = () => {
     
     // Convert map to array of grouped addresses
     return Array.from(addressMap.entries()).map(([addressKey, homeowners]) => {
-      // Aggregate fees for all homeowners at this address
-      const allFees: any[] = [];
-      const allFines: any[] = [];
-      const allPayments: any[] = [];
+      // Aggregate records for all homeowners at this address.
+      // Use maps keyed by _id to prevent duplicates when household-level
+      // records (e.g., address-based annual fees) are attached to each homeowner.
+      const feesById = new Map<string, any>();
+      const finesById = new Map<string, any>();
+      const paymentsById = new Map<string, any>();
       
       homeowners.forEach((homeowner: any) => {
         const homeownerFees = feesByUserId.get(String(homeowner._id)) || [];
         const homeownerFines = finesByResidentId.get(homeowner._id) || [];
         const homeownerPayments = paymentsByUserId.get(String(homeowner._id)) || [];
         
-        allFees.push(...homeownerFees);
-        allFines.push(...homeownerFines);
-        allPayments.push(...homeownerPayments);
+        homeownerFees.forEach((fee: any) => {
+          if (fee?._id) feesById.set(String(fee._id), fee);
+        });
+        homeownerFines.forEach((fine: any) => {
+          if (fine?._id) finesById.set(String(fine._id), fine);
+        });
+        homeownerPayments.forEach((payment: any) => {
+          if (payment?._id) paymentsById.set(String(payment._id), payment);
+        });
       });
-      
+
+      const allFees = Array.from(feesById.values());
+      const allFines = Array.from(finesById.values());
+      const allPayments = Array.from(paymentsById.values());
+
+      const verifiedTowardFee = (feeId: string) =>
+        allPayments
+          .filter((p: any) => p.feeId === feeId && p.verificationStatus === 'Verified')
+          .reduce((s: number, p: any) => s + p.amount, 0);
+      const verifiedTowardFine = (fineId: string) =>
+        allPayments
+          .filter((p: any) => p.fineId === fineId && p.verificationStatus === 'Verified')
+          .reduce((s: number, p: any) => s + p.amount, 0);
+
+      const feesOutstanding = allFees.reduce(
+        (s: number, fee: any) => s + Math.max(0, fee.amount - verifiedTowardFee(fee._id)),
+        0,
+      );
+      const finesOutstanding = allFines.reduce(
+        (s: number, fine: any) => s + Math.max(0, fine.amount - verifiedTowardFine(fine._id)),
+        0,
+      );
+      const outstandingBalance = feesOutstanding + finesOutstanding;
+
+      const totalAssessedFees = allFees.reduce((s: number, fee: any) => s + fee.amount, 0);
+      const totalAssessedFines = allFines.reduce((s: number, fine: any) => s + fine.amount, 0);
+      const totalAssessed = totalAssessedFees + totalAssessedFines;
+
+      const totalVerifiedTowardHousehold = allPayments
+        .filter(
+          (p: any) =>
+            p.verificationStatus === 'Verified' &&
+            ((p.feeId && feesById.has(String(p.feeId))) ||
+              (p.fineId && finesById.has(String(p.fineId)))),
+        )
+        .reduce((s: number, p: any) => s + p.amount, 0);
+
+      const hasObligations = allFees.length > 0 || allFines.length > 0;
+      const balanceCaughtUp = outstandingBalance < 0.01;
+      const isPartiallyPaid =
+        hasObligations && outstandingBalance >= 0.01 && totalVerifiedTowardHousehold > 0;
+
+      // Back-compat name: true only when this household has fees/fines and verified payments cover the balance
+      const allFeesPaid = hasObligations && balanceCaughtUp;
+
       // Get the most recent paid payment method across all homeowners
       const paidPayments = allPayments.filter((p: any) => p.status === 'Paid' && p.verificationStatus === 'Verified');
       const latestPayment = paidPayments.length > 0 
         ? paidPayments.sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0] 
         : null;
       
-      // Calculate total paid amount and check for partial payments (fees)
-      const totalFeeAmount = allFees.reduce((sum: number, fee: any) => sum + fee.amount, 0);
-      let totalPaidAmount = 0;
-      let hasPartialPayment = false;
-      
-      // Check each fee for partial payments
-      allFees.forEach((fee: any) => {
-        const feePayments = allPayments.filter((p: any) => 
-          p.feeId === fee._id && 
-          p.verificationStatus === 'Verified'
-        );
-        
-        if (feePayments.length > 0) {
-          const feeTotalPaid = feePayments.reduce((sum: number, p: any) => sum + p.amount, 0);
-          totalPaidAmount += feeTotalPaid;
-          
-          // Check if this fee has a partial payment
-          if (feeTotalPaid > 0 && feeTotalPaid < fee.amount) {
-            hasPartialPayment = true;
-          }
-        }
-      });
-      
-      // Determine payment status
-      const allFeesPaid = allFees.length > 0 && allFees.every((f: any) => f.status === 'Paid');
-      const isPartiallyPaid = !allFeesPaid && hasPartialPayment && totalPaidAmount > 0;
+      const totalFeeAmount = totalAssessed;
+      const totalPaidAmount = totalVerifiedTowardHousehold;
       
       // Create a map of payments by fineId for quick lookup
       const paymentsByFineId = new Map<string, any>();
@@ -352,14 +405,12 @@ const AdminScreen = () => {
         fines: allFines,
         payments: allPayments,
         latestPayment,
-        // Combined payment status: paid only if all fees are paid
         allFeesPaid,
-        // Total fee amount
         totalFeeAmount,
-        // Partial payment info
         totalPaidAmount,
         isPartiallyPaid,
-        // Payments by fineId for quick lookup
+        outstandingBalance,
+        totalAssessed,
         paymentsByFineId,
       };
     });
@@ -371,7 +422,8 @@ const AdminScreen = () => {
     let paid = 0;
     let unpaid = 0;
     homeownersGroupedByAddress.forEach((g: any) => {
-      if (g.fees.length > 0) {
+      const hasItems = g.fees.length > 0 || g.fines.length > 0;
+      if (hasItems) {
         total += 1;
         if (g.allFeesPaid) paid += 1;
         else unpaid += 1;
@@ -433,6 +485,7 @@ const AdminScreen = () => {
   
   // Mutations
   const setBlockStatus = useMutation(api.residents.setBlockStatus);
+  const removeResident = useMutation(api.residents.remove);
   const deleteCovenant = useMutation(api.covenants.remove);
   const deleteCommunityPost = useMutation(api.communityPosts.remove);
   const deleteBoardMember = useMutation(api.boardMembers.remove);
@@ -480,12 +533,14 @@ const AdminScreen = () => {
   
   // Transactions modal state - declared early so it can be used in queries
   const [showTransactionsModal, setShowTransactionsModal] = useState(false);
+  const [showShareQrModal, setShowShareQrModal] = useState(false);
   const [transactionsLimit, setTransactionsLimit] = useState(50);
   const [transactionsSearchQuery, setTransactionsSearchQuery] = useState('');
   
   // Accordion state for sections (collapse/expand entire sections)
 
   const [showBlockModal, setShowBlockModal] = useState(false);
+  const [showRemoveModal, setShowRemoveModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [selectedItem, setSelectedItem] = useState<any>(null);
   const [blockReason, setBlockReason] = useState('');
@@ -604,6 +659,19 @@ const AdminScreen = () => {
     dueDate: '',
   });
   const [showRecordPaymentModal, setShowRecordPaymentModal] = useState(false);
+  // Homeowner full-record modal — Fees & Payments tab
+  const [showHomeownerRecordsModal, setShowHomeownerRecordsModal] = useState(false);
+  const [selectedHomeownerGroup, setSelectedHomeownerGroup] = useState<any>(null);
+
+  // Keep homeowner full-record modal data in sync when fees/payments/fines update (e.g. admin edit)
+  useEffect(() => {
+    if (!showHomeownerRecordsModal || !selectedHomeownerGroup?.addressKey) return;
+    const next = homeownersGroupedByAddress.find(
+      (g: any) => g.addressKey === selectedHomeownerGroup.addressKey,
+    );
+    if (next) setSelectedHomeownerGroup(next);
+  }, [homeownersGroupedByAddress, showHomeownerRecordsModal, selectedHomeownerGroup?.addressKey]);
+
   const [paymentForm, setPaymentForm] = useState({
     homeownerId: '',
     homeownerName: '',
@@ -624,7 +692,7 @@ const AdminScreen = () => {
   // Sorted and filtered homeowners grid (client-side only - no Convex cost)
   const sortedHomeownersGroupedByAddress = useMemo(() => {
     const getSortKey = (g: (typeof homeownersGroupedByAddress)[0]) => {
-      const isClear = g.fees.length === 0;
+      const isClear = g.fees.length === 0 && g.fines.length === 0;
       const isPaid = g.allFeesPaid;
       const isPending = !isClear && !isPaid;
       const firstNameKey = g.homeowners.map((h: any) => `${h.firstName} ${h.lastName}`).join(' ').toLowerCase();
@@ -689,8 +757,117 @@ const AdminScreen = () => {
     description: '',
     category: 'General' as 'Architecture' | 'Landscaping' | 'Minutes' | 'Caveats' | 'General',
     lastUpdated: new Date().toLocaleDateString('en-US'),
-    pdfUrl: '',
+    /** Existing Convex storage id when editing (preserve if no new upload) */
+    fileStorageId: '',
   });
+  const [covenantSelectedDoc, setCovenantSelectedDoc] =
+    useState<DocumentPicker.DocumentPickerAsset | null>(null);
+  const [covenantSelectedImageUri, setCovenantSelectedImageUri] = useState<string | null>(null);
+  const [covenantClearAttachment, setCovenantClearAttachment] = useState(false);
+  const [covenantUploading, setCovenantUploading] = useState(false);
+
+  const COVENANT_DOC_TYPES = [
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  ] as const;
+
+  const uploadCovenantAttachmentToStorage = async (
+    doc: DocumentPicker.DocumentPickerAsset | null,
+    imageUri: string | null,
+  ): Promise<string> => {
+    if (!doc && !imageUri) {
+      throw new Error('No file selected');
+    }
+    const uploadUrl = await generateUploadUrl();
+    let blob: Blob;
+    let mimeType: string;
+
+    if (doc) {
+      const response = await fetch(doc.uri);
+      blob = await response.blob();
+      mimeType = blob.type || doc.mimeType || 'application/pdf';
+      const sizeMB = blob.size / (1024 * 1024);
+      if (sizeMB > 10) {
+        throw new Error('Document too large. Maximum 10MB allowed.');
+      }
+    } else if (imageUri) {
+      try {
+        const r = await getUploadReadyImage(imageUri, {
+          format: ImageManipulator.SaveFormat.WEBP,
+          maxDimension: 1200,
+          compress: 0.82,
+        });
+        blob = r.blob;
+        mimeType = r.mimeType;
+      } catch {
+        const r = await getUploadReadyImage(imageUri, {
+          format: ImageManipulator.SaveFormat.JPEG,
+          maxDimension: 1200,
+          compress: 0.82,
+        });
+        blob = r.blob;
+        mimeType = r.mimeType;
+      }
+      const sizeMB = blob.size / (1024 * 1024);
+      if (sizeMB > 10) {
+        throw new Error('Image too large after compression. Maximum 10MB allowed.');
+      }
+    } else {
+      throw new Error('No file selected');
+    }
+
+    const uploadResponse = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': mimeType },
+      body: blob,
+    });
+    if (!uploadResponse.ok) {
+      throw new Error('Upload failed');
+    }
+    const { storageId } = await uploadResponse.json();
+    return storageId as string;
+  };
+
+  const handleCovenantPickDocument = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [...COVENANT_DOC_TYPES],
+        copyToCacheDirectory: true,
+      });
+      if (!result.canceled && result.assets[0]) {
+        setCovenantSelectedDoc(result.assets[0]);
+        setCovenantSelectedImageUri(null);
+        setCovenantClearAttachment(false);
+      }
+    } catch (e) {
+      console.error('Covenant document pick:', e);
+      Alert.alert('Error', 'Failed to pick document.');
+    }
+  };
+
+  const handleCovenantPickImage = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission required', 'Please allow photo library access.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 1,
+      });
+      if (!result.canceled && result.assets[0]) {
+        setCovenantSelectedImageUri(result.assets[0].uri);
+        setCovenantSelectedDoc(null);
+        setCovenantClearAttachment(false);
+      }
+    } catch (e) {
+      console.error('Covenant image pick:', e);
+      Alert.alert('Error', 'Failed to pick image.');
+    }
+  };
   
   // HOA Info form state
   const [hoaInfoForm, setHoaInfoForm] = useState({
@@ -718,6 +895,8 @@ const AdminScreen = () => {
   // Animation values
   const blockModalOpacity = useRef(new Animated.Value(0)).current;
   const blockModalTranslateY = useRef(new Animated.Value(300)).current;
+  const removeModalOpacity = useRef(new Animated.Value(0)).current;
+  const removeModalTranslateY = useRef(new Animated.Value(300)).current;
   const deleteModalOpacity = useRef(new Animated.Value(0)).current;
   const deleteModalTranslateY = useRef(new Animated.Value(300)).current;
   const boardMemberModalOpacity = useRef(new Animated.Value(0)).current;
@@ -738,6 +917,8 @@ const AdminScreen = () => {
   const recordPaymentModalTranslateY = useRef(new Animated.Value(300)).current;
   const transactionsModalOpacity = useRef(new Animated.Value(0)).current;
   const transactionsModalTranslateY = useRef(new Animated.Value(300)).current;
+  const shareQrModalOpacity = useRef(new Animated.Value(0)).current;
+  const shareQrModalTranslateY = useRef(new Animated.Value(300)).current;
   const categoryDropdownOpacity = useRef(new Animated.Value(0)).current;
   const categoryDropdownScale = useRef(new Animated.Value(0.95)).current;
   const overlayOpacity = useRef(new Animated.Value(0)).current;
@@ -770,8 +951,9 @@ const AdminScreen = () => {
   const isBoardMember = user?.isBoardMember && user?.isActive;
 
   // Modern animation functions
-  const animateIn = (modalType: 'block' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll' | 'recordPayment' | 'transactions') => {
+  const animateIn = (modalType: 'block' | 'remove' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll' | 'recordPayment' | 'transactions' | 'shareQr') => {
     const opacity = modalType === 'block' ? blockModalOpacity :
+                   modalType === 'remove' ? removeModalOpacity :
                    modalType === 'delete' ? deleteModalOpacity :
                    modalType === 'boardMember' ? boardMemberModalOpacity :
                    modalType === 'yearFee' ? yearFeeModalOpacity :
@@ -781,8 +963,10 @@ const AdminScreen = () => {
                    modalType === 'covenant' ? covenantModalOpacity :
                    modalType === 'recordPayment' ? recordPaymentModalOpacity :
                    modalType === 'transactions' ? transactionsModalOpacity :
+                   modalType === 'shareQr' ? shareQrModalOpacity :
                    pollModalOpacity;
     const translateY = modalType === 'block' ? blockModalTranslateY :
+                      modalType === 'remove' ? removeModalTranslateY :
                       modalType === 'delete' ? deleteModalTranslateY:
                       modalType === 'boardMember' ? boardMemberModalTranslateY :
                       modalType === 'yearFee' ? yearFeeModalTranslateY :
@@ -792,6 +976,7 @@ const AdminScreen = () => {
                       modalType === 'covenant' ? covenantModalTranslateY :
                       modalType === 'recordPayment' ? recordPaymentModalTranslateY :
                       modalType === 'transactions' ? transactionsModalTranslateY :
+                      modalType === 'shareQr' ? shareQrModalTranslateY :
                       pollModalTranslateY;
     
     Animated.parallel([
@@ -814,8 +999,9 @@ const AdminScreen = () => {
     ]).start();
   };
 
-  const animateOut = (modalType: 'block' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll' | 'recordPayment' | 'transactions', callback: () => void) => {
+  const animateOut = (modalType: 'block' | 'remove' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll' | 'recordPayment' | 'transactions' | 'shareQr', callback: () => void) => {
     const opacity = modalType === 'block' ? blockModalOpacity :
+                   modalType === 'remove' ? removeModalOpacity :
                    modalType === 'delete' ? deleteModalOpacity :
                    modalType === 'boardMember' ? boardMemberModalOpacity :
                    modalType === 'yearFee' ? yearFeeModalOpacity :
@@ -825,8 +1011,10 @@ const AdminScreen = () => {
                    modalType === 'covenant' ? covenantModalOpacity :
                    modalType === 'recordPayment' ? recordPaymentModalOpacity :
                    modalType === 'transactions' ? transactionsModalOpacity :
+                   modalType === 'shareQr' ? shareQrModalOpacity :
                    pollModalOpacity;
     const translateY = modalType === 'block' ? blockModalTranslateY :
+                      modalType === 'remove' ? removeModalTranslateY :
                       modalType === 'delete' ? deleteModalTranslateY :
                       modalType === 'boardMember' ? boardMemberModalTranslateY :
                       modalType === 'yearFee' ? yearFeeModalTranslateY :
@@ -836,6 +1024,7 @@ const AdminScreen = () => {
                       modalType === 'covenant' ? covenantModalTranslateY :
                       modalType === 'recordPayment' ? recordPaymentModalTranslateY :
                       modalType === 'transactions' ? transactionsModalTranslateY :
+                      modalType === 'shareQr' ? shareQrModalTranslateY :
                       pollModalTranslateY;
     
     Animated.parallel([
@@ -946,6 +1135,30 @@ const AdminScreen = () => {
     }
   };
 
+  const handleRemoveResident = (resident: any) => {
+    if (user && resident._id === user._id) {
+      Alert.alert('Error', 'You cannot remove your own account.');
+      return;
+    }
+    setSelectedItem(resident);
+    setShowRemoveModal(true);
+    animateIn('remove');
+  };
+
+  const confirmRemoveResident = async () => {
+    if (!selectedItem) return;
+    try {
+      await removeResident({ id: selectedItem._id });
+      Alert.alert('Success', `${selectedItem.firstName} ${selectedItem.lastName} has been removed.`);
+      animateOut('remove', () => {
+        setShowRemoveModal(false);
+        setSelectedItem(null);
+      });
+    } catch (error) {
+      Alert.alert('Error', 'Failed to remove resident. Please try again.');
+    }
+  };
+
   const confirmDeleteItem = async () => {
     try {
       switch (selectedItem.type) {
@@ -1016,6 +1229,150 @@ const AdminScreen = () => {
     } catch (error) {
       console.error('Error saving HOA info:', error);
       Alert.alert('Error', 'Failed to save HOA information. Please try again.');
+    }
+  };
+
+  const handleCopyToClipboard = async (label: string, value: string) => {
+    try {
+      await Clipboard.setStringAsync(value);
+      Alert.alert('Copied', `${label} copied to clipboard.`);
+    } catch (error) {
+      Alert.alert('Copy failed', 'Could not copy this link. Please copy manually.');
+    }
+  };
+
+  const handleCopyQrImage = async (item: { key: string; label: string; url: string }) => {
+    const copyLinkFallback = async () => {
+      await Clipboard.setStringAsync(item.url);
+      Alert.alert(
+        'Copied link',
+        `${item.label} link copied. This browser may block image clipboard on mobile web.`
+      );
+    };
+
+    try {
+      const qrRef = shareQrRefs.current[item.key];
+      if (!qrRef || typeof qrRef.toDataURL !== 'function') {
+        await copyLinkFallback();
+        return;
+      }
+
+      qrRef.toDataURL(async (base64: string) => {
+        try {
+          if (!base64) {
+            await copyLinkFallback();
+            return;
+          }
+
+          const base64ToPngBlob = () => {
+            const byteCharacters = atob(base64);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i += 1) {
+              byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            return new Blob([new Uint8Array(byteNumbers)], { type: 'image/png' });
+          };
+
+          // Native devices: open OS share flow for saving/copying image.
+          if (Platform.OS === 'ios' || Platform.OS === 'android') {
+            if (typeof Sharing.isAvailableAsync === 'function' && await Sharing.isAvailableAsync()) {
+              const safeKey = item.key.replace(/[^a-z0-9_-]/gi, '_');
+              const fileUri = `${FileSystem.cacheDirectory}qr-${safeKey}.png`;
+              await FileSystem.writeAsStringAsync(fileUri, base64, {
+                encoding: FileSystem.EncodingType.Base64,
+              });
+              await Sharing.shareAsync(fileUri, {
+                mimeType: 'image/png',
+                dialogTitle: `${item.label} QR Code`,
+                UTI: 'public.png',
+              });
+              return;
+            }
+          }
+
+          // Mobile web: system share sheet (image when supported, else URL).
+          if (
+            Platform.OS === 'web' &&
+            typeof navigator !== 'undefined' &&
+            typeof navigator.share === 'function'
+          ) {
+            const ua = navigator.userAgent || '';
+            const isMobileWeb =
+              /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua) ||
+              (typeof window !== 'undefined' &&
+                typeof window.matchMedia === 'function' &&
+                window.matchMedia('(pointer: coarse)').matches);
+
+            if (isMobileWeb) {
+              try {
+                if (typeof File !== 'undefined') {
+                  const pngBlob = base64ToPngBlob();
+                  const safeKey = item.key.replace(/[^a-z0-9_-]/gi, '_');
+                  const file = new File([pngBlob], `shelton-springs-qr-${safeKey}.png`, {
+                    type: 'image/png',
+                  });
+                  if (
+                    typeof navigator.canShare === 'function' &&
+                    navigator.canShare({ files: [file] })
+                  ) {
+                    await navigator.share({
+                      title: `${item.label} QR Code`,
+                      text: item.url,
+                      files: [file],
+                    });
+                    return;
+                  }
+                }
+              } catch (err: unknown) {
+                if (err instanceof Error && err.name === 'AbortError') return;
+              }
+              try {
+                if (
+                  typeof navigator.canShare === 'function' &&
+                  navigator.canShare({ url: item.url })
+                ) {
+                  await navigator.share({
+                    title: item.label,
+                    text: item.url,
+                    url: item.url,
+                  });
+                  return;
+                }
+              } catch (err: unknown) {
+                if (err instanceof Error && err.name === 'AbortError') return;
+              }
+            }
+          }
+
+          // Prefer native web clipboard image write for mobile browsers.
+          if (
+            Platform.OS === 'web' &&
+            typeof window !== 'undefined' &&
+            typeof navigator !== 'undefined' &&
+            (navigator as any).clipboard?.write &&
+            typeof (window as any).ClipboardItem !== 'undefined'
+          ) {
+            const pngBlob = base64ToPngBlob();
+            const clipboardItem = new (window as any).ClipboardItem({ 'image/png': pngBlob });
+            await (navigator as any).clipboard.write([clipboardItem]);
+            Alert.alert('Copied QR image', `${item.label} QR image copied to clipboard.`);
+            return;
+          }
+
+          // expo-clipboard image API path (native + supported web runtimes).
+          const clipboardAny = Clipboard as any;
+          if (typeof clipboardAny.setImageAsync === 'function') {
+            await clipboardAny.setImageAsync(base64);
+            Alert.alert('Copied QR image', `${item.label} QR image copied to clipboard.`);
+            return;
+          }
+          await copyLinkFallback();
+        } catch {
+          await copyLinkFallback();
+        }
+      });
+    } catch {
+      await copyLinkFallback();
     }
   };
 
@@ -1364,6 +1721,12 @@ const AdminScreen = () => {
   };
 
   // Covenant handlers
+  const resetCovenantAttachmentState = () => {
+    setCovenantSelectedDoc(null);
+    setCovenantSelectedImageUri(null);
+    setCovenantClearAttachment(false);
+  };
+
   const handleAddCovenant = async () => {
     try {
       if (!covenantForm.title || !covenantForm.description) {
@@ -1371,30 +1734,41 @@ const AdminScreen = () => {
         return;
       }
 
-      // Call Convex mutation to create a covenant
-      const result = await createCovenant({
+      setCovenantUploading(true);
+      let fileStorageId: string | undefined;
+      if (covenantSelectedDoc || covenantSelectedImageUri) {
+        fileStorageId = await uploadCovenantAttachmentToStorage(
+          covenantSelectedDoc,
+          covenantSelectedImageUri,
+        );
+      }
+
+      await createCovenant({
         title: covenantForm.title,
         description: covenantForm.description,
         category: covenantForm.category,
         lastUpdated: covenantForm.lastUpdated,
-        pdfUrl: covenantForm.pdfUrl || undefined,
+        fileStorageId,
       });
 
       Alert.alert('Success', 'Covenant created successfully!');
-      
+
       setShowCovenantModal(false);
       setShowCategoryDropdown(false);
       animateCategoryDropdownOut();
+      resetCovenantAttachmentState();
       setCovenantForm({
         title: '',
         description: '',
         category: 'General',
         lastUpdated: new Date().toLocaleDateString('en-US'),
-        pdfUrl: '',
+        fileStorageId: '',
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating covenant:', error);
-      Alert.alert('Error', 'Failed to create covenant. Please try again.');
+      Alert.alert('Error', error?.message || 'Failed to create covenant. Please try again.');
+    } finally {
+      setCovenantUploading(false);
     }
   };
 
@@ -1404,8 +1778,9 @@ const AdminScreen = () => {
       description: covenant.description,
       category: covenant.category,
       lastUpdated: covenant.lastUpdated,
-      pdfUrl: covenant.pdfUrl || '',
+      fileStorageId: covenant.fileStorageId || '',
     });
+    resetCovenantAttachmentState();
     setIsEditingCovenant(true);
     setSelectedItem(covenant);
     setShowCovenantModal(true);
@@ -1419,33 +1794,57 @@ const AdminScreen = () => {
         return;
       }
 
-      // Call Convex mutation to update a covenant
-      await updateCovenant({
+      setCovenantUploading(true);
+
+      const payload: {
+        id: any;
+        title: string;
+        description: string;
+        category: typeof covenantForm.category;
+        lastUpdated: string;
+        fileStorageId?: string | null;
+        pdfUrl?: string | null;
+      } = {
         id: selectedItem._id,
         title: covenantForm.title,
         description: covenantForm.description,
         category: covenantForm.category,
         lastUpdated: covenantForm.lastUpdated,
-        pdfUrl: covenantForm.pdfUrl || undefined,
-      });
+      };
+
+      if (covenantSelectedDoc || covenantSelectedImageUri) {
+        payload.fileStorageId = await uploadCovenantAttachmentToStorage(
+          covenantSelectedDoc,
+          covenantSelectedImageUri,
+        );
+        payload.pdfUrl = null;
+      } else if (covenantClearAttachment) {
+        payload.fileStorageId = null;
+        payload.pdfUrl = null;
+      }
+
+      await updateCovenant(payload);
 
       Alert.alert('Success', 'Covenant updated successfully!');
-      
+
       setShowCovenantModal(false);
       setIsEditingCovenant(false);
       setShowCategoryDropdown(false);
       animateCategoryDropdownOut();
       setSelectedItem(null);
+      resetCovenantAttachmentState();
       setCovenantForm({
         title: '',
         description: '',
         category: 'General',
         lastUpdated: new Date().toLocaleDateString('en-US'),
-        pdfUrl: '',
+        fileStorageId: '',
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating covenant:', error);
-      Alert.alert('Error', 'Failed to update covenant. Please try again.');
+      Alert.alert('Error', error?.message || 'Failed to update covenant. Please try again.');
+    } finally {
+      setCovenantUploading(false);
     }
   };
 
@@ -1455,12 +1854,13 @@ const AdminScreen = () => {
     setShowCategoryDropdown(false);
     animateCategoryDropdownOut();
     setSelectedItem(null);
+    resetCovenantAttachmentState();
     setCovenantForm({
       title: '',
       description: '',
       category: 'General',
       lastUpdated: new Date().toLocaleDateString('en-US'),
-      pdfUrl: '',
+      fileStorageId: '',
     });
     animateOut('covenant', () => {});
   };
@@ -1850,6 +2250,17 @@ const AdminScreen = () => {
                 <Ionicons name="save" size={16} color="#ffffff" />
                 <Text style={styles.adminFeeButtonText}>Save HOA Information</Text>
               </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.adminFeeButton, { backgroundColor: '#2563eb', marginTop: 12 }]}
+                onPress={() => {
+                  setShowShareQrModal(true);
+                  animateIn('shareQr');
+                }}
+              >
+                <Ionicons name="qr-code-outline" size={16} color="#ffffff" />
+                <Text style={styles.adminFeeButtonText}>Open Share Links & QR Codes</Text>
+              </TouchableOpacity>
             </View>
           </View>
         );
@@ -2041,7 +2452,7 @@ const AdminScreen = () => {
                                     <View style={[styles.residentGridRoleBadge, { backgroundColor: '#10b98120' }]}>
                                       <Ionicons name="people" size={Platform.OS === 'web' ? 10 : 11} color="#10b981" />
                                       <Text style={[styles.residentGridRoleText, { color: '#10b981' }]} numberOfLines={1}>
-                                        Resident
+                                        Homeowners
                                       </Text>
                                     </View>
                                   )}
@@ -2078,25 +2489,34 @@ const AdminScreen = () => {
                             </View>
                           </View>
                           
-                          {/* Action Button */}
+                          {/* Action Buttons */}
                           <View style={styles.residentGridActions}>
-                            {item.isBlocked ? (
+                            <View style={styles.residentGridActionsRow}>
+                              {item.isBlocked ? (
+                                <TouchableOpacity
+                                  style={[styles.residentGridActionButton, styles.unblockButton]}
+                                  onPress={() => handleUnblockResident(item)}
+                                >
+                                  <Ionicons name="checkmark-circle" size={14} color="#10b981" />
+                                  <Text style={styles.residentGridActionText}>Unblock</Text>
+                                </TouchableOpacity>
+                              ) : (
+                                <TouchableOpacity
+                                  style={[styles.residentGridActionButton, styles.blockButton]}
+                                  onPress={() => handleBlockResident(item)}
+                                >
+                                  <Ionicons name="ban" size={14} color="#ef4444" />
+                                  <Text style={styles.residentGridActionText}>Block</Text>
+                                </TouchableOpacity>
+                              )}
                               <TouchableOpacity
-                                style={[styles.residentGridActionButton, styles.unblockButton]}
-                                onPress={() => handleUnblockResident(item)}
+                                style={[styles.residentGridActionButton, styles.removeButton]}
+                                onPress={() => handleRemoveResident(item)}
                               >
-                                <Ionicons name="checkmark-circle" size={14} color="#10b981" />
-                                <Text style={styles.residentGridActionText}>Unblock</Text>
+                                <Ionicons name="trash" size={14} color="#dc2626" />
+                                <Text style={[styles.residentGridActionText, { color: '#dc2626' }]}>Remove</Text>
                               </TouchableOpacity>
-                            ) : (
-                              <TouchableOpacity
-                                style={[styles.residentGridActionButton, styles.blockButton]}
-                                onPress={() => handleBlockResident(item)}
-                              >
-                                <Ionicons name="ban" size={14} color="#ef4444" />
-                                <Text style={styles.residentGridActionText}>Block</Text>
-                              </TouchableOpacity>
-                            )}
+                            </View>
                           </View>
                         </View>
                       </Animated.View>
@@ -2314,6 +2734,16 @@ const AdminScreen = () => {
                     style={[styles.addButton, { backgroundColor: '#22c55e' }]}
                     onPress={() => {
                       animateButtonPress();
+                      setIsEditingCovenant(false);
+                      setSelectedItem(null);
+                      resetCovenantAttachmentState();
+                      setCovenantForm({
+                        title: '',
+                        description: '',
+                        category: 'General',
+                        lastUpdated: new Date().toLocaleDateString('en-US'),
+                        fileStorageId: '',
+                      });
                       setShowCovenantModal(true);
                       animateIn('covenant');
                     }}
@@ -2498,7 +2928,7 @@ const AdminScreen = () => {
               >
                 <Ionicons name="paw" size={18} color={postsSubTab === 'pets' ? '#3b82f6' : '#6b7280'} />
                 <Text style={[styles.communitySubTabText, postsSubTab === 'pets' && styles.activeCommunitySubTabText]}>
-                  Pets ({pets.length})
+                  Pets ({totalPetsCount})
                 </Text>
               </TouchableOpacity>
             </ScrollView>
@@ -2814,20 +3244,18 @@ const AdminScreen = () => {
             )}
             
             {postsSubTab === 'pets' && (
-              pets.length === 0 ? (
+              petsGrouped.length === 0 ? (
                 <View style={styles.emptyState}>
                   <Ionicons name="paw-outline" size={48} color="#9ca3af" />
                   <Text style={styles.emptyStateText}>No pet registrations found</Text>
                 </View>
               ) : (
                 <View style={[styles.petsGridContainer, (isMobileDevice || screenWidth < 640) && styles.petsGridContainerSingleColumn]}>
-                  {pets.map((item: any) => {
-                    const petsIsSingleColumn = isMobileDevice || screenWidth < 640;
-                    return (
-                    <View key={item._id} style={[
+                  {petsGrouped.map((group: any) => (
+                    <View key={group.residentId} style={[
                       styles.petCardWrapper,
-                      Platform.OS === 'web' && screenWidth >= 1024 && !petsIsSingleColumn && styles.petCardWrapperDesktop,
-                      petsIsSingleColumn && styles.petCardWrapperSingleColumn
+                      Platform.OS === 'web' && screenWidth >= 1024 && !(isMobileDevice || screenWidth < 640) && styles.petCardWrapperDesktop,
+                      (isMobileDevice || screenWidth < 640) && styles.petCardWrapperSingleColumn
                     ]}>
                       <Animated.View 
                         style={[
@@ -2844,50 +3272,42 @@ const AdminScreen = () => {
                         ]}
                       >
                         <View style={styles.petGridCardContent}>
-                          {/* Pet Image - Centered */}
-                          <View style={[styles.petCardImageContainer, petsIsSingleColumn && styles.petCardImageContainerSingleColumn]}>
-                            <View style={[styles.petImageAvatar, petsIsSingleColumn && styles.petImageAvatarSingleColumn]}>
-                              <PetImage storageId={item.image} />
-                            </View>
-                          </View>
-                          
-                          {/* Text Content - Underneath Image */}
+                          {/* Owner & Address - Top */}
                           <View style={styles.petCardTextContent}>
-                            {/* Pet Name and Date Row */}
-                            <View style={styles.petCardNameRow}>
-                              <Text style={styles.petCardName} numberOfLines={2}>
-                                {item.name}
-                              </Text>
-                              <Text style={styles.petCardDate} numberOfLines={1}>
-                                {formatDate(item.createdAt)}
-                              </Text>
-                            </View>
-                            
-                            {/* Owner */}
                             <Text style={styles.petCardOwner} numberOfLines={1}>
-                              Owner: {item.residentName || 'Unknown'}
+                              Owner: {group.residentName || 'Unknown'}
                             </Text>
-                            
-                            {/* Address */}
                             <Text style={styles.petCardAddress} numberOfLines={2}>
-                              {item.residentAddress || ''}
+                              {group.residentAddress || ''}
                             </Text>
                           </View>
-                          
-                          {/* Action Button */}
-                          <View style={styles.petCardActions}>
-                            <TouchableOpacity
-                              style={[styles.petCardActionButton, styles.blockButton]}
-                              onPress={() => handleDeleteItem(item, 'pet')}
-                            >
-                              <Ionicons name="trash" size={18} color="#ef4444" />
-                              <Text style={styles.petCardActionText}>Delete</Text>
-                            </TouchableOpacity>
+                          {/* Pets in group - images and names with delete */}
+                          <View style={styles.adminPetsInGroupContainer}>
+                            {group.pets.map((pet: any) => (
+                              <View key={pet._id} style={styles.adminPetInGroupItem}>
+                                <View style={[styles.petCardImageContainer, styles.adminPetThumbnail]}>
+                                  <View style={[styles.petImageAvatar, styles.adminPetAvatarSmall]}>
+                                    <PetImage storageId={pet.image} />
+                                  </View>
+                                </View>
+                                <View style={styles.adminPetInfoRow}>
+                                  <Text style={styles.petCardName} numberOfLines={1}>{pet.name}</Text>
+                                  <Text style={styles.petCardDate} numberOfLines={1}>{formatDate(pet.createdAt)}</Text>
+                                </View>
+                                <TouchableOpacity
+                                  style={[styles.petCardActionButton, styles.blockButton]}
+                                  onPress={() => handleDeleteItem(pet, 'pet')}
+                                >
+                                  <Ionicons name="trash" size={18} color="#ef4444" />
+                                  <Text style={styles.petCardActionText}>Delete</Text>
+                                </TouchableOpacity>
+                              </View>
+                            ))}
                           </View>
                         </View>
                       </Animated.View>
                     </View>
-                  );})}
+                  ))}
                 </View>
               )
             )}
@@ -3272,7 +3692,19 @@ const AdminScreen = () => {
               ) : (
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
                   {sortedHomeownersGroupedByAddress.map((addressGroup: any) => {
-                    const { homeowners, fees: homeownerFees, fines: homeownerFines, latestPayment, allFeesPaid, totalFeeAmount, totalPaidAmount, isPartiallyPaid, paymentsByFineId } = addressGroup;
+                    const {
+                      homeowners,
+                      fees: homeownerFees,
+                      fines: homeownerFines,
+                      payments: homeownerPayments,
+                      latestPayment,
+                      allFeesPaid,
+                      totalFeeAmount,
+                      totalPaidAmount,
+                      isPartiallyPaid,
+                      outstandingBalance,
+                      totalAssessed,
+                    } = addressGroup;
                     const paymentMethod = latestPayment?.paymentMethod;
                     // Responsive breakpoints: sm (< 640px), md (640-1023px), lg (1024-1279px), xl (>= 1280px)
                     const isSingleColumn = isMobileDevice || screenWidth < 640;
@@ -3306,13 +3738,24 @@ const AdminScreen = () => {
                     }));
                     
                     return (
-                      <View 
-                        key={addressGroup.addressKey} 
-                        style={{ 
-                          width: itemWidth as any,
-                          padding: isSingleColumn ? 0 : 8,
-                          minWidth: 0, // Allow flex shrinking
-                        }}
+                      <Pressable
+                      key={addressGroup.addressKey}
+                      style={({ pressed }) => ({
+                        width: itemWidth as any,
+                        padding: isSingleColumn ? 0 : 8,
+                        minWidth: 0,
+                        opacity: pressed ? 0.86 : 1,
+                        transform: [{ scale: pressed ? 0.972 : 1 }],
+                      })}
+                      onPress={() => {
+                        setSelectedHomeownerGroup(addressGroup);
+                        setShowHomeownerRecordsModal(true);
+                      }}
+                      android_ripple={{
+                        color: 'rgba(37, 99, 235, 0.07)',
+                        borderless: false,
+                      }}
+                    
                       >
                     <Animated.View 
                       style={[
@@ -3415,8 +3858,8 @@ const AdminScreen = () => {
                           </View>
                         </View>
                         
-                        {/* Show fees for this address group */}
-                        {homeownerFees.length > 0 ? (
+                        {/* Outstanding balance (fees + fines, vs verified payments) */}
+                        {homeownerFees.length > 0 || homeownerFines.length > 0 ? (
                           <View style={[
                             styles.gridFeeSection,
                             isSingleColumn && {
@@ -3431,7 +3874,7 @@ const AdminScreen = () => {
                                 marginBottom: 4,
                               }
                             ]}>
-                              ${totalFeeAmount.toFixed(2)}
+                              ${outstandingBalance.toFixed(2)}
                             </Text>
                             <Text style={[
                               styles.gridFeeLabel,
@@ -3440,9 +3883,14 @@ const AdminScreen = () => {
                                 marginBottom: 8,
                               }
                             ]}>
-                              {homeownerFees.length === 1 ? 'Fee' : `Fees (${homeownerFees.length})`}
+                              {homeownerFees.length > 0 && homeownerFines.length > 0
+                                ? `Fees (${homeownerFees.length}) & fines (${homeownerFines.length})`
+                                : homeownerFees.length > 0
+                                  ? homeownerFees.length === 1
+                                    ? 'Fee'
+                                    : `Fees (${homeownerFees.length})`
+                                  : `Fines (${homeownerFines.length})`}
                             </Text>
-                            {/* Show partial payment amount if applicable */}
                             {isPartiallyPaid && (
                               <Text style={[
                                 styles.gridPartialPaymentText,
@@ -3451,7 +3899,7 @@ const AdminScreen = () => {
                                   marginBottom: 4,
                                 }
                               ]}>
-                                Paid: ${totalPaidAmount.toFixed(2)} of ${totalFeeAmount.toFixed(2)}
+                                Verified: ${totalPaidAmount.toFixed(2)} of ${totalAssessed.toFixed(2)} assessed
                               </Text>
                             )}
                             <View style={[
@@ -3555,16 +4003,30 @@ const AdminScreen = () => {
                             </View>
                             <View style={styles.gridFinesList}>
                               {homeownerFines.map((fine: any, index: number) => {
-                                const payment = paymentsByFineId.get(fine._id);
-                                const isPartialPayment = payment &&
-                                                         payment.verificationStatus === 'Verified' &&
-                                                         payment.amount < fine.amount;
-                                const displayStatus = isPartialPayment ? 'Partially Paid' :
-                                                      fine.status === 'Paid' ? 'Paid' : 'Pending';
-                                const statusColor = isPartialPayment ? '#f59e0b' :
-                                                   fine.status === 'Paid' ? '#10b981' : '#dc2626';
-                                const statusIcon = isPartialPayment ? 'hourglass' :
-                                                  fine.status === 'Paid' ? 'checkmark-circle' : 'warning';
+                                const paidTowardFine = (homeownerPayments as any[])
+                                  .filter(
+                                    (p: any) =>
+                                      p.fineId === fine._id && p.verificationStatus === 'Verified',
+                                  )
+                                  .reduce((s: number, p: any) => s + p.amount, 0);
+                                const remainingFine = Math.max(0, fine.amount - paidTowardFine);
+                                const isPartialPayment = paidTowardFine > 0 && remainingFine >= 0.01;
+                                const isFinePaidUp = remainingFine < 0.01;
+                                const displayStatus = isFinePaidUp
+                                  ? 'Paid'
+                                  : isPartialPayment
+                                    ? 'Partially Paid'
+                                    : 'Pending';
+                                const statusColor = isFinePaidUp
+                                  ? '#10b981'
+                                  : isPartialPayment
+                                    ? '#f59e0b'
+                                    : '#dc2626';
+                                const statusIcon = isFinePaidUp
+                                  ? 'checkmark-circle'
+                                  : isPartialPayment
+                                    ? 'hourglass'
+                                    : 'warning';
                                 
                                 return (
                                   <View key={fine._id} style={[
@@ -3583,12 +4045,12 @@ const AdminScreen = () => {
                                       <Text style={styles.gridFineAmount}>${fine.amount}</Text>
                                       {isPartialPayment && (
                                         <Text style={styles.gridFinePartialPaymentText}>
-                                          Paid: ${payment.amount.toFixed(2)} of ${fine.amount.toFixed(2)}
+                                          Paid: ${paidTowardFine.toFixed(2)} of ${fine.amount.toFixed(2)}
                                         </Text>
                                       )}
                                       <View style={[
                                         styles.gridFineStatusBadge,
-                                        fine.status === 'Paid' ? styles.gridFineStatusPaid :
+                                        isFinePaidUp ? styles.gridFineStatusPaid :
                                         isPartialPayment ? styles.gridFineStatusPartial :
                                         styles.gridFineStatusPending
                                       ]}>
@@ -3612,8 +4074,13 @@ const AdminScreen = () => {
                           </View>
                         )}
                       </View>
+                      {/* Tap to view full record */}
+                      <View style={styles.gridCardTapHint}>
+                          <Ionicons name="chevron-forward" size={13} color="#64748b" />
+                          <Text style={styles.gridCardTapHintText}>View full record</Text>
+                        </View>
                     </Animated.View>
-                      </View>
+                      </Pressable>
                     );
                   })}
                 </View>
@@ -3645,7 +4112,7 @@ const AdminScreen = () => {
           contentContainerStyle={[styles.scrollContent, Platform.OS === 'web' && styles.webScrollContent]}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
-          showsVerticalScrollIndicator={true}
+          showsVerticalScrollIndicator={false}
           bounces={true}
           scrollEnabled={true}
           alwaysBounceVertical={false}
@@ -3818,6 +4285,83 @@ const AdminScreen = () => {
           {renderTabContent()}
         </View>
 
+        {/* Share QR Links Modal */}
+        <Modal
+          visible={showShareQrModal}
+          transparent={true}
+          animationType="none"
+          onRequestClose={() => animateOut('shareQr', () => setShowShareQrModal(false))}
+        >
+          <Animated.View style={[styles.modalOverlay, { opacity: overlayOpacity }]}>
+            <Animated.View style={[
+              styles.formModalContent,
+              {
+                opacity: shareQrModalOpacity,
+                transform: [{ translateY: shareQrModalTranslateY }],
+                maxHeight: Platform.OS === 'web' ? '90%' : Dimensions.get('window').height * 0.85,
+                maxWidth: Platform.OS === 'web' ? 680 : '95%',
+              }
+            ]}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Share Links and QR Codes</Text>
+                <TouchableOpacity
+                  style={styles.closeButton}
+                  onPress={() => animateOut('shareQr', () => setShowShareQrModal(false))}
+                >
+                  <Ionicons name="close" size={24} color="#6b7280" />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView
+                style={styles.modalForm}
+                contentContainerStyle={styles.modalFormContent}
+                showsVerticalScrollIndicator={true}
+              >
+                <Text style={styles.shareQrSubtitle}>
+                  Tap any URL to copy it. Share the link directly or have residents scan the QR code.
+                </Text>
+
+                {shareLinkItems.map((item) => (
+                  <View key={item.key} style={styles.shareQrCard}>
+                    <TouchableOpacity
+                      style={styles.shareQrCardHeader}
+                      onPress={() =>
+                        setExpandedShareQrKey((prev) => (prev === item.key ? null : item.key))
+                      }
+                    >
+                      <View style={styles.shareQrCardTitleRow}>
+                        <Ionicons
+                          name={expandedShareQrKey === item.key ? 'chevron-down' : 'chevron-forward'}
+                          size={16}
+                          color="#4b5563"
+                        />
+                        <Text style={styles.shareQrCardTitle}>{item.label}</Text>
+                      </View>
+                    </TouchableOpacity>
+
+                    {expandedShareQrKey === item.key && (
+                      <TouchableOpacity
+                        style={styles.shareQrCodeWrap}
+                        onPress={() => handleCopyQrImage(item)}
+                      >
+                        <QRCode
+                          getRef={(ref) => {
+                            if (ref) shareQrRefs.current[item.key] = ref;
+                          }}
+                          value={item.url}
+                          size={190}
+                          backgroundColor="#ffffff"
+                          color="#111827"
+                        />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ))}
+              </ScrollView>
+            </Animated.View>
+          </Animated.View>
+        </Modal>
+
         {/* Block Modal */}
         <Modal
           visible={showBlockModal}
@@ -3870,6 +4414,47 @@ const AdminScreen = () => {
           </Animated.View>
         </Modal>
 
+        {/* Remove Resident Modal */}
+        <Modal
+          visible={showRemoveModal}
+          transparent={true}
+          animationType="none"
+          onRequestClose={() => animateOut('remove', () => setShowRemoveModal(false))}
+        >
+          <Animated.View style={[styles.modalOverlay, { opacity: overlayOpacity }]}>
+            <Animated.View style={[
+              styles.modalContent,
+              {
+                opacity: removeModalOpacity,
+                transform: [{ translateY: removeModalTranslateY }],
+              }
+            ]}>
+              <View style={styles.modalBodyPadding}>
+                <Text style={styles.modalTitle}>Remove Resident</Text>
+                <Text style={styles.modalSubtitle}>
+                  Are you sure you want to remove {selectedItem?.firstName} {selectedItem?.lastName}? This action cannot be undone.
+                </Text>
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    style={styles.cancelButton}
+                    onPress={() => animateOut('remove', () => setShowRemoveModal(false))}
+                  >
+                    <Text style={styles.cancelButtonText}>Cancel</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.confirmButton, styles.removeConfirmButton]}
+                    onPress={confirmRemoveResident}
+                  >
+                    <Text style={styles.confirmButtonText}>Remove Resident</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </Animated.View>
+          </Animated.View>
+        </Modal>
+
         {/* Delete Modal */}
         <Modal
           visible={showDeleteModal}
@@ -3914,6 +4499,16 @@ const AdminScreen = () => {
             </Animated.View>
           </Animated.View>
         </Modal>
+
+        {/* ── Homeowner Full Records Modal ── */}
+        <HomeownerRecordsModal
+          visible={showHomeownerRecordsModal}
+          onClose={() => {
+            setShowHomeownerRecordsModal(false);
+            setSelectedHomeownerGroup(null);
+          }}
+          addressGroup={selectedHomeownerGroup}
+        />
 
         {/* Board Member Modal */}
         <Modal
@@ -5460,31 +6055,101 @@ const AdminScreen = () => {
                 </View>
 
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>PDF URL (Optional)</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    placeholder="Enter PDF document URL"
-                    value={covenantForm.pdfUrl}
-                    onChangeText={(text) => setCovenantForm(prev => ({ ...prev, pdfUrl: text }))}
-                    keyboardType="url"
-                    autoCapitalize="none"
-                  />
+                  <Text style={styles.inputLabel}>Attachment (optional)</Text>
+                  <Text style={{ fontSize: 11, color: '#6b7280', marginBottom: 8, lineHeight: 15 }}>
+                    Documents: PDF, Word (.doc, .docx), max 10MB. Photos: compressed (WebP or JPEG) for smaller
+                    storage.
+                  </Text>
+                  <View style={{ flexDirection: 'row', gap: 8, marginBottom: 8 }}>
+                    <TouchableOpacity
+                      style={[styles.filePickerButton, { flex: 1, paddingVertical: 12 }]}
+                      onPress={handleCovenantPickDocument}
+                      disabled={covenantUploading}
+                    >
+                      <Ionicons name="document-attach" size={18} color="#2563eb" />
+                      <Text style={{ fontSize: 13, color: '#2563eb', fontWeight: '600' }}>Document</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.filePickerButton, { flex: 1, paddingVertical: 12 }]}
+                      onPress={handleCovenantPickImage}
+                      disabled={covenantUploading}
+                    >
+                      <Ionicons name="image" size={18} color="#2563eb" />
+                      <Text style={{ fontSize: 13, color: '#2563eb', fontWeight: '600' }}>Photo</Text>
+                    </TouchableOpacity>
+                  </View>
+                  {covenantSelectedDoc && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                      <Ionicons name="checkmark-circle" size={16} color="#10b981" />
+                      <Text style={{ flex: 1, fontSize: 13, color: '#374151' }} numberOfLines={1}>
+                        {covenantSelectedDoc.name}
+                      </Text>
+                    </View>
+                  )}
+                  {covenantSelectedImageUri && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                      <Ionicons name="checkmark-circle" size={16} color="#10b981" />
+                      <Text style={{ fontSize: 13, color: '#374151' }}>Photo selected (will be compressed)</Text>
+                    </View>
+                  )}
+                  {isEditingCovenant &&
+                    selectedItem &&
+                    !covenantSelectedDoc &&
+                    !covenantSelectedImageUri &&
+                    !covenantClearAttachment &&
+                    (selectedItem.fileStorageId || selectedItem.pdfUrl) && (
+                      <Text style={{ fontSize: 12, color: '#374151', marginBottom: 6 }}>
+                        Current:{' '}
+                        {selectedItem.fileStorageId
+                          ? 'File attached (storage)'
+                          : 'Legacy PDF link (URL only)'}
+                      </Text>
+                    )}
+                  {covenantClearAttachment && (
+                    <Text style={{ fontSize: 12, color: '#b45309', marginBottom: 6 }}>
+                      Attachment will be removed when you save.
+                    </Text>
+                  )}
+                  {(covenantSelectedDoc ||
+                    covenantSelectedImageUri ||
+                    covenantForm.fileStorageId ||
+                    (isEditingCovenant && selectedItem?.pdfUrl) ||
+                    (isEditingCovenant && selectedItem?.fileStorageId)) && (
+                    <TouchableOpacity
+                      onPress={() => {
+                        setCovenantSelectedDoc(null);
+                        setCovenantSelectedImageUri(null);
+                        setCovenantClearAttachment(true);
+                      }}
+                      disabled={covenantUploading}
+                    >
+                      <Text style={{ fontSize: 13, color: '#ef4444', fontWeight: '600' }}>
+                        Remove attachment
+                      </Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
 
                 <View style={styles.modalActions}>
                   <TouchableOpacity
                     style={styles.cancelButton}
                     onPress={handleCancelCovenant}
+                    disabled={covenantUploading}
                   >
                     <Text style={styles.cancelButtonText}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={styles.confirmButton}
+                    style={[styles.confirmButton, covenantUploading && { opacity: 0.7 }]}
                     onPress={isEditingCovenant ? handleUpdateCovenant : handleAddCovenant}
+                    disabled={covenantUploading}
                   >
-                    <Text style={styles.confirmButtonText}>
-                      {isEditingCovenant ? 'Update Covenant' : 'Add Covenant'}
-                    </Text>
+                    {covenantUploading ? (
+                      <ActivityIndicator color="#ffffff" size="small" />
+                    ) : (
+                      <Text style={styles.confirmButtonText}>
+                        {isEditingCovenant ? 'Update Covenant' : 'Add Covenant'}
+                      </Text>
+                    )}
                   </TouchableOpacity>
                 </View>
               </ScrollView>
@@ -6728,9 +7393,64 @@ const styles = StyleSheet.create({
   hoaInfoContainer: {
     padding: 20,
   },
+  shareQrSubtitle: {
+    fontSize: 13,
+    color: '#1d4ed8',
+    marginTop: 8,
+    marginBottom: 12,
+    lineHeight: 18,
+  },
+  shareQrCard: {
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  shareQrCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  shareQrCardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 1,
+  },
+  shareQrCardTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1f2937',
+    flexShrink: 1,
+  },
+  shareQrCodeWrap: {
+    marginTop: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 8,
+    borderRadius: 10,
+    backgroundColor: '#f9fafb',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
   textArea: {
     height: 80,
     textAlignVertical: 'top',
+  },
+  filePickerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#d1d5db',
+    borderStyle: 'dashed',
+    backgroundColor: '#f9fafb',
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -7852,6 +8572,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#fecaca',
   },
+  removeButton: {
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  removeConfirmButton: {
+    backgroundColor: '#dc2626',
+  },
   actionButtonText: {
     fontSize: 11,
     fontWeight: '600',
@@ -7987,6 +8715,11 @@ const styles = StyleSheet.create({
   residentGridActions: {
     alignItems: 'flex-end',
     marginTop: 8,
+  },
+  residentGridActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
   },
   residentGridActionButton: {
     flexDirection: 'row',
@@ -8146,6 +8879,32 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#ef4444',
+  },
+  adminPetsInGroupContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginTop: 8,
+  },
+  adminPetInGroupItem: {
+    alignItems: 'center',
+    minWidth: 100,
+    padding: 8,
+    backgroundColor: '#f9fafb',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  adminPetThumbnail: {
+    marginBottom: 8,
+  },
+  adminPetAvatarSmall: {
+    width: 80,
+    height: 80,
+  },
+  adminPetInfoRow: {
+    alignItems: 'center',
+    marginBottom: 8,
   },
   // Poll styles
   pollOptionsContainer: {
@@ -9521,6 +10280,27 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginLeft: 6,
   },
+  gridCardTapHint: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    alignSelf: 'flex-start' as const,
+    gap: 4,
+    marginTop: 8,
+    marginBottom: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  gridCardTapHintText: {
+    fontSize: 11,
+    color: '#64748b',
+    fontWeight: '600' as const,
+    letterSpacing: 0.1,
+  },
+
 });
 
 export default AdminScreen;
