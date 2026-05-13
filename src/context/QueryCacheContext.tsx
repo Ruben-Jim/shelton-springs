@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useMemo } from 'react';
 import { useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
+import { isDemoBuild } from '../config/isDemoBuild';
+import { DemoDataContext } from '../demo/DemoDataProvider';
 
 interface QueryCacheContextType {
   residents: any[];
@@ -9,18 +11,32 @@ interface QueryCacheContextType {
 
 const QueryCacheContext = createContext<QueryCacheContextType | undefined>(undefined);
 
-/**
- * QueryCacheProvider - Provides cached queries for frequently accessed data
- * This prevents duplicate queries across multiple screens, saving ~400K operations/month
- * 
- * Cache TTL: Data is cached by Convex's built-in query system. This context
- * ensures a single source of truth for shared queries across the app.
- */
 export const QueryCacheProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Single queries for residents and hoaInfo - shared across all screens
-  // These queries are automatically cached by Convex and deduplicated
-  const residents = useQuery(api.residents.getAll) ?? [];
-  const hoaInfo = useQuery(api.hoaInfo.get) ?? null;
+  const isDemo = isDemoBuild();
+  const demoCtx = useContext(DemoDataContext);
+
+  const residentsConvex = useQuery(api.residents.getAll, isDemo ? 'skip' : {});
+  const hoaConvex = useQuery(api.hoaInfo.get, isDemo ? 'skip' : {});
+
+  const residents = useMemo(() => {
+    if (isDemo) {
+      if (!demoCtx) {
+        throw new Error('DemoDataProvider is required when demoMode is enabled');
+      }
+      return demoCtx.snapshot.residents ?? [];
+    }
+    return residentsConvex ?? [];
+  }, [isDemo, demoCtx, residentsConvex]);
+
+  const hoaInfo = useMemo(() => {
+    if (isDemo) {
+      if (!demoCtx) {
+        throw new Error('DemoDataProvider is required when demoMode is enabled');
+      }
+      return demoCtx.snapshot.hoaInfo ?? null;
+    }
+    return hoaConvex ?? null;
+  }, [isDemo, demoCtx, hoaConvex]);
 
   const value: QueryCacheContextType = useMemo(
     () => ({
@@ -37,11 +53,6 @@ export const QueryCacheProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   );
 };
 
-/**
- * Hook to get cached residents data
- * Use this instead of calling useQuery(api.residents.getAll) directly
- * to prevent duplicate queries across screens
- */
 export const useCachedResidents = () => {
   const context = useContext(QueryCacheContext);
   if (context === undefined) {
@@ -50,11 +61,6 @@ export const useCachedResidents = () => {
   return context.residents;
 };
 
-/**
- * Hook to get cached HOA info data
- * Use this instead of calling useQuery(api.hoaInfo.get) directly
- * to prevent duplicate queries across screens
- */
 export const useCachedHoaInfo = () => {
   const context = useContext(QueryCacheContext);
   if (context === undefined) {

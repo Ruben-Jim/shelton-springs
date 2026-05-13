@@ -1,18 +1,19 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { useQuery, useMutation } from 'convex/react';
+import React, { createContext, useContext, useState, useCallback } from 'react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from './AuthContext';
 import { Id } from '../../convex/_generated/dataModel';
+import { useDemoQuery } from '../hooks/useDemoQuery';
+import { useDemoMutation } from '../hooks/useDemoMutation';
 
 interface Conversation {
-  _id: Id<"conversations">;
+  _id: Id<'conversations'>;
   participants: string[];
   createdBy: string;
   createdAt: number;
   updatedAt: number;
   latestMessage?: {
-    _id: Id<"messages">;
-    conversationId: Id<"conversations">;
+    _id: Id<'messages'>;
+    conversationId: Id<'conversations'>;
     senderId: string;
     senderName: string;
     senderRole: string;
@@ -29,8 +30,8 @@ interface Conversation {
 }
 
 interface Message {
-  _id: Id<"messages">;
-  conversationId: Id<"conversations">;
+  _id: Id<'messages'>;
+  conversationId: Id<'conversations'>;
   senderId: string;
   senderName: string;
   senderRole: string;
@@ -41,11 +42,11 @@ interface Message {
 interface MessagingContextType {
   conversations: Conversation[];
   isLoading: boolean;
-  openConversation: (conversationId: Id<"conversations"> | null) => void;
-  activeConversationId: Id<"conversations"> | null;
+  openConversation: (conversationId: Id<'conversations'> | null) => void;
+  activeConversationId: Id<'conversations'> | null;
   activeConversationMessages: Message[];
   sendMessage: (content: string) => Promise<void>;
-  createConversationWithUser: (recipientId: string) => Promise<Id<"conversations"> | null>;
+  createConversationWithUser: (recipientId: string) => Promise<Id<'conversations'> | null>;
   hasUnreadMessages: boolean;
   latestMessagePreview: string | null;
   showOverlay: boolean;
@@ -56,96 +57,94 @@ const MessagingContext = createContext<MessagingContextType | undefined>(undefin
 
 export const MessagingProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
-  const [activeConversationId, setActiveConversationId] = useState<Id<"conversations"> | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<Id<'conversations'> | null>(null);
   const [showOverlay, setShowOverlay] = useState(false);
 
-  // Queries - only poll conversations when overlay is visible or for non-board members (to show unread indicator)
-  // This reduces operations by ~400K/month for board members not actively using messaging
   const shouldQueryConversations = showOverlay || (!user?.isBoardMember && user);
-  const conversations = useQuery(
-    api.messages.getUserConversations,
-    shouldQueryConversations && user ? { userId: user._id } : "skip"
-  ) || [];
 
-  const activeConversationMessages = useQuery(
-    api.messages.getConversationMessages,
-    activeConversationId ? { conversationId: activeConversationId } : "skip"
-  ) || [];
+  const conversations =
+    useDemoQuery(
+      api.messages.getUserConversations,
+      shouldQueryConversations && user ? { userId: user._id } : 'skip',
+      (s, args) => s.conversationsByUserId[String(args.userId)] ?? []
+    ) ?? [];
 
-  // Mutations
-  const createConversation = useMutation(api.messages.createConversation);
-  const sendMessageMutation = useMutation(api.messages.sendMessage);
+  const activeConversationMessages =
+    useDemoQuery(
+      api.messages.getConversationMessages,
+      activeConversationId ? { conversationId: activeConversationId } : 'skip',
+      (s, args) => s.messagesByConversationId[String(args.conversationId)] ?? []
+    ) ?? [];
 
-  // Check for unread messages (for non-board users) - optimized to reduce re-computations
+  const createConversation = useDemoMutation(api.messages.createConversation);
+  const sendMessageMutation = useDemoMutation(api.messages.sendMessage);
+
   const hasUnreadMessages = React.useMemo(() => {
     if (!user || user.isBoardMember) return false;
-    // For now, consider any conversation as "unread" for non-board users
-    // This could be enhanced with actual read tracking later
     return conversations.length > 0;
   }, [conversations.length, user]);
 
-  // Get latest message preview for minimized bubble - optimized
   const latestMessagePreview = React.useMemo(() => {
     if (conversations.length === 0) return null;
-    // Conversations are already sorted by updatedAt, so first one is latest
     const latestConv = conversations[0];
     return latestConv.latestMessage?.content || null;
   }, [conversations.length > 0 ? conversations[0]?.latestMessage?.content : null]);
 
-  const openConversation = useCallback((conversationId: Id<"conversations"> | null) => {
+  const openConversation = useCallback((conversationId: Id<'conversations'> | null) => {
     setActiveConversationId(conversationId);
   }, []);
 
-  const createConversationWithUser = useCallback(async (recipientId: string): Promise<Id<"conversations"> | null> => {
-    if (!user || !user.isBoardMember) return null;
+  const createConversationWithUser = useCallback(
+    async (recipientId: string): Promise<Id<'conversations'> | null> => {
+      if (!user || !user.isBoardMember) return null;
 
-    try {
-      const conversationId = await createConversation({
-        boardMemberId: user._id,
-        boardMemberName: `${user.firstName} ${user.lastName}`,
-        recipientId,
-      });
-      setActiveConversationId(conversationId);
-      return conversationId;
-    } catch (error) {
-      console.error('Error creating conversation:', error);
-      return null;
-    }
-  }, [user, createConversation]);
+      try {
+        const conversationId = (await createConversation({
+          boardMemberId: user._id,
+          boardMemberName: `${user.firstName} ${user.lastName}`,
+          recipientId,
+        })) as Id<'conversations'> | null;
+        if (conversationId) {
+          setActiveConversationId(conversationId);
+        }
+        return conversationId;
+      } catch (error) {
+        console.error('Error creating conversation:', error);
+        return null;
+      }
+    },
+    [user, createConversation]
+  );
 
-  const sendMessage = useCallback(async (content: string) => {
-    if (!activeConversationId || !user || !content.trim()) return;
+  const sendMessage = useCallback(
+    async (content: string) => {
+      if (!activeConversationId || !user || !content.trim()) return;
 
-    try {
-      const senderName = user.isBoardMember
-        ? "Shelton Springs Board"
-        : `${user.firstName} ${user.lastName}`;
-      
-      const senderRole = user.isBoardMember
-        ? `${user.firstName} ${user.lastName}`
-        : user.isRenter
-        ? "Renter"
-        : "Homeowner";
+      try {
+        const senderName = user.isBoardMember
+          ? 'Shelton Springs Board'
+          : `${user.firstName} ${user.lastName}`;
 
-      await sendMessageMutation({
-        conversationId: activeConversationId,
-        senderId: user._id,
-        senderName,
-        senderRole,
-        content: content.trim(),
-      });
+        const senderRole = user.isBoardMember
+          ? `${user.firstName} ${user.lastName}`
+          : user.isRenter
+            ? 'Renter'
+            : 'Homeowner';
 
-      // Note: For recipient notifications, remote push notifications would be needed
-      // This local notification only works for the sender's device
-      // In a production app, you'd want to send remote push notifications to the recipient
-    } catch (error) {
-      console.error('Error sending message:', error);
-      throw error;
-    }
-  }, [activeConversationId, user, sendMessageMutation]);
-
-  // Note: New message notifications are created server-side in messages.sendMessage
-  // and delivered via Expo Push (when app closed) or useUserNotifications (when app open)
+        await sendMessageMutation({
+          conversationId: activeConversationId,
+          senderId: user._id,
+          senderName,
+          senderRole,
+          content: content.trim(),
+        });
+      } catch (error) {
+        console.error('Error sending message:', error);
+        throw error;
+      }
+    },
+    [activeConversationId, user, sendMessageMutation]
+  );
 
   const value: MessagingContextType = {
     conversations,
@@ -161,11 +160,7 @@ export const MessagingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setShowOverlay,
   };
 
-  return (
-    <MessagingContext.Provider value={value}>
-      {children}
-    </MessagingContext.Provider>
-  );
+  return <MessagingContext.Provider value={value}>{children}</MessagingContext.Provider>;
 };
 
 export const useMessaging = () => {
@@ -175,4 +170,3 @@ export const useMessaging = () => {
   }
   return context;
 };
-

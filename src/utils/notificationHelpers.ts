@@ -2,6 +2,7 @@ import { Platform } from 'react-native';
 import enhancedUnifiedNotificationManager from '../services/EnhancedUnifiedNotificationManager';
 import { ConvexReactClient } from 'convex/react';
 import { api } from '../../convex/_generated/api';
+import { isDemoBuild } from '../config/isDemoBuild';
 
 /**
  * Notification helper utilities for app-wide notification triggers
@@ -158,7 +159,7 @@ export const notifyNewCommunityPost = async (
   });
 
   // Create notification records for all residents
-  if (convex) {
+  if (convex && !isDemoBuild()) {
     try {
       await convex.mutation(api.notifications.createNotificationForAllResidents, {
         type: 'community_post',
@@ -208,7 +209,7 @@ export const notifyNewPoll = async (
   });
 
   // Create notification records for all residents
-  if (convex) {
+  if (convex && !isDemoBuild()) {
     try {
       await convex.mutation(api.notifications.createNotificationForAllResidents, {
         type: 'poll',
@@ -245,7 +246,7 @@ export const notifyNewFee = async (
     },
   });
 
-  if (convex && notifyAllResidents) {
+  if (convex && notifyAllResidents && !isDemoBuild()) {
     try {
       await convex.mutation(api.notifications.createNotificationForAllResidents, {
         type: 'fee',
@@ -292,7 +293,7 @@ export const notifyNewFine = async (
     },
   });
 
-  if (convex && residentId) {
+  if (convex && residentId && !isDemoBuild()) {
     try {
       await convex.mutation(api.notifications.createNotificationForUsers, {
         userIds: [residentId],
@@ -356,7 +357,7 @@ export const notifyResidentNotification = async (
   });
 
   // Create notification records for all residents
-  if (convex) {
+  if (convex && !isDemoBuild()) {
     try {
       await convex.mutation(api.notifications.createNotificationForAllResidents, {
         type: 'resident_notification',
@@ -391,7 +392,7 @@ export const notifyBoardUpdate = async (
     },
   });
 
-  if (convex) {
+  if (convex && !isDemoBuild()) {
     try {
       await convex.mutation(api.notifications.createNotificationForAllResidents, {
         type: 'board_update',
@@ -426,7 +427,7 @@ export const notifyPendingVenmoPayment = async (
   });
 
   // Create notification records for all board members
-  if (convex) {
+  if (convex && !isDemoBuild()) {
     try {
       await convex.mutation(api.notifications.createNotificationForBoardMembers, {
         type: 'payment_pending',
@@ -464,7 +465,7 @@ export const notifyNewDocument = async (
     },
   });
 
-  if (convex) {
+  if (convex && !isDemoBuild()) {
     try {
       await convex.mutation(api.notifications.createNotificationForAllResidents, {
         type: 'document',

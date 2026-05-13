@@ -15,9 +15,9 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useQuery } from 'convex/react';
-import { api } from '../../convex/_generated/api';
+import { useDemoQuery } from '../hooks/useDemoQuery';
 
+import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
@@ -66,7 +66,8 @@ const BoardScreen = () => {
     });
   };
 
-  const members = useQuery(api.boardMembers.getAll) ?? [];
+  const members =
+    useDemoQuery(api.boardMembers.getAll, {}, (s) => s.boardMembers ?? []) ?? [];
   
   // Rainbow colors for board member cards
   const borderColors = [

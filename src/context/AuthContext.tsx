@@ -1,8 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { useQuery, useMutation } from 'convex/react';
+import { useMutation } from 'convex/react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api } from '../../convex/_generated/api';
 import { User, AuthState } from '../types';
+import { isDemoBuild } from '../config/isDemoBuild';
 
 interface AuthContextType extends AuthState {
   signIn: (user: User) => Promise<void>;
@@ -95,20 +96,24 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       
       let residentId: string;
       try {
-        residentId = await createResident({
-          firstName: userData.firstName,
-          lastName: userData.lastName,
-          email: userData.email,
-          password: userData.password,
-          phone: userData.phone,
-          address: userData.address,
-          unitNumber: userData.unitNumber,
-          isResident: userData.isResident,
-          isBoardMember: userData.isBoardMember,
-          isRenter: userData.isRenter,
-          isDev: userData.isDev ?? false, // Default to false if not provided
-          profileImage: userData.profileImage,
-        });
+        if (isDemoBuild()) {
+          residentId = `demo_local_${Date.now()}`;
+        } else {
+          residentId = await createResident({
+            firstName: userData.firstName,
+            lastName: userData.lastName,
+            email: userData.email,
+            password: userData.password,
+            phone: userData.phone,
+            address: userData.address,
+            unitNumber: userData.unitNumber,
+            isResident: userData.isResident,
+            isBoardMember: userData.isBoardMember,
+            isRenter: userData.isRenter,
+            isDev: userData.isDev ?? false, // Default to false if not provided
+            profileImage: userData.profileImage,
+          });
+        }
         console.log('✅ Resident created with ID:', residentId);
       } catch (convexError) {
         console.error('Failed to create resident in Convex:', convexError);
@@ -183,17 +188,19 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const updateUser = async (updates: Partial<User>) => {
     try {
       if (!authState.user) return;
-      
-      try {
-        await updateResident({
-          id: authState.user._id as any,
-          ...updates,
-        });
-      } catch (convexError) {
-        console.error('Failed to update resident in Convex:', convexError);
-        // Still update local state even if Convex update fails
-        // This allows offline functionality
-        console.warn('Updating local state only - Convex update failed');
+
+      if (!isDemoBuild()) {
+        try {
+          await updateResident({
+            id: authState.user._id as any,
+            ...updates,
+          });
+        } catch (convexError) {
+          console.error('Failed to update resident in Convex:', convexError);
+          // Still update local state even if Convex update fails
+          // This allows offline functionality
+          console.warn('Updating local state only - Convex update failed');
+        }
       }
 
       const updatedUser = { ...authState.user, ...updates, updatedAt: Date.now() };

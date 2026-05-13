@@ -21,6 +21,9 @@ import { useCustomAlert } from '../hooks/useCustomAlert';
 import { useResetTokenRedirect } from '../hooks/useResetTokenRedirect';
 import { useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
+import { isDemoBuild } from '../config/isDemoBuild';
+import { authenticateDemoUser } from '../demo/demoAuth';
+import { DEMO_BOARD_ID } from '../demo/fixtures/initialSnapshot';
 
 type LoginScreenNavigationProp = StackNavigationProp<AuthStackParamList, 'Login'>;
 
@@ -42,6 +45,11 @@ const LoginScreen = () => {
 
     if (!formData.email.trim()) {
       newErrors.email = 'Email is required';
+    } else if (
+      isDemoBuild() &&
+      formData.email.trim().toLowerCase() === DEMO_BOARD_ID.toLowerCase()
+    ) {
+      /* Demo board: allow synthetic user id in the email field */
     } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
       newErrors.email = 'Please enter a valid email';
     }
@@ -62,11 +70,15 @@ const LoginScreen = () => {
     setIsLoading(true);
 
     try {
-      // Authenticate user with email and password
-      const user = await convex.query(api.residents.authenticate, {
-        email: formData.email.toLowerCase(),
-        password: formData.password,
-      });
+      let user: any = null;
+      if (isDemoBuild()) {
+        user = authenticateDemoUser(formData.email, formData.password);
+      } else {
+        user = await convex.query(api.residents.authenticate, {
+          email: formData.email.toLowerCase(),
+          password: formData.password,
+        });
+      }
 
       if (!user) {
         showAlert({
@@ -118,6 +130,11 @@ const LoginScreen = () => {
             <Ionicons name="home" size={48} color="#2563eb" />
             <Text style={styles.title}>Welcome Back</Text>
             <Text style={styles.subtitle}>Sign in to your HOA Community account</Text>
+            {isDemoBuild() ? (
+              <Text style={styles.demoHint}>
+                {'Resident: sarah.mitchell@sheltonsprings.homes\nBoard: michael.torres@sheltonsprings.homes\nPassword for all accounts: demo123'}
+              </Text>
+            ) : null}
           </View>
 
           {/* Form */}
@@ -221,6 +238,14 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     marginTop: 8,
     textAlign: 'center',
+  },
+  demoHint: {
+    fontSize: 12,
+    color: '#92400e',
+    marginTop: 10,
+    textAlign: 'center',
+    lineHeight: 17,
+    paddingHorizontal: 8,
   },
   form: {
     width: '100%',

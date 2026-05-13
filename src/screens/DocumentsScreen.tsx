@@ -21,7 +21,8 @@ import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
-import { useQuery, useMutation } from 'convex/react';
+import { useDemoQuery } from '../hooks/useDemoQuery';
+import { useDemoMutation } from '../hooks/useDemoMutation';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
@@ -146,17 +147,23 @@ const DocumentsScreen = () => {
 
   // Convex queries (conditional based on screen focus)
   const [documentsLimit, setDocumentsLimit] = useState(50);
-  const documentsData = useQuery(
+  const documentsData = useDemoQuery(
     api.documents.getPaginated,
-    isFocused ? { limit: documentsLimit, offset: 0 } : "skip"
+    isFocused ? { limit: documentsLimit, offset: 0 } : 'skip',
+    (s, args) => {
+      const limit = args.limit ?? 50;
+      const offset = args.offset ?? 0;
+      const items = s.allDocuments.slice(offset, offset + limit);
+      return { items, total: s.allDocuments.length };
+    }
   );
   const allDocuments = documentsData?.items ?? [];
   const documents = allDocuments.filter((doc: any) => doc.type === activeType);
 
   // Convex mutations
-  const createDocument = useMutation(api.documents.create);
-  const deleteDocument = useMutation(api.documents.remove);
-  const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
+  const createDocument = useDemoMutation(api.documents.create);
+  const deleteDocument = useDemoMutation(api.documents.remove);
+  const generateUploadUrl = useDemoMutation(api.storage.generateUploadUrl);
 
   const handlePickDocument = async () => {
     try {

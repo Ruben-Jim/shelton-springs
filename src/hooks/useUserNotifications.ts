@@ -1,9 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { Platform } from 'react-native';
-import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
 import enhancedUnifiedNotificationManager from '../services/EnhancedUnifiedNotificationManager';
+import { isDemoBuild } from '../config/isDemoBuild';
+import { useDemoQuery } from './useDemoQuery';
+import { useDemoMutation } from './useDemoMutation';
 
 /**
  * Hook to reactively get user notifications and trigger local push notifications
@@ -13,26 +15,25 @@ export const useUserNotifications = () => {
   const { user } = useAuth();
   const userId = user?._id ? String(user._id) : undefined;
 
-  // Get unread notifications reactively
-  const unreadNotifications = useQuery(
+  const unreadNotifications = useDemoQuery(
     api.notifications.getUnreadNotifications,
-    userId ? { userId } : 'skip'
+    userId ? { userId } : 'skip',
+    (s, args) => s.unreadNotificationsByUserId[String(args.userId)] ?? []
   );
 
-  // Get unread count
-  const unreadCount = useQuery(
+  const unreadCount = useDemoQuery(
     api.notifications.getUnreadCount,
-    userId ? { userId } : 'skip'
+    userId ? { userId } : 'skip',
+    (s, args) => s.unreadCountByUserId[String(args.userId)] ?? 0
   );
 
-  // Mutations
-  const markNotificationAsRead = useMutation(api.notifications.markNotificationAsRead);
-  const markAllNotificationsAsRead = useMutation(api.notifications.markAllNotificationsAsRead);
-  const updatePushToken = useMutation(api.residents.updatePushToken);
+  const markNotificationAsRead = useDemoMutation(api.notifications.markNotificationAsRead);
+  const markAllNotificationsAsRead = useDemoMutation(api.notifications.markAllNotificationsAsRead);
+  const updatePushToken = useDemoMutation(api.residents.updatePushToken);
 
   // Sync Expo push token to server (mobile only) for server-side push notifications
   useEffect(() => {
-    if (!user?._id || Platform.OS === 'web') return;
+    if (isDemoBuild() || !user?._id || Platform.OS === 'web') return;
 
     const syncToken = async () => {
       const token = enhancedUnifiedNotificationManager.getPushToken();
@@ -139,16 +140,23 @@ export const useUserNotifications = () => {
     hasCompletedInitialLoad.current = false;
   }, [userId]);
 
+  const markOne = useCallback(
+    async (notificationId: string) => {
+      await markNotificationAsRead({ notificationId: notificationId as any });
+    },
+    [markNotificationAsRead]
+  );
+
+  const markAll = useCallback(async () => {
+    if (userId) {
+      await markAllNotificationsAsRead({ userId });
+    }
+  }, [markAllNotificationsAsRead, userId]);
+
   return {
     unreadNotifications: unreadNotifications || [],
     unreadCount: unreadCount ?? 0,
-    markNotificationAsRead: async (notificationId: string) => {
-      await markNotificationAsRead({ notificationId: notificationId as any });
-    },
-    markAllNotificationsAsRead: async () => {
-      if (userId) {
-        await markAllNotificationsAsRead({ userId });
-      }
-    },
+    markNotificationAsRead: markOne,
+    markAllNotificationsAsRead: markAll,
   };
 };

@@ -14,6 +14,7 @@ import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
+import { isDemoBuild } from '../config/isDemoBuild';
 import { AuthStackParamList } from '../navigation/AuthNavigator';
 import { useResetTokenRedirect } from '../hooks/useResetTokenRedirect';
 import CustomAlert from '../components/CustomAlert';
@@ -51,6 +52,25 @@ const ForgotPasswordScreen = () => {
 
     setIsLoading(true);
     try {
+      if (isDemoBuild()) {
+        showAlert({
+          title: 'Check Your Email',
+          message:
+            "Demo mode: no email is sent. In production, you'd receive a reset link if the account exists.",
+          buttons: [
+            {
+              text: 'OK',
+              onPress: () => {
+                hideAlert();
+                navigation.navigate('Login');
+              },
+            },
+          ],
+          type: 'success',
+        });
+        return;
+      }
+
       await convex.mutation(api.passwordReset.requestPasswordReset, {
         email: email.trim().toLowerCase(),
       });

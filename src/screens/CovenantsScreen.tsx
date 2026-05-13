@@ -14,7 +14,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
-import { useQuery } from 'convex/react';
+import { useDemoQuery } from '../hooks/useDemoQuery';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
 import { useCachedHoaInfo } from '../context/QueryCacheContext';
@@ -124,9 +124,15 @@ const CovenantsScreen = () => {
 
   const categories = ['Architecture', 'Landscaping', 'Minutes', 'Caveats', 'General'];
   const [covenantsLimit, setCovenantsLimit] = useState(50);
-  const covenantsData = useQuery(
+  const covenantsData = useDemoQuery(
     api.covenants.getPaginated,
-    isFocused ? { limit: covenantsLimit, offset: 0 } : "skip"
+    isFocused ? { limit: covenantsLimit, offset: 0 } : 'skip',
+    (s, args) => {
+      const limit = args.limit ?? 50;
+      const offset = args.offset ?? 0;
+      const items = s.allCovenants.slice(offset, offset + limit);
+      return { items, total: s.allCovenants.length };
+    }
   );
   const covenants = covenantsData?.items ?? [];
 

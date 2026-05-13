@@ -14,6 +14,7 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import * as Linking from 'expo-linking';
 import { useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
+import { isDemoBuild } from '../config/isDemoBuild';
 import { AuthStackParamList } from '../navigation/AuthNavigator';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
@@ -82,6 +83,32 @@ const ResetPasswordScreen = () => {
 
     setIsLoading(true);
     try {
+      if (isDemoBuild()) {
+        showAlert({
+          title: 'Password Reset',
+          message: 'Demo mode: password was not changed on any server.',
+          buttons: [
+            {
+              text: 'OK',
+              onPress: () => {
+                hideAlert();
+                if (Platform.OS === 'web' && typeof window !== 'undefined') {
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete('resetToken');
+                  window.history.replaceState({}, '', url.pathname + url.search);
+                }
+                navigation.reset({
+                  index: 0,
+                  routes: [{ name: 'Login' }],
+                });
+              },
+            },
+          ],
+          type: 'success',
+        });
+        return;
+      }
+
       await convex.mutation(api.passwordReset.resetPassword, {
         token,
         newPassword: password,

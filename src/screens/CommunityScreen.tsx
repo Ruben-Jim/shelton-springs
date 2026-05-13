@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useContext } from 'react';
 import {
   View,
   Text,
@@ -22,11 +22,14 @@ import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useIsFocused } from '@react-navigation/native';
-import { useQuery, useMutation } from 'convex/react';
 import { useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
 import { useCachedResidents } from '../context/QueryCacheContext';
+import { useDemoQuery } from '../hooks/useDemoQuery';
+import { useDemoMutation } from '../hooks/useDemoMutation';
+import { isDemoBuild } from '../config/isDemoBuild';
+import { DemoDataContext } from '../demo/DemoDataProvider';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
 import CustomTabBar from '../components/CustomTabBar';
@@ -68,6 +71,7 @@ const CommunityScreen = () => {
   const { user } = useAuth();
   const { setShowOverlay } = useMessaging();
   const convex = useConvex();
+  const demoData = useContext(DemoDataContext);
   const isBoardMember = user?.isBoardMember && user?.isActive;
   const route = useRoute();
   const isFocused = useIsFocused();
@@ -220,23 +224,36 @@ const CommunityScreen = () => {
   const fadeAnim = useRef(new Animated.Value(1)).current; // Start at 1 to avoid flash on tab click
 
   // Convex queries - using paginated queries (conditional based on screen focus)
-  const postsData = useQuery(
+  const postsData = useDemoQuery(
     api.communityPosts.getPaginated,
-    isFocused ? { limit: postsLimit, offset: 0 } : "skip"
+    isFocused ? { limit: postsLimit, offset: 0 } : 'skip',
+    (s, args) => {
+      const limit = args.limit ?? 20;
+      const offset = args.offset ?? 0;
+      const items = s.allCommunityPosts.slice(offset, offset + limit);
+      return { items, total: s.allCommunityPosts.length };
+    }
   );
   const posts = postsData?.items ?? [];
   const postsTotal = postsData?.total ?? 0;
-  
-  const pollsData = useQuery(
+
+  const pollsData = useDemoQuery(
     api.polls.getPaginated,
-    isFocused ? { limit: pollsLimit, offset: 0 } : "skip"
+    isFocused ? { limit: pollsLimit, offset: 0 } : 'skip',
+    (s, args) => {
+      const limit = args.limit ?? 20;
+      const offset = args.offset ?? 0;
+      const items = s.allPolls.slice(offset, offset + limit);
+      return { items, total: s.allPolls.length };
+    }
   );
   const polls = pollsData?.items ?? [];
   const pollsTotal = pollsData?.total ?? 0;
-  
-  const userVotes = useQuery(
+
+  const userVotes = useDemoQuery(
     api.polls.getAllUserVotes,
-    isFocused && user ? { userId: user._id } : "skip"
+    isFocused && user ? { userId: user._id } : 'skip',
+    (s, args) => s.userVotesByUserId[String(args.userId)] ?? {}
   );
   
   // Lazy load comments for posts when expanded
@@ -247,16 +264,16 @@ const CommunityScreen = () => {
     const comments = hasLoadedComments ? (loadedComments[postId] || []) : (post.comments || []);
     return { ...post, comments };
   });
-  const notifications = useQuery(
+  const notifications = useDemoQuery(
     api.residentNotifications.getAllActive,
-    isFocused ? {} : "skip"
+    isFocused ? {} : 'skip',
+    (s) => s.residentNotificationsActive
   );
   // Use cached residents to prevent duplicate queries
   const residents = useCachedResidents();
-  const petsGrouped = useQuery(
-    api.pets.getAllGroupedByResident,
-    isFocused ? {} : "skip"
-  ) || [];
+  const petsGrouped =
+    useDemoQuery(api.pets.getAllGroupedByResident, isFocused ? {} : 'skip', (s) => s.petsGrouped) ||
+    [];
   
   // Helper function to check if a comment author is a board member
   const isCommentAuthorBoardMember = (authorName: string) => {
@@ -281,19 +298,19 @@ const CommunityScreen = () => {
   };
 
   // Convex mutations
-  const createPost = useMutation(api.communityPosts.create);
-  const addComment = useMutation(api.communityPosts.addComment);
-  const likePost = useMutation(api.communityPosts.like);
-  const voteOnPoll = useMutation(api.polls.vote);
-  const createPoll = useMutation(api.polls.create);
-  const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
-  const deleteStorageFile = useMutation(api.storage.deleteStorageFile);
-  const createNotification = useMutation(api.residentNotifications.create);
-  const updateNotification = useMutation(api.residentNotifications.update);
-  const deleteNotification = useMutation(api.residentNotifications.remove);
-  const createPet = useMutation(api.pets.create);
-  const updatePet = useMutation(api.pets.update);
-  const deletePet = useMutation(api.pets.remove);
+  const createPost = useDemoMutation(api.communityPosts.create);
+  const addComment = useDemoMutation(api.communityPosts.addComment);
+  const likePost = useDemoMutation(api.communityPosts.like);
+  const voteOnPoll = useDemoMutation(api.polls.vote);
+  const createPoll = useDemoMutation(api.polls.create);
+  const generateUploadUrl = useDemoMutation(api.storage.generateUploadUrl);
+  const deleteStorageFile = useDemoMutation(api.storage.deleteStorageFile);
+  const createNotification = useDemoMutation(api.residentNotifications.create);
+  const updateNotification = useDemoMutation(api.residentNotifications.update);
+  const deleteNotification = useDemoMutation(api.residentNotifications.remove);
+  const createPet = useDemoMutation(api.pets.create);
+  const updatePet = useDemoMutation(api.pets.update);
+  const deletePet = useDemoMutation(api.pets.remove);
 
   const categories = ['General', 'Event', 'Suggestion', 'Lost & Found'];
   const postCategories = ['General', 'Event', 'Complaint', 'Suggestion', 'Lost & Found']; // Include Complaint for post creation
@@ -514,11 +531,19 @@ const CommunityScreen = () => {
         if (loadedComments[postId] !== undefined) continue;
         
         try {
-          const comments = await convex.query(api.communityPosts.getCommentsByPost, { postId: postId as any });
-          setLoadedComments(prev => ({
-            ...prev,
-            [postId]: comments || []
-          }));
+          if (isDemoBuild() && demoData?.snapshot) {
+            const comments = demoData.snapshot.commentsByPostId[postId] ?? [];
+            setLoadedComments((prev) => ({
+              ...prev,
+              [postId]: comments,
+            }));
+          } else {
+            const comments = await convex.query(api.communityPosts.getCommentsByPost, { postId: postId as any });
+            setLoadedComments((prev) => ({
+              ...prev,
+              [postId]: comments || [],
+            }));
+          }
         } catch (error) {
           console.error(`Failed to load comments for post ${postId}:`, error);
           // Set empty array on error to prevent retrying

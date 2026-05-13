@@ -29,7 +29,8 @@ import { Ionicons } from '@expo/vector-icons';
 import QRCode from 'react-native-qrcode-svg';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useQuery, useMutation } from 'convex/react';
+import { useDemoQuery } from '../hooks/useDemoQuery';
+import { useDemoMutation } from '../hooks/useDemoMutation';
 import { useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
@@ -98,62 +99,83 @@ const AdminScreen = () => {
   // Use cached queries to prevent duplicates across screens
   const residents = useCachedResidents();
   const hoaInfo = useCachedHoaInfo();
-  const boardMembers = useQuery(api.boardMembers.getAll) ?? [];
-  
+  const boardMembers =
+    useDemoQuery(api.boardMembers.getAll, {}, (s) => s.boardMembers ?? []) ?? [];
+
   // Conditional queries - only load when tab is active (lazy loading)
-  const covenantsData = useQuery(
+  const covenantsData = useDemoQuery(
     api.covenants.getPaginated,
-    activeTab === 'covenants' ? { limit: covenantsLimit, offset: 0 } : "skip"
+    activeTab === 'covenants' ? { limit: covenantsLimit, offset: 0 } : 'skip',
+    (s, args) => {
+      const limit = args.limit ?? 50;
+      const offset = args.offset ?? 0;
+      const items = s.allCovenants.slice(offset, offset + limit);
+      return { items, total: s.allCovenants.length };
+    }
   );
   const covenants = covenantsData?.items ?? [];
-  
-  const communityPostsData = useQuery(
+
+  const communityPostsData = useDemoQuery(
     api.communityPosts.getPaginated,
-    activeTab === 'Community' ? { limit: postsLimit, offset: 0 } : "skip"
+    activeTab === 'Community' ? { limit: postsLimit, offset: 0 } : 'skip',
+    (s, args) => {
+      const limit = args.limit ?? 50;
+      const offset = args.offset ?? 0;
+      const items = s.allCommunityPosts.slice(offset, offset + limit);
+      return { items, total: s.allCommunityPosts.length };
+    }
   );
   const communityPosts = communityPostsData?.items ?? [];
-  
-  const comments = useQuery(
-    api.communityPosts.getAllComments,
-    activeTab === 'Community' ? {} : "skip"
-  ) ?? [];
-  
-  const pollsData = useQuery(
+
+  const comments =
+    useDemoQuery(
+      api.communityPosts.getAllComments,
+      activeTab === 'Community' ? {} : 'skip',
+      (s) => s.allCommentsFlat ?? []
+    ) ?? [];
+
+  const pollsData = useDemoQuery(
     api.polls.getPaginated,
-    activeTab === 'Community' ? { limit: pollsLimit, offset: 0 } : "skip"
+    activeTab === 'Community' ? { limit: pollsLimit, offset: 0 } : 'skip',
+    (s, args) => {
+      const limit = args.limit ?? 50;
+      const offset = args.offset ?? 0;
+      const items = s.allPolls.slice(offset, offset + limit);
+      return { items, total: s.allPolls.length };
+    }
   );
   const polls = pollsData?.items ?? [];
-  
-  const petsGrouped = useQuery(
-    api.pets.getAllGroupedByResident,
-    activeTab === 'Community' ? {} : "skip"
-  ) ?? [];
+
+  const petsGrouped =
+    useDemoQuery(
+      api.pets.getAllGroupedByResident,
+      activeTab === 'Community' ? {} : 'skip',
+      (s) => s.petsGrouped ?? []
+    ) ?? [];
   const totalPetsCount = petsGrouped.reduce((n: number, g: any) => n + g.pets.length, 0);
-  
-  const homeownersPaymentStatus = useQuery(
-    api.fees.getAllHomeownersPaymentStatus,
-    activeTab === 'fees' ? {} : "skip"
-  ) ?? [];
-  
-  const allFeesFromDatabase = useQuery(
-    api.fees.getAll,
-    activeTab === 'fees' ? {} : "skip"
-  ) ?? [];
-  
-  const allFinesFromDatabase = useQuery(
-    api.fees.getAllFines,
-    activeTab === 'fees' ? {} : "skip"
-  ) ?? [];
-  
-  const pendingVenmoPayments = useQuery(
-    api.payments.getPendingVenmoPayments,
-    activeTab === 'fees' ? {} : "skip"
-  ) ?? [];
-  
-  const allPayments = useQuery(
-    api.payments.getAllPayments,
-    activeTab === 'fees' ? {} : "skip"
-  ) ?? [];
+
+  const homeownersPaymentStatus =
+    useDemoQuery(
+      api.fees.getAllHomeownersPaymentStatus,
+      activeTab === 'fees' ? {} : 'skip',
+      (s) => s.homeownersPaymentStatus ?? []
+    ) ?? [];
+
+  const allFeesFromDatabase =
+    useDemoQuery(api.fees.getAll, activeTab === 'fees' ? {} : 'skip', (s) => s.allFees) ?? [];
+
+  const allFinesFromDatabase =
+    useDemoQuery(api.fees.getAllFines, activeTab === 'fees' ? {} : 'skip', (s) => s.allFines) ?? [];
+
+  const pendingVenmoPayments =
+    useDemoQuery(
+      api.payments.getPendingVenmoPayments,
+      activeTab === 'fees' ? {} : 'skip',
+      (s) => s.pendingVenmoPayments ?? []
+    ) ?? [];
+
+  const allPayments =
+    useDemoQuery(api.payments.getAllPayments, activeTab === 'fees' ? {} : 'skip', (s) => s.allPayments) ?? [];
 
   // Load HOA info into form when it's available
   useEffect(() => {
@@ -484,46 +506,46 @@ const AdminScreen = () => {
   // ========== END MEMOIZED DATA CACHING ==========
   
   // Mutations
-  const setBlockStatus = useMutation(api.residents.setBlockStatus);
-  const removeResident = useMutation(api.residents.remove);
-  const deleteCovenant = useMutation(api.covenants.remove);
-  const deleteCommunityPost = useMutation(api.communityPosts.remove);
-  const deleteBoardMember = useMutation(api.boardMembers.remove);
-  const deleteComment = useMutation(api.communityPosts.removeComment);
-  const createBoardMember = useMutation(api.boardMembers.create);
-  const updateBoardMember = useMutation(api.boardMembers.update);
-  const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
+  const setBlockStatus = useDemoMutation(api.residents.setBlockStatus);
+  const removeResident = useDemoMutation(api.residents.remove);
+  const deleteCovenant = useDemoMutation(api.covenants.remove);
+  const deleteCommunityPost = useDemoMutation(api.communityPosts.remove);
+  const deleteBoardMember = useDemoMutation(api.boardMembers.remove);
+  const deleteComment = useDemoMutation(api.communityPosts.removeComment);
+  const createBoardMember = useDemoMutation(api.boardMembers.create);
+  const updateBoardMember = useDemoMutation(api.boardMembers.update);
+  const generateUploadUrl = useDemoMutation(api.storage.generateUploadUrl);
   
   // Fee management mutations
-  const createYearFeesForAllHomeowners = useMutation(api.fees.createYearFeesForAllHomeowners);
-  const addFineToProperty = useMutation(api.fees.addFineToProperty);
-  const updateFee = useMutation(api.fees.update);
-  const createFee = useMutation(api.fees.create);
-  const addPastDueAmount = useMutation(api.fees.addPastDueAmount);
-  const updateAllAnnualFees = useMutation(api.fees.updateAllAnnualFees);
+  const createYearFeesForAllHomeowners = useDemoMutation(api.fees.createYearFeesForAllHomeowners);
+  const addFineToProperty = useDemoMutation(api.fees.addFineToProperty);
+  const updateFee = useDemoMutation(api.fees.update);
+  const createFee = useDemoMutation(api.fees.create);
+  const addPastDueAmount = useDemoMutation(api.fees.addPastDueAmount);
+  const updateAllAnnualFees = useDemoMutation(api.fees.updateAllAnnualFees);
   
   // Covenant management mutations
-  const createCovenant = useMutation(api.covenants.create);
-  const updateCovenant = useMutation(api.covenants.update);
-  const updateCcrsPdf = useMutation(api.hoaInfo.updateCcrsPdf);
+  const createCovenant = useDemoMutation(api.covenants.create);
+  const updateCovenant = useDemoMutation(api.covenants.update);
+  const updateCcrsPdf = useDemoMutation(api.hoaInfo.updateCcrsPdf);
   
   // Poll management mutations
-  const createPoll = useMutation(api.polls.create);
-  const updatePoll = useMutation(api.polls.update);
-  const deletePoll = useMutation(api.polls.remove);
-  const togglePollActive = useMutation(api.polls.toggleActive);
+  const createPoll = useDemoMutation(api.polls.create);
+  const updatePoll = useDemoMutation(api.polls.update);
+  const deletePoll = useDemoMutation(api.polls.remove);
+  const togglePollActive = useDemoMutation(api.polls.toggleActive);
   
   // Payment management mutations
-  const verifyVenmoPayment = useMutation(api.payments.verifyVenmoPayment);
-  const recordCheckOrCashPayment = useMutation(api.payments.recordCheckOrCashPayment);
-  const correctPaymentAmount = useMutation(api.payments.correctPaymentAmount);
+  const verifyVenmoPayment = useDemoMutation(api.payments.verifyVenmoPayment);
+  const recordCheckOrCashPayment = useDemoMutation(api.payments.recordCheckOrCashPayment);
+  const correctPaymentAmount = useDemoMutation(api.payments.correctPaymentAmount);
   
   // Pet management mutations
-  const deletePet = useMutation(api.pets.remove);
-  const updatePet = useMutation(api.pets.update);
+  const deletePet = useDemoMutation(api.pets.remove);
+  const updatePet = useDemoMutation(api.pets.update);
   
   // HOA Info management mutation
-  const upsertHoaInfo = useMutation(api.hoaInfo.upsert);
+  const upsertHoaInfo = useDemoMutation(api.hoaInfo.upsert);
   
   // State
   const [refreshing, setRefreshing] = useState(false);
@@ -595,10 +617,15 @@ const AdminScreen = () => {
 
   // Conditional query for recent payments - only fetch when transactions modal is open
   // Moved here after state declarations to avoid initialization error
-  const recentPayments = useQuery(
-    api.payments.getRecentPayments,
-    showTransactionsModal ? { limit: transactionsLimit } : "skip"
-  ) ?? [];
+  const recentPayments =
+    useDemoQuery(
+      api.payments.getRecentPayments,
+      showTransactionsModal ? { limit: transactionsLimit } : 'skip',
+      (s, args) => {
+        const lim = (args as { limit?: number }).limit ?? transactionsLimit;
+        return (s.recentPayments ?? []).slice(0, lim);
+      }
+    ) ?? [];
 
   // Filtered transactions (client-side filtering)
   const filteredTransactions = useMemo(() => {

@@ -54,7 +54,9 @@
       "baseUrl": "/"
     },
     "extra": {
-      "convexUrl": "${EXPO_PUBLIC_CONVEX_URL}",
+      "demoMode": true,
+      "demoLabel": "DEMO — Synthetic data only (no production backend)",
+      "convexUrl": "https://tangible-hornet-422.convex.cloud",
       "iosAppStoreUrl": "${EXPO_PUBLIC_IOS_APP_STORE_URL}",
       "iosAppStoreId": "6755036217",
       "router": {

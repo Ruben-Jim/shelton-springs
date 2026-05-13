@@ -37,7 +37,7 @@ import {
   KeyboardAvoidingView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useMutation } from 'convex/react';
+import { useDemoMutation } from '../hooks/useDemoMutation';
 import { api } from '../../convex/_generated/api';
 import type { Id } from '../../convex/_generated/dataModel';
 import ProfileImage from './ProfileImage';
@@ -256,11 +256,11 @@ export default function HomeownerRecordsModal({
   onClose,
   addressGroup,
 }: HomeownerRecordsModalProps) {
-  const updateFeeMutation = useMutation(api.fees.update);
-  const updateFineMutation = useMutation(api.fines.update);
-  const reconcileFeePaidMutation = useMutation(api.payments.adminReconcileVerifiedPaidForFee);
-  const reconcileFinePaidMutation = useMutation(api.payments.adminReconcileVerifiedPaidForFine);
-  const createAnnualFeeForAddressMutation = useMutation(api.fees.createAnnualFeeForAddress);
+  const updateFeeMutation = useDemoMutation(api.fees.update);
+  const updateFineMutation = useDemoMutation(api.fines.update);
+  const reconcileFeePaidMutation = useDemoMutation(api.payments.adminReconcileVerifiedPaidForFee);
+  const reconcileFinePaidMutation = useDemoMutation(api.payments.adminReconcileVerifiedPaidForFine);
+  const createAnnualFeeForAddressMutation = useDemoMutation(api.fees.createAnnualFeeForAddress);
 
   const [editTarget, setEditTarget] = useState<
     null | { kind: 'fee'; fee: Fee } | { kind: 'fine'; fine: Fine }

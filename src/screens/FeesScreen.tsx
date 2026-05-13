@@ -16,7 +16,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
-import { useQuery, useMutation } from 'convex/react';
+import { useDemoQuery } from '../hooks/useDemoQuery';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
 import { useCachedResidents } from '../context/QueryCacheContext';
@@ -113,14 +113,15 @@ const FeesScreen = () => {
   }, []);
 
   // Check if user has paid their annual fee (conditional based on screen focus)
-  const userPaymentStatus = useQuery(
+  const userPaymentStatus = useDemoQuery(
     api.fees.hasPaidAnnualFee,
-    isFocused && user ? { userId: user._id } : "skip"
+    isFocused && user ? { userId: user._id } : 'skip',
+    (s, args) => s.hasPaidAnnualFeeByUserId[String(args.userId)] ?? false
   );
 
   useEffect(() => {
     if (userPaymentStatus !== undefined) {
-      setHasPaidAnnualFee(userPaymentStatus);
+      setHasPaidAnnualFee(!!userPaymentStatus);
     }
   }, [userPaymentStatus]);
 
@@ -214,9 +215,15 @@ const FeesScreen = () => {
 
   // Get all fees from database and filter for current user
   const [feesLimit, setFeesLimit] = useState(50);
-  const feesData = useQuery(
+  const feesData = useDemoQuery(
     api.fees.getPaginated,
-    isFocused ? { limit: feesLimit, offset: 0 } : "skip"
+    isFocused ? { limit: feesLimit, offset: 0 } : 'skip',
+    (s, args) => {
+      const limit = args.limit ?? 50;
+      const offset = args.offset ?? 0;
+      const items = s.allFees.slice(offset, offset + limit);
+      return { items, total: s.allFees.length };
+    }
   );
   const allFeesFromDatabase = feesData?.items ?? [];
   const currentUserAddressKey = currentUser
@@ -237,10 +244,8 @@ const FeesScreen = () => {
     : [];
 
   // Get fines for the user (if any)
-  const allFines = useQuery(
-    api.fees.getAllFines,
-    isFocused ? {} : "skip"
-  ) ?? [];
+  const allFines =
+    useDemoQuery(api.fees.getAllFines, isFocused ? {} : 'skip', (s) => s.allFines) ?? [];
   
   // Filter fines for the current user if they are a homeowner or developer
   const fines = user && ((user.isResident && !user.isRenter) || user.isDev) 
@@ -248,10 +253,12 @@ const FeesScreen = () => {
     : [];
   
   // Get user payments (reactive query - auto-updates) (conditional based on screen focus)
-  const userPayments = useQuery(
-    api.payments.getUserPayments,
-    isFocused && user ? { userId: user._id } : "skip"
-  ) ?? [];
+  const userPayments =
+    useDemoQuery(
+      api.payments.getUserPayments,
+      isFocused && user ? { userId: user._id } : 'skip',
+      (s, args) => s.userPaymentsByUserId[String(args.userId)] ?? []
+    ) ?? [];
   
   // Create maps for quick payment lookup by feeId/fineId (client-side filtering)
   const paymentsByFeeId = useMemo(() => {

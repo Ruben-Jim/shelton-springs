@@ -16,10 +16,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import * as ImagePicker from 'expo-image-picker';
-import { useMutation } from 'convex/react';
+import { useDemoMutation } from '../hooks/useDemoMutation';
 import { api } from '../../convex/_generated/api';
-import { useConvex } from 'convex/react';
 import { useAuth } from '../context/AuthContext';
+import { isDemoBuild } from '../config/isDemoBuild';
 import { User } from '../types';
 import { AuthStackParamList } from '../navigation/AuthNavigator';
 import { simpleAlert } from '../utils/webCompatibleAlert';
@@ -34,8 +34,7 @@ const SignupScreen = () => {
   const navigation = useNavigation<SignupScreenNavigationProp>();
   const { signUp } = useAuth();
   useResetTokenRedirect();
-  const convex = useConvex();
-  const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
+  const generateUploadUrl = useDemoMutation(api.storage.generateUploadUrl);
   const [profileImage, setProfileImage] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     firstName: '',
@@ -151,11 +150,19 @@ const SignupScreen = () => {
 
   const uploadImage = async (imageUri: string): Promise<string> => {
     try {
+      if (isDemoBuild()) {
+        return 'demo_profile_storage_id';
+      }
+
       const uploadUrl = await generateUploadUrl();
+
+      if (!uploadUrl) {
+        throw new Error('No upload URL');
+      }
 
       const { blob, mimeType } = await getUploadReadyImage(imageUri);
 
-      const uploadResponse = await fetch(uploadUrl, {
+      const uploadResponse = await fetch(uploadUrl as string, {
         method: 'POST',
         headers: { 'Content-Type': mimeType },
         body: blob,

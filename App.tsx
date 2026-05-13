@@ -17,6 +17,8 @@ import MinimizedMessageBubble from './src/components/MinimizedMessageBubble';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import AnimatedSplashScreen from './src/components/AnimatedSplashScreen';
 import { useUserNotifications } from './src/hooks/useUserNotifications';
+import { DemoDataProvider } from './src/demo/DemoDataProvider';
+import { isDemoBuild, demoBannerLabel } from './src/config/isDemoBuild';
 
 import HomeScreen from './src/screens/HomeScreen';
 import BoardScreen from './src/screens/BoardScreen';
@@ -57,6 +59,22 @@ const MainAppContent = () => {
 
   return (
     <>
+      {/* {isDemoBuild() && (
+        <View
+          style={{
+            backgroundColor: '#fbbf24',
+            paddingVertical: 6,
+            paddingHorizontal: 12,
+            alignItems: 'center',
+            borderBottomWidth: 1,
+            borderBottomColor: '#d97706',
+          }}
+        >
+          <Text style={{ fontSize: 12, fontWeight: '700', color: '#78350f' }}>
+            {demoBannerLabel() ?? 'DEMO BUILD'}
+          </Text>
+        </View>
+      )} */}
       <Stack.Navigator
         screenOptions={{
           headerShown: false,
@@ -300,26 +318,30 @@ export default function App() {
     <SafeAreaProvider>
       {convex ? (
         <ConvexProvider client={convex}>
-          <AuthProvider>
-            <QueryCacheProvider>
-              <MessagingProvider>
-                <NavigationContainer initialState={initialState} onStateChange={onStateChange}>
-                  <MainAppContent />
-                  <StatusBar style="dark" />
-                </NavigationContainer>
-              </MessagingProvider>
-            </QueryCacheProvider>
-          </AuthProvider>
+          <DemoDataProvider>
+            <AuthProvider>
+              <QueryCacheProvider>
+                <MessagingProvider>
+                  <NavigationContainer initialState={initialState} onStateChange={onStateChange}>
+                    <MainAppContent />
+                    <StatusBar style="dark" />
+                  </NavigationContainer>
+                </MessagingProvider>
+              </QueryCacheProvider>
+            </AuthProvider>
+          </DemoDataProvider>
         </ConvexProvider>
       ) : (
-        <AuthProvider>
-          <MessagingProvider>
-            <NavigationContainer initialState={initialState} onStateChange={onStateChange}>
-              <MainAppContent />
-              <StatusBar style="dark" />
-            </NavigationContainer>
-          </MessagingProvider>
-        </AuthProvider>
+        <DemoDataProvider>
+          <AuthProvider>
+            <MessagingProvider>
+              <NavigationContainer initialState={initialState} onStateChange={onStateChange}>
+                <MainAppContent />
+                <StatusBar style="dark" />
+              </NavigationContainer>
+            </MessagingProvider>
+          </AuthProvider>
+        </DemoDataProvider>
       )}
     </SafeAreaProvider>
   );

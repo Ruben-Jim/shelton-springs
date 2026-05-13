@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
-import { useMutation } from 'convex/react';
+import { useDemoMutation } from '../hooks/useDemoMutation';
 import { api } from '../../convex/_generated/api';
 import { getUploadReadyImage } from '../utils/imageUpload';
 
@@ -35,7 +35,7 @@ const ImageEditModal: React.FC<ImageEditModalProps> = ({
 }) => {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
+  const generateUploadUrl = useDemoMutation(api.storage.generateUploadUrl);
 
   const modalOpacity = useRef(new Animated.Value(0)).current;
   const modalOverlayOpacity = useRef(new Animated.Value(0)).current;

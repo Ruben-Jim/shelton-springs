@@ -18,7 +18,7 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { useQuery, useMutation } from 'convex/react';
+import { useDemoMutation } from '../hooks/useDemoMutation';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
 import { useCachedResidents } from '../context/QueryCacheContext';
@@ -57,10 +57,10 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
   const displayImage = currentUser?.profileImage;
   
   // Convex mutations
-  const updateResident = useMutation(api.residents.update);
-  const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
-  const deleteStorageFile = useMutation(api.storage.deleteStorageFile);
-  const deleteResident = useMutation(api.residents.remove);
+  const updateResident = useDemoMutation(api.residents.update);
+  const generateUploadUrl = useDemoMutation(api.storage.generateUploadUrl);
+  const deleteStorageFile = useDemoMutation(api.storage.deleteStorageFile);
+  const deleteResident = useDemoMutation(api.residents.remove);
   
   // Account deletion state
   const [deleting, setDeleting] = useState(false);

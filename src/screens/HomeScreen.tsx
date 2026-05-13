@@ -18,7 +18,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useIsFocused } from '@react-navigation/native';
-import { useQuery, useMutation } from 'convex/react';
+import { useDemoQuery } from '../hooks/useDemoQuery';
+import { useDemoMutation } from '../hooks/useDemoMutation';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
@@ -43,22 +44,35 @@ const HomeScreen = () => {
   const hoaInfo = useCachedHoaInfo();
   const residents = useCachedResidents();
   // Use paginated queries with small initial limits for home screen (conditional based on screen focus)
-  const communityPostsData = useQuery(
+  const communityPostsData = useDemoQuery(
     api.communityPosts.getPaginated,
-    isFocused ? { limit: 5, offset: 0 } : "skip"
+    isFocused ? { limit: 5, offset: 0 } : 'skip',
+    (s, args) => {
+      const limit = args.limit ?? 5;
+      const offset = args.offset ?? 0;
+      const items = s.allCommunityPosts.slice(offset, offset + limit);
+      return { items, total: s.allCommunityPosts.length };
+    }
   );
   const communityPosts = communityPostsData?.items ?? [];
-  
-  const pollsData = useQuery(
+
+  const pollsData = useDemoQuery(
     api.polls.getPaginated,
-    isFocused ? { limit: 1, offset: 0 } : "skip"
+    isFocused ? { limit: 1, offset: 0 } : 'skip',
+    (s, args) => {
+      const limit = args.limit ?? 1;
+      const offset = args.offset ?? 0;
+      const items = s.allPolls.slice(offset, offset + limit);
+      return { items, total: s.allPolls.length };
+    }
   );
   const polls = pollsData?.items ?? [];
-  const userVotes = useQuery(
+  const userVotes = useDemoQuery(
     api.polls.getAllUserVotes,
-    isFocused && user ? { userId: user._id } : "skip"
+    isFocused && user ? { userId: user._id } : 'skip',
+    (s, args) => s.userVotesByUserId[String(args.userId)] ?? {}
   );
-  const voteOnPoll = useMutation(api.polls.vote);
+  const voteOnPoll = useDemoMutation(api.polls.vote);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [selectedPollVotes, setSelectedPollVotes] = useState<{[pollId: string]: number[]}>({});
   const { alertState, showAlert, hideAlert } = useCustomAlert();

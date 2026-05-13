@@ -2,6 +2,7 @@ import { useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useEffect, useState, useMemo } from 'react';
 import { Image as ExpoImage } from 'expo-image';
+import { isDemoBuild } from '../config/isDemoBuild';
 
 // Global cache to store URLs across all component instances
 // This prevents multiple queries for the same storageId across different renders
@@ -9,19 +10,24 @@ import { Image as ExpoImage } from 'expo-image';
 const urlCache = new Map<string, { url: string; timestamp: number }>();
 const CACHE_DURATION = 55 * 60 * 1000; // 55 minutes (slightly less than Convex's 1 hour URL expiration)
 
+function demoImageUrl(storageId: string): string {
+  return `https://picsum.photos/seed/${encodeURIComponent(storageId).slice(0, 48)}/256/256`;
+}
+
 /**
  * Custom hook to get storage URL with intelligent caching
  * This reduces API calls by:
  * 1. Leveraging Convex's built-in query deduplication (same args = one query)
  * 2. Caching URLs in memory across component remounts and different components
  * 3. Reusing cached URLs until they're close to expiration
- * 
+ *
  * This is especially important for components like ProfileImage that are rendered
  * many times (posts, comments, etc.) with the same storageId
  */
 export const useStorageUrl = (storageId: string | null | undefined): string | undefined => {
+  const isDemo = isDemoBuild();
   const [cachedUrl, setCachedUrl] = useState<string | undefined>(undefined);
-  
+
   // Check cache FIRST synchronously - this is our primary check
   const cachedResult = useMemo(() => {
     if (!storageId) return { url: undefined, isValid: false };
@@ -41,12 +47,19 @@ export const useStorageUrl = (storageId: string | null | undefined): string | un
   // Convex's useQuery automatically deduplicates queries with the same args
   const urlFromQuery = useQuery(
     api.storage.getUrl,
-    shouldSkip ? "skip" : { storageId: storageId as any }
+    isDemo || shouldSkip ? 'skip' : { storageId: storageId as any }
   );
 
   useEffect(() => {
     if (!storageId) {
       setCachedUrl(undefined);
+      return;
+    }
+
+    if (isDemo) {
+      const u = demoImageUrl(storageId);
+      setCachedUrl(u);
+      ExpoImage.prefetch(u).catch(() => {});
       return;
     }
 
@@ -59,12 +72,12 @@ export const useStorageUrl = (storageId: string | null | undefined): string | un
       });
       return; // Don't proceed with query logic - cache is valid
     }
-    
+
     // Only update from query if we don't have cache
     if (urlFromQuery) {
       const now = Date.now();
       const cached = urlCache.get(storageId);
-      
+
       // Update cache if URL changed or cache is missing/expired
       const shouldUpdateCache =
         !cached || cached.url !== urlFromQuery || (now - cached.timestamp) >= CACHE_DURATION;
@@ -81,14 +94,18 @@ export const useStorageUrl = (storageId: string | null | undefined): string | un
         setCachedUrl(cached.url);
       }
     }
-  }, [storageId, urlFromQuery, cachedResult.isValid, cachedResult.url]);
+  }, [storageId, urlFromQuery, cachedResult.isValid, cachedResult.url, isDemo]);
 
-  // Return cached URL immediately if available (cache checked FIRST), 
+  // Return cached URL immediately if available (cache checked FIRST),
   // otherwise return from state or query result
   // Priority: cachedResult (sync check) > cachedUrl (state) > urlFromQuery (async)
+  if (isDemo && storageId) {
+    return demoImageUrl(storageId);
+  }
+
   const resolvedUrl = cachedResult.url || cachedUrl || urlFromQuery;
 
-  return resolvedUrl;
+  return resolvedUrl == null ? undefined : resolvedUrl;
 };
 
 /**
@@ -98,10 +115,10 @@ export const useStorageUrl = (storageId: string | null | undefined): string | un
  */
 export const useStorageUrls = (storageIds: (string | null | undefined)[]): (string | undefined)[] => {
   const uniqueIds = Array.from(new Set(storageIds.filter(Boolean) as string[]));
-  const urls = uniqueIds.map(id => useStorageUrl(id));
-  
+  const urls = uniqueIds.map((id) => useStorageUrl(id));
+
   // Map back to original array order
-  return storageIds.map(id => {
+  return storageIds.map((id) => {
     if (!id) return undefined;
     const index = uniqueIds.indexOf(id);
     return index >= 0 ? urls[index] : undefined;
@@ -114,4 +131,3 @@ export const useStorageUrls = (storageIds: (string | null | undefined)[]): (stri
 export const clearStorageUrlCache = () => {
   urlCache.clear();
 };
-

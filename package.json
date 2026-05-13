@@ -12,7 +12,8 @@
     "lint": "expo lint",
     "deploy": "gh-pages --nojekyll -d dist",
     "predeploy": "expo export -p web && echo 'sheltonsprings.homes' && node scripts/fix-fonts.js",
-    "generate:qr": "node scripts/generate-qr-pngs.js"
+    "generate:qr": "node scripts/generate-qr-pngs.js",
+    "check:demo-invariants": "node scripts/check-demo-invariants.cjs"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",

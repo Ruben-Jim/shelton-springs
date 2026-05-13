@@ -10,13 +10,14 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useQuery } from 'convex/react';
+import { useDemoQuery } from '../hooks/useDemoQuery';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
 
 const BlockedAccountScreen = () => {
   const { signOut, user } = useAuth();
-  const hoaInfo = useQuery(api.hoaInfo.get) ?? {
+  const hoaInfo =
+    useDemoQuery(api.hoaInfo.get, {}, (s) => s.hoaInfo) ?? {
     name: 'HOA Community',
     phone: '(555) 012-3456',
     email: 'hoa@community.com',
