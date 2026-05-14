@@ -20,6 +20,13 @@ export const upsert = mutation({
     emergencyContact: v.string(),
     eventText: v.optional(v.string()),
     ccrsPdfStorageId: v.optional(v.string()),
+    boardMeetingsSchedule: v.optional(v.string()),
+    boardMeetingsLocation: v.optional(v.string()),
+    boardMeetingsOpenNote: v.optional(v.string()),
+    boardContactGeneral: v.optional(v.string()),
+    boardContactUrgent: v.optional(v.string()),
+    boardResourceMinutes: v.optional(v.string()),
+    boardResourceBylaws: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db.query("hoaInfo").first();

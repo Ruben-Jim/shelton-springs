@@ -67,6 +67,23 @@ const BoardScreen = () => {
   };
 
   const members = useQuery(api.boardMembers.getAll) ?? [];
+  const hoaInfo = useQuery(api.hoaInfo.get) ?? null;
+
+  // Board page content — fall back to hardcoded defaults when not set by admin
+  const boardMeetingsSchedule =
+    hoaInfo?.boardMeetingsSchedule ?? 'Second Tuesday of each month at 7:00 PM';
+  const boardMeetingsLocation =
+    hoaInfo?.boardMeetingsLocation ?? 'Community Center';
+  const boardMeetingsOpenNote =
+    hoaInfo?.boardMeetingsOpenNote ?? 'Open to residents - speak during open forum';
+  const boardContactGeneral =
+    hoaInfo?.boardContactGeneral ?? 'General inquiries: Contact board secretary or use contact info above';
+  const boardContactUrgent =
+    hoaInfo?.boardContactUrgent ?? 'Urgent matters: Contact HOA office directly';
+  const boardResourceMinutes =
+    hoaInfo?.boardResourceMinutes ?? 'Meeting minutes and agendas available upon request';
+  const boardResourceBylaws =
+    hoaInfo?.boardResourceBylaws ?? 'Board decisions are made in accordance with HOA bylaws';
   
   // Rainbow colors for board member cards
   const borderColors = [
@@ -330,21 +347,15 @@ const BoardScreen = () => {
           <View style={styles.infoContent}>
             <View style={styles.infoItem}>
               <Ionicons name="time" size={16} color="#6b7280" />
-              <Text style={styles.infoText}>
-                Second Tuesday of each month at 7:00 PM
-              </Text>
+              <Text style={styles.infoText}>{boardMeetingsSchedule}</Text>
             </View>
             <View style={styles.infoItem}>
               <Ionicons name="location" size={16} color="#6b7280" />
-              <Text style={styles.infoText}>
-                Community Center
-              </Text>
+              <Text style={styles.infoText}>{boardMeetingsLocation}</Text>
             </View>
             <View style={styles.infoItem}>
               <Ionicons name="people" size={16} color="#6b7280" />
-              <Text style={styles.infoText}>
-                Open to residents - speak during open forum
-              </Text>
+              <Text style={styles.infoText}>{boardMeetingsOpenNote}</Text>
             </View>
           </View>
         </View>
@@ -362,15 +373,11 @@ const BoardScreen = () => {
           <View style={styles.infoContent}>
             <View style={styles.infoItem}>
               <Ionicons name="information-circle" size={16} color="#6b7280" />
-              <Text style={styles.infoText}>
-                General inquiries: Contact board secretary or use contact info above
-              </Text>
+              <Text style={styles.infoText}>{boardContactGeneral}</Text>
             </View>
             <View style={styles.infoItem}>
               <Ionicons name="alert-circle" size={16} color="#ef4444" />
-              <Text style={styles.infoText}>
-                Urgent matters: Contact HOA office directly
-              </Text>
+              <Text style={styles.infoText}>{boardContactUrgent}</Text>
             </View>
           </View>
         </View>
@@ -388,15 +395,11 @@ const BoardScreen = () => {
           <View style={styles.infoContent}>
             <View style={styles.infoItem}>
               <Ionicons name="document" size={16} color="#6b7280" />
-              <Text style={styles.infoText}>
-                Meeting minutes and agendas available upon request
-              </Text>
+              <Text style={styles.infoText}>{boardResourceMinutes}</Text>
             </View>
             <View style={styles.infoItem}>
               <Ionicons name="shield-checkmark" size={16} color="#6b7280" />
-              <Text style={styles.infoText}>
-                Board decisions are made in accordance with HOA bylaws
-              </Text>
+              <Text style={styles.infoText}>{boardResourceBylaws}</Text>
             </View>
           </View>
         </View>

@@ -168,6 +168,15 @@ const AdminScreen = () => {
         emergencyContact: hoaInfo.emergencyContact || '',
         eventText: (hoaInfo as any).eventText || '',
       });
+      setBoardContentForm({
+        boardMeetingsSchedule: (hoaInfo as any).boardMeetingsSchedule ?? '',
+        boardMeetingsLocation: (hoaInfo as any).boardMeetingsLocation ?? '',
+        boardMeetingsOpenNote: (hoaInfo as any).boardMeetingsOpenNote ?? '',
+        boardContactGeneral: (hoaInfo as any).boardContactGeneral ?? '',
+        boardContactUrgent: (hoaInfo as any).boardContactUrgent ?? '',
+        boardResourceMinutes: (hoaInfo as any).boardResourceMinutes ?? '',
+        boardResourceBylaws: (hoaInfo as any).boardResourceBylaws ?? '',
+      });
     }
   }, [hoaInfo]);
 
@@ -881,6 +890,18 @@ const AdminScreen = () => {
     eventText: '',
   });
 
+  // Board page content modal state
+  const [showBoardContentModal, setShowBoardContentModal] = useState(false);
+  const [boardContentForm, setBoardContentForm] = useState({
+    boardMeetingsSchedule: '',
+    boardMeetingsLocation: '',
+    boardMeetingsOpenNote: '',
+    boardContactGeneral: '',
+    boardContactUrgent: '',
+    boardResourceMinutes: '',
+    boardResourceBylaws: '',
+  });
+
   // Poll modal state
   const [showPollModal, setShowPollModal] = useState(false);
   const [isEditingPoll, setIsEditingPoll] = useState(false);
@@ -1208,6 +1229,34 @@ const AdminScreen = () => {
     });
   };
 
+  // Board page content handler
+  const handleSaveBoardContent = async () => {
+    try {
+      await upsertHoaInfo({
+        name: hoaInfo?.name || hoaInfoForm.name.trim() || '',
+        address: hoaInfo?.address || hoaInfoForm.address.trim() || '',
+        phone: hoaInfo?.phone || hoaInfoForm.phone.trim() || '',
+        email: hoaInfo?.email || hoaInfoForm.email.trim() || '',
+        website: (hoaInfo as any)?.website || hoaInfoForm.website.trim() || undefined,
+        officeHours: hoaInfo?.officeHours || hoaInfoForm.officeHours.trim() || '',
+        emergencyContact: hoaInfo?.emergencyContact || hoaInfoForm.emergencyContact.trim() || '',
+        eventText: (hoaInfo as any)?.eventText || hoaInfoForm.eventText.trim() || undefined,
+        boardMeetingsSchedule: boardContentForm.boardMeetingsSchedule.trim() || undefined,
+        boardMeetingsLocation: boardContentForm.boardMeetingsLocation.trim() || undefined,
+        boardMeetingsOpenNote: boardContentForm.boardMeetingsOpenNote.trim() || undefined,
+        boardContactGeneral: boardContentForm.boardContactGeneral.trim() || undefined,
+        boardContactUrgent: boardContentForm.boardContactUrgent.trim() || undefined,
+        boardResourceMinutes: boardContentForm.boardResourceMinutes.trim() || undefined,
+        boardResourceBylaws: boardContentForm.boardResourceBylaws.trim() || undefined,
+      });
+      setShowBoardContentModal(false);
+      Alert.alert('Saved', 'Board page content updated successfully.');
+    } catch (error) {
+      console.error('Error saving board content:', error);
+      Alert.alert('Error', 'Failed to save board page content. Please try again.');
+    }
+  };
+
   // HOA Info handler
   const handleSaveHoaInfo = async () => {
     try {
@@ -1220,6 +1269,13 @@ const AdminScreen = () => {
         officeHours: hoaInfoForm.officeHours.trim() || '',
         emergencyContact: hoaInfoForm.emergencyContact.trim() || '',
         eventText: hoaInfoForm.eventText.trim() || undefined,
+        boardMeetingsSchedule: boardContentForm.boardMeetingsSchedule.trim() || undefined,
+        boardMeetingsLocation: boardContentForm.boardMeetingsLocation.trim() || undefined,
+        boardMeetingsOpenNote: boardContentForm.boardMeetingsOpenNote.trim() || undefined,
+        boardContactGeneral: boardContentForm.boardContactGeneral.trim() || undefined,
+        boardContactUrgent: boardContentForm.boardContactUrgent.trim() || undefined,
+        boardResourceMinutes: boardContentForm.boardResourceMinutes.trim() || undefined,
+        boardResourceBylaws: boardContentForm.boardResourceBylaws.trim() || undefined,
       });
 
       // Send notification for HOA info update
@@ -2666,6 +2722,14 @@ const AdminScreen = () => {
                 })}
               </View>
             )}
+
+            <TouchableOpacity
+              style={[styles.adminFeeButton, { backgroundColor: '#0ea5e9', marginTop: 16, marginBottom: 4 }]}
+              onPress={() => setShowBoardContentModal(true)}
+            >
+              <Ionicons name="create-outline" size={16} color="#ffffff" />
+              <Text style={styles.adminFeeButtonText}>Edit Board Page Info Cards</Text>
+            </TouchableOpacity>
           </View>
         );
       
@@ -4284,6 +4348,121 @@ const AdminScreen = () => {
         <View style={styles.contentArea}>
           {renderTabContent()}
         </View>
+
+        {/* Board Page Content Modal */}
+        <Modal
+          visible={showBoardContentModal}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setShowBoardContentModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.formModalContent, { maxHeight: '92%' }]}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Edit Board Page Content</Text>
+                <TouchableOpacity onPress={() => setShowBoardContentModal(false)}>
+                  <Ionicons name="close" size={24} color="#374151" />
+                </TouchableOpacity>
+              </View>
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }} keyboardShouldPersistTaps="handled">
+                {/* Board Meetings */}
+                <Text style={[styles.sectionTitle, { marginBottom: 10 }]}>Board Meetings</Text>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Schedule</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={boardContentForm.boardMeetingsSchedule}
+                    onChangeText={(t) => setBoardContentForm({ ...boardContentForm, boardMeetingsSchedule: t })}
+                    placeholder="Second Tuesday of each month at 7:00 PM"
+                    placeholderTextColor="#9ca3af"
+                  />
+                </View>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Location</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={boardContentForm.boardMeetingsLocation}
+                    onChangeText={(t) => setBoardContentForm({ ...boardContentForm, boardMeetingsLocation: t })}
+                    placeholder="Community Center"
+                    placeholderTextColor="#9ca3af"
+                  />
+                </View>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Open Forum Note</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={boardContentForm.boardMeetingsOpenNote}
+                    onChangeText={(t) => setBoardContentForm({ ...boardContentForm, boardMeetingsOpenNote: t })}
+                    placeholder="Open to residents - speak during open forum"
+                    placeholderTextColor="#9ca3af"
+                  />
+                </View>
+
+                {/* Contact the Board */}
+                <Text style={[styles.sectionTitle, { marginTop: 16, marginBottom: 10 }]}>Contact the Board</Text>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>General Inquiries</Text>
+                  <TextInput
+                    style={[styles.textInput, { height: 70, textAlignVertical: 'top' }]}
+                    value={boardContentForm.boardContactGeneral}
+                    onChangeText={(t) => setBoardContentForm({ ...boardContentForm, boardContactGeneral: t })}
+                    placeholder="General inquiries: Contact board secretary or use contact info above"
+                    placeholderTextColor="#9ca3af"
+                    multiline
+                  />
+                </View>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Urgent Matters</Text>
+                  <TextInput
+                    style={[styles.textInput, { height: 70, textAlignVertical: 'top' }]}
+                    value={boardContentForm.boardContactUrgent}
+                    onChangeText={(t) => setBoardContentForm({ ...boardContentForm, boardContactUrgent: t })}
+                    placeholder="Urgent matters: Contact HOA office directly"
+                    placeholderTextColor="#9ca3af"
+                    multiline
+                  />
+                </View>
+
+                {/* Resources */}
+                <Text style={[styles.sectionTitle, { marginTop: 16, marginBottom: 10 }]}>Resources</Text>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>First Resource Line</Text>
+                  <TextInput
+                    style={[styles.textInput, { height: 70, textAlignVertical: 'top' }]}
+                    value={boardContentForm.boardResourceMinutes}
+                    onChangeText={(t) => setBoardContentForm({ ...boardContentForm, boardResourceMinutes: t })}
+                    placeholder="Meeting minutes and agendas available upon request"
+                    placeholderTextColor="#9ca3af"
+                    multiline
+                  />
+                </View>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Second Resource Line</Text>
+                  <TextInput
+                    style={[styles.textInput, { height: 70, textAlignVertical: 'top' }]}
+                    value={boardContentForm.boardResourceBylaws}
+                    onChangeText={(t) => setBoardContentForm({ ...boardContentForm, boardResourceBylaws: t })}
+                    placeholder="Board decisions are made in accordance with HOA bylaws"
+                    placeholderTextColor="#9ca3af"
+                    multiline
+                  />
+                </View>
+
+                <Text style={{ fontSize: 12, color: '#9ca3af', marginBottom: 8, fontStyle: 'italic' }}>
+                  Leave any field blank to use the default text shown in the placeholder.
+                </Text>
+
+                <TouchableOpacity
+                  style={[styles.adminFeeButton, { backgroundColor: '#0ea5e9', marginTop: 8, marginBottom: 24 }]}
+                  onPress={handleSaveBoardContent}
+                >
+                  <Ionicons name="save" size={16} color="#ffffff" />
+                  <Text style={styles.adminFeeButtonText}>Save Board Content</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
 
         {/* Share QR Links Modal */}
         <Modal
