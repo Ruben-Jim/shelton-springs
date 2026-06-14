@@ -23,6 +23,8 @@ import { Linking, ActivityIndicator } from 'react-native';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
 import CustomTabBar from '../components/CustomTabBar';
+import { getHeaderBackgroundSource, getHeaderBackgroundImageStyle } from '../constants/headerBackground';
+import { getScreenHeaderHeight } from '../constants/screenHeader';
 import MobileTabBar from '../components/MobileTabBar';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
@@ -87,6 +89,7 @@ const CovenantsScreen = () => {
   const isMobileDevice = Platform.OS === 'ios' || Platform.OS === 'android';
   const showMobileNav = isMobileDevice || screenWidth < 1024; // Always mobile on mobile devices, responsive on web
   const showDesktopNav = !isMobileDevice && screenWidth >= 1024; // Only desktop nav on web when wide enough
+  const headerHeight = getScreenHeaderHeight(showDesktopNav, 'standard', !isBoardMember);
 
   // ScrollView ref for better control
   const scrollViewRef = useRef<ScrollView>(null);
@@ -234,10 +237,10 @@ const CovenantsScreen = () => {
         {/* Header with ImageBackground */}
         <View style={[styles.headerContainerIOS, { width: screenWidth }]}>
         <ImageBackground
-          source={require('../../assets/hoa-4k.jpg')}
-          style={[styles.header, !isBoardMember && styles.headerNonMember]}
-          imageStyle={[styles.headerImage, { width: screenWidth }]}
-            resizeMode="stretch"
+          source={getHeaderBackgroundSource(showDesktopNav)}
+          style={[styles.header, { height: headerHeight }]}
+          imageStyle={[styles.headerImage, getHeaderBackgroundImageStyle(showDesktopNav, screenWidth, headerHeight)]}
+          resizeMode="cover"
         >
           <View style={styles.headerOverlay} />
           <View style={styles.headerTop}>

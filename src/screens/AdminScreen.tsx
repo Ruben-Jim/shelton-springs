@@ -52,6 +52,8 @@ import {
   ANDROID_PLAY_STORE_URL,
   getIosAppStoreUrl,
 } from '../constants/publicLinks';
+import { getHeaderBackgroundSource, getHeaderBackgroundImageStyle } from '../constants/headerBackground';
+import { getScreenHeaderHeight } from '../constants/screenHeader';
 
 const AdminScreen = () => {
   const { user } = useAuth();
@@ -65,6 +67,7 @@ const AdminScreen = () => {
   const isMobileDevice = Platform.OS === 'ios' || Platform.OS === 'android';
   const showMobileNav = isMobileDevice || screenWidth < 1024; // Always mobile on mobile devices, responsive on web
   const showDesktopNav = !isMobileDevice && screenWidth >= 1024; // Only desktop nav on web when wide enough
+  const headerHeight = getScreenHeaderHeight(showDesktopNav, 'standard');
   const iosAppStoreUrl = getIosAppStoreUrl();
   
   // Listen for window/dimension changes (web resize, tablet rotation, etc.)
@@ -4172,10 +4175,10 @@ const AdminScreen = () => {
           {/* Header with ImageBackground */}
           <View style={[styles.headerContainerIOS, { width: screenWidth }]}>
             <ImageBackground
-              source={require('../../assets/hoa-4k.jpg')}
-              style={styles.header}
-              imageStyle={[styles.headerImage, { width: screenWidth }]}
-              resizeMode="stretch"
+              source={getHeaderBackgroundSource(showDesktopNav)}
+              style={[styles.header, { height: headerHeight }]}
+              imageStyle={[styles.headerImage, getHeaderBackgroundImageStyle(showDesktopNav, screenWidth, headerHeight)]}
+              resizeMode="cover"
             >
             <View style={styles.headerOverlay} />
             <View style={styles.headerTop}>

@@ -35,6 +35,8 @@ import { useCustomAlert } from '../hooks/useCustomAlert';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
 import { getUploadReadyImage } from '../utils/imageUpload';
+import { getHeaderBackgroundSource, getHeaderBackgroundImageStyle } from '../constants/headerBackground';
+import { getScreenHeaderHeight } from '../constants/screenHeader';
 
 const DocumentsScreen = () => {
   const { user } = useAuth();
@@ -65,6 +67,7 @@ const DocumentsScreen = () => {
   const isMobileDevice = Platform.OS === 'ios' || Platform.OS === 'android';
   const showMobileNav = isMobileDevice || screenWidth < 1024;
   const showDesktopNav = !isMobileDevice && screenWidth >= 1024;
+  const headerHeight = getScreenHeaderHeight(showDesktopNav, 'standard', !isBoardMember);
 
   // Animation values
   const uploadModalOpacity = useRef(new Animated.Value(0)).current;
@@ -423,10 +426,10 @@ const DocumentsScreen = () => {
             ]}
           >
             <ImageBackground
-              source={require('../../assets/hoa-4k.jpg')}
-              style={[styles.header, !isBoardMember && styles.headerNonMember]}
-              imageStyle={[styles.headerImage, { width: screenWidth }]}
-              resizeMode="stretch"
+              source={getHeaderBackgroundSource(showDesktopNav)}
+              style={[styles.header, { height: headerHeight }]}
+              imageStyle={[styles.headerImage, getHeaderBackgroundImageStyle(showDesktopNav, screenWidth, headerHeight)]}
+              resizeMode="cover"
             >
               <View style={styles.headerOverlay} />
                 <View style={styles.headerTop}>

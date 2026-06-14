@@ -44,6 +44,8 @@ import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
 import * as Linking from 'expo-linking';
 import { notifyNewCommunityPost, notifyNewComment, notifyNewPoll, notifyResidentNotification } from '../utils/notificationHelpers';
+import { getHeaderBackgroundSource, getHeaderBackgroundImageStyle } from '../constants/headerBackground';
+import { getScreenHeaderHeight } from '../constants/screenHeader';
 
 // Stable component reference so list re-renders don't remount images (prevents image flash)
 const PostImage = ({
@@ -172,6 +174,7 @@ const CommunityScreen = () => {
   const isMobileDevice = Platform.OS === 'ios' || Platform.OS === 'android';
   const showMobileNav = isMobileDevice || screenWidth < 1024; // Always mobile on mobile devices, responsive on web
   const showDesktopNav = !isMobileDevice && screenWidth >= 1024; // Only desktop nav on web when wide enough
+  const headerHeight = getScreenHeaderHeight(showDesktopNav, 'standard', !isBoardMember);
 
   // Animation values
   const postModalOpacity = useRef(new Animated.Value(0)).current;
@@ -1572,10 +1575,10 @@ const CommunityScreen = () => {
         ]}
       >
         <ImageBackground
-          source={Platform.OS === 'ios' ? require('../../assets/hoa-1k.jpg') : require('../../assets/hoa-2k.jpg')}
-          style={[styles.header, !isBoardMember && styles.headerNonMember]}
-          imageStyle={[styles.headerImage, { width: screenWidth }]}
-          resizeMode="stretch"
+          source={getHeaderBackgroundSource(showDesktopNav)}
+          style={[styles.header, { height: headerHeight }]}
+          imageStyle={[styles.headerImage, getHeaderBackgroundImageStyle(showDesktopNav, screenWidth, headerHeight)]}
+          resizeMode="cover"
         >
           <View style={styles.headerOverlay} />
           <View style={styles.headerTop}>
@@ -1712,10 +1715,10 @@ const CommunityScreen = () => {
         ]}
       >
         <ImageBackground
-          source={Platform.OS === 'ios' ? require('../../assets/hoa-1k.jpg') : require('../../assets/hoa-2k.jpg')}
-          style={[styles.header, !isBoardMember && styles.headerNonMember]}
-          imageStyle={[styles.headerImage, { width: screenWidth }]}
-          resizeMode="stretch"
+          source={getHeaderBackgroundSource(showDesktopNav)}
+          style={[styles.header, { height: headerHeight }]}
+          imageStyle={[styles.headerImage, getHeaderBackgroundImageStyle(showDesktopNav, screenWidth, headerHeight)]}
+          resizeMode="cover"
         >
           <View style={styles.headerOverlay} />
           <View style={styles.headerTop}>

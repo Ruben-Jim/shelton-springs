@@ -34,6 +34,8 @@ import { useCustomAlert } from '../hooks/useCustomAlert';
 import ProfileImage from '../components/ProfileImage';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
+import { getHeaderBackgroundSource, getHeaderBackgroundImageStyle } from '../constants/headerBackground';
+import { getScreenHeaderHeight } from '../constants/screenHeader';
 
 const HomeScreen = () => {
   const { user } = useAuth();
@@ -85,6 +87,7 @@ const HomeScreen = () => {
   const isMobileDevice = Platform.OS === 'ios' || Platform.OS === 'android';
   const showMobileNav = isMobileDevice || screenWidth < 1024; // Always mobile on mobile devices, responsive on web
   const showDesktopNav = !isMobileDevice && screenWidth >= 1024; // Only desktop nav on web when wide enough
+  const headerHeight = getScreenHeaderHeight(showDesktopNav, 'home', !isBoardMember);
 
   // Animation values
   const fadeAnim = useRef(new Animated.Value(1)).current; // Start at 1 to avoid white flash
@@ -374,37 +377,48 @@ const HomeScreen = () => {
         ]}
       >
         <ImageBackground
-          source={require('../../assets/hoa-4k.jpg')}
-          style={[styles.header, !isBoardMember && styles.headerNonMember]}
-          imageStyle={[styles.headerImage, { width: screenWidth }]}
-          resizeMode="stretch"
+          source={getHeaderBackgroundSource(showDesktopNav)}
+          style={[styles.header, { height: headerHeight }]}
+          imageStyle={[styles.headerImage, getHeaderBackgroundImageStyle(showDesktopNav, screenWidth, headerHeight)]}
+          resizeMode="cover"
         >
         <View style={styles.headerOverlay} />
-        <View style={styles.headerTop}>
-          {/* Hamburger Menu - Only when mobile nav is shown */}
-          {showMobileNav && (
-            <TouchableOpacity
-              style={styles.menuButton}
-              onPress={() => setIsMenuOpen(true)}
-            >
-              <Ionicons name="menu" size={24} color="#ffffff" />
-            </TouchableOpacity>
-          )}
-          
-          <View style={styles.headerLeft}>
-            <Text style={styles.welcomeText}>Welcome to</Text>
-            <Text style={styles.hoaName}>{hoaInfo?.name ?? 'HOA'}</Text>
-            <Text style={styles.subtitle}>Your Community Connection</Text>
-          </View>
-
-          {/* Spacer for non-board members to center the text */}
-          {!isBoardMember && <View style={styles.headerSpacer} />}
-
-          {/* Messaging Button - Board Members Only */}
-          {isBoardMember && (
-            <View style={styles.headerRight}>
-              <MessagingButton onPress={() => setShowOverlay(true)} />
-            </View>
+        <View style={[styles.headerTop, showDesktopNav && styles.headerTopDesktop]}>
+          {showDesktopNav ? (
+            <>
+              <View style={styles.headerTitleDesktopWrap} pointerEvents="box-none">
+                <View style={styles.headerLeftDesktop}>
+                  <Text style={styles.welcomeText}>Welcome to</Text>
+                  <Text style={styles.hoaName}>{hoaInfo?.name ?? 'HOA'}</Text>
+                  <Text style={styles.subtitle}>Your Community Connection</Text>
+                </View>
+              </View>
+              {isBoardMember && (
+                <View style={[styles.headerRight, styles.headerMessagingDesktop]}>
+                  <MessagingButton onPress={() => setShowOverlay(true)} />
+                </View>
+              )}
+            </>
+          ) : (
+            <>
+              <TouchableOpacity
+                style={styles.menuButton}
+                onPress={() => setIsMenuOpen(true)}
+              >
+                <Ionicons name="menu" size={24} color="#ffffff" />
+              </TouchableOpacity>
+              <View style={styles.headerLeft}>
+                <Text style={styles.welcomeText}>Welcome to</Text>
+                <Text style={styles.hoaName}>{hoaInfo?.name ?? 'HOA'}</Text>
+                <Text style={styles.subtitle}>Your Community Connection</Text>
+              </View>
+              {!isBoardMember && <View style={styles.headerSpacer} />}
+              {isBoardMember && (
+                <View style={styles.headerRight}>
+                  <MessagingButton onPress={() => setShowOverlay(true)} />
+                </View>
+              )}
+            </>
           )}
         </View>
               
@@ -946,10 +960,30 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     gap: 12,
   },
+  headerTopDesktop: {
+    position: 'relative',
+    minHeight: 100,
+    marginBottom: 0,
+  },
+  headerTitleDesktopWrap: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerLeftDesktop: {
+    alignItems: 'center',
+    paddingHorizontal: 10,
+  },
   headerRight: {
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 1,
+  },
+  headerMessagingDesktop: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    zIndex: 2,
   },
   headerSpacer: {
     width: 44, // Same width as MessagingButton (icon + padding)
