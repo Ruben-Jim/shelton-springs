@@ -39,6 +39,7 @@ import DeveloperIndicator from '../components/DeveloperIndicator';
 import CustomTabBar from '../components/CustomTabBar';
 import MobileTabBar from '../components/MobileTabBar';
 import ProfileImage from '../components/ProfileImage';
+import { getBoardMemberPhoto } from '../utils/boardMemberPhoto';
 import OptimizedImage from '../components/OptimizedImage';
 import { getUploadReadyImage } from '../utils/imageUpload';
 import {
@@ -92,6 +93,7 @@ const AdminScreen = () => {
   );
   const [expandedShareQrKey, setExpandedShareQrKey] = useState<string | null>('website');
   const shareQrRefs = useRef<Record<string, any>>({});
+  const didSyncBoardFlagsRef = useRef(false);
   
   // Data queries - using paginated queries for large lists
   // Always loaded: residents, boardMembers (needed for all tabs)
@@ -501,6 +503,7 @@ const AdminScreen = () => {
   const deleteComment = useMutation(api.communityPosts.removeComment);
   const createBoardMember = useMutation(api.boardMembers.create);
   const updateBoardMember = useMutation(api.boardMembers.update);
+  const syncResidentBoardFlags = useMutation(api.boardMembers.syncResidentBoardFlags);
   const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
   
   // Fee management mutations
@@ -970,6 +973,13 @@ const AdminScreen = () => {
 
   // Check if current user is a board member
   const isBoardMember = user?.isBoardMember && user?.isActive;
+
+  // Repair stale residents.isBoardMember flags once per session (board roster ↔ residents sync)
+  useEffect(() => {
+    if (!isBoardMember || didSyncBoardFlagsRef.current) return;
+    didSyncBoardFlagsRef.current = true;
+    syncResidentBoardFlags({}).catch(() => {});
+  }, [isBoardMember, syncResidentBoardFlags]);
 
   // Modern animation functions
   const animateIn = (modalType: 'block' | 'remove' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll' | 'recordPayment' | 'transactions' | 'shareQr') => {
@@ -2655,7 +2665,7 @@ const AdminScreen = () => {
                           {/* Main Info Row - Avatar Left, Details Right */}
                           <View style={styles.residentGridMainInfo}>
                             <ProfileImage 
-                              source={item.image} 
+                              source={getBoardMemberPhoto(item, residents)} 
                               size={40}
                               initials={item.name.split(' ').map((n: string) => n.charAt(0)).join('').substring(0, 2)}
                               style={{ marginRight: 6 }}

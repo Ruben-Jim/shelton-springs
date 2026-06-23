@@ -1,5 +1,47 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import type { Doc } from "./_generated/dataModel";
+
+function normalizeFullName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function residentFullName(resident: Pick<Doc<"residents">, "firstName" | "lastName">): string {
+  return normalizeFullName(`${resident.firstName} ${resident.lastName}`);
+}
+
+/** Keep residents.isBoardMember in sync with the boardMembers roster (matched by full name). */
+async function applyResidentBoardFlagSync(ctx: { db: any }) {
+  const boardMembers = await ctx.db.query("boardMembers").collect();
+  const boardNameSet = new Set(boardMembers.map((bm: Doc<"boardMembers">) => normalizeFullName(bm.name)));
+
+  const residents = await ctx.db.query("residents").collect();
+  const now = Date.now();
+
+  for (const resident of residents) {
+    const shouldBeBoardMember = boardNameSet.has(residentFullName(resident));
+    if (resident.isBoardMember !== shouldBeBoardMember) {
+      await ctx.db.patch(resident._id, {
+        isBoardMember: shouldBeBoardMember,
+        updatedAt: now,
+      });
+    }
+  }
+
+  // Backfill board member photos from resident profile when board image is unset
+  for (const boardMember of boardMembers) {
+    if (boardMember.image) continue;
+    const resident = residents.find(
+      (r: Doc<"residents">) => residentFullName(r) === normalizeFullName(boardMember.name),
+    );
+    if (resident?.profileImage) {
+      await ctx.db.patch(boardMember._id, {
+        image: resident.profileImage,
+        updatedAt: now,
+      });
+    }
+  }
+}
 
 export const getAll = query({
   args: {},
@@ -37,11 +79,27 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+
+    let image = args.image;
+    if (!image) {
+      const residents = await ctx.db.query("residents").collect();
+      const resident = residents.find(
+        (r: Doc<"residents">) => residentFullName(r) === normalizeFullName(args.name),
+      );
+      if (resident?.profileImage) {
+        image = resident.profileImage;
+      }
+    }
+
     const boardMemberId = await ctx.db.insert("boardMembers", {
       ...args,
+      image,
       createdAt: now,
       updatedAt: now,
     });
+
+    await applyResidentBoardFlagSync(ctx);
+
     return boardMemberId;
   },
 });
@@ -64,36 +122,27 @@ export const update = mutation({
       ...updates,
       updatedAt: now,
     });
+
+    await applyResidentBoardFlagSync(ctx);
   },
 });
 
 export const remove = mutation({
   args: { id: v.id("boardMembers") },
   handler: async (ctx, args) => {
-    // Get the board member record to find their email
-    const boardMember = await ctx.db.get(args.id);
-    
-    if (boardMember && boardMember.email) {
-      // Find the corresponding resident by email
-      const resident = await ctx.db
-        .query("residents")
-        .withIndex("by_email", (q) => q.eq("email", boardMember.email))
-        .first();
-      
-      // If resident exists, update their isBoardMember flag to false
-      // This ensures they remain as a homeowner when stepping down from the board
-      if (resident) {
-        await ctx.db.patch(resident._id, {
-          isBoardMember: false,
-          updatedAt: Date.now(),
-        });
-      }
-    }
-    
-    // Delete the board member record
     await ctx.db.delete(args.id);
+    await applyResidentBoardFlagSync(ctx);
   },
-}); 
+});
+
+/** One-time or manual repair: align all residents.isBoardMember flags with the current board roster. */
+export const syncResidentBoardFlags = mutation({
+  args: {},
+  handler: async (ctx) => {
+    await applyResidentBoardFlagSync(ctx);
+    return { success: true };
+  },
+});
 
 // Maintenance: backfill optional fields on existing documents
 export const backfillOptionalFields = mutation({

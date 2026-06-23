@@ -19,11 +19,13 @@ import { useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 
 import { useAuth } from '../context/AuthContext';
+import { useCachedResidents } from '../context/QueryCacheContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
 import CustomTabBar from '../components/CustomTabBar';
 import MobileTabBar from '../components/MobileTabBar';
 import ProfileImage from '../components/ProfileImage';
+import { getBoardMemberPhoto } from '../utils/boardMemberPhoto';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
 
@@ -67,6 +69,7 @@ const BoardScreen = () => {
   };
 
   const members = useQuery(api.boardMembers.getAll) ?? [];
+  const residents = useCachedResidents();
   const hoaInfo = useQuery(api.hoaInfo.get) ?? null;
 
   // Board page content — fall back to hardcoded defaults when not set by admin
@@ -274,7 +277,7 @@ const BoardScreen = () => {
             <View style={styles.memberHeader}>
               <View style={styles.avatarContainer}>
                 <ProfileImage 
-                  source={member.image}
+                  source={getBoardMemberPhoto(member, residents)}
                   size={70}
                   style={styles.avatarImage}
                 />
