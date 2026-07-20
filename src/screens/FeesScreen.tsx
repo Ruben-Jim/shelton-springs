@@ -1,10 +1,11 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  Pressable,
   Alert,
   ImageBackground,
   Animated,
@@ -12,6 +13,8 @@ import {
   Platform,
   Image,
   Modal,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -22,12 +25,14 @@ import { useAuth } from '../context/AuthContext';
 import { useCachedResidents } from '../context/QueryCacheContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
-import CustomTabBar from '../components/CustomTabBar';
+import { DesktopTabBarSlot, useDesktopTabBarScrollSync } from '../components/DesktopTabBarLayer';
 import MobileTabBar from '../components/MobileTabBar';
 import PaymentModal from '../components/PaymentModal';
 import ProfileImage from '../components/ProfileImage';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
+import ScrollToTopButton from '../components/ScrollToTopButton';
+import { useScrollToTop } from '../hooks/useScrollToTop';
 
 const FeesScreen = () => {
   const { user } = useAuth();
@@ -57,6 +62,15 @@ const FeesScreen = () => {
   
   // ScrollView ref for better control
   const scrollViewRef = useRef<ScrollView>(null);
+  const { showScrollToTop, scrollToTop, handleScroll: baseHandleScroll } = useScrollToTop(scrollViewRef);
+  const syncDesktopTabBar = useDesktopTabBarScrollSync();
+  const handleScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      baseHandleScroll(event);
+      syncDesktopTabBar();
+    },
+    [baseHandleScroll, syncDesktopTabBar]
+  );
 
   // Listen for window size changes (only on web/desktop)
   useEffect(() => {
@@ -306,6 +320,7 @@ const FeesScreen = () => {
           nestedScrollEnabled={true}
           removeClippedSubviews={false}
           scrollEventThrottle={16}
+          onScroll={handleScroll}
           // Enhanced desktop scrolling
           decelerationRate="normal"
           directionalLockEnabled={true}
@@ -323,9 +338,6 @@ const FeesScreen = () => {
                 document.body.style.cursor = 'grab';
                 document.body.style.userSelect = 'auto';
               }
-            },
-            onScroll: () => {
-              // Ensure scrolling is working
             },
           })}
         >
@@ -388,7 +400,7 @@ const FeesScreen = () => {
           <Animated.View style={{
             opacity: fadeAnim,
           }}>
-            <CustomTabBar />
+            <DesktopTabBarSlot />
           </Animated.View>
         )}
 
@@ -635,12 +647,15 @@ const FeesScreen = () => {
                             )}
                             
                             {fee.status !== 'Paid' && (
-                              <TouchableOpacity
-                                style={styles.payButton}
+                              <Pressable
+                                style={({ pressed }) => [
+                                  styles.payButton,
+                                  pressed && styles.payButtonPressed,
+                                ]}
                                 onPress={() => handlePayment(fee, 'fee')}
                               >
                                 <Text style={styles.payButtonText}>Pay Now</Text>
-                              </TouchableOpacity>
+                              </Pressable>
                             )}
                           </>
                         );
@@ -730,12 +745,15 @@ const FeesScreen = () => {
                             )}
                             
                             {fineStatus !== 'Paid' && (
-                              <TouchableOpacity
-                                style={styles.payButton}
+                              <Pressable
+                                style={({ pressed }) => [
+                                  styles.payButton,
+                                  pressed && styles.payButtonPressed,
+                                ]}
                                 onPress={() => handlePayment(fine, 'fine')}
                               >
                                 <Text style={styles.payButtonText}>Pay Now</Text>
-                              </TouchableOpacity>
+                              </Pressable>
                             )}
                           </>
                         );
@@ -788,6 +806,7 @@ const FeesScreen = () => {
         {/* Additional content to ensure scrollable content */}
         <View style={styles.spacer} />
         </ScrollView>
+        <ScrollToTopButton visible={showScrollToTop} onPress={scrollToTop} />
 
         {/* Payment Modal */}
         {selectedPaymentItem && user && (
@@ -1234,6 +1253,10 @@ const styles = StyleSheet.create({
       justifyContent: 'center',
       alignItems: 'center',
     }),
+  },
+  payButtonPressed: {
+    transform: [{ scale: 0.95 }],
+    opacity: 0.85,
   },
   payButtonText: {
     color: '#ffffff',

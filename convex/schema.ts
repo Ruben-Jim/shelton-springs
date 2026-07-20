@@ -121,6 +121,7 @@ export default defineSchema({
     boardContactUrgent: v.optional(v.string()),
     boardResourceMinutes: v.optional(v.string()),
     boardResourceBylaws: v.optional(v.string()),
+    damageCategories: v.optional(v.array(v.string())),
     createdAt: v.number(),
     updatedAt: v.number(),
   }),
@@ -272,4 +273,21 @@ export default defineSchema({
     expiresAt: v.number(),
     createdAt: v.number(),
   }).index("by_token", ["token"]).index("by_email", ["email"]),
+
+  damageReports: defineTable({
+    residentId: v.string(),
+    residentName: v.string(),
+    category: v.string(),
+    description: v.string(),
+    photos: v.optional(v.array(v.string())),
+    status: v.union(
+      v.literal("Pending"),
+      v.literal("In Progress"),
+      v.literal("Resolved")
+    ),
+    adminNotes: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_resident", ["residentId"])
+    .index("by_status", ["status"]),
 }); 

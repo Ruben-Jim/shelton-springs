@@ -36,8 +36,8 @@ import { useAuth } from '../context/AuthContext';
 import { useCachedResidents, useCachedHoaInfo } from '../context/QueryCacheContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
-import CustomTabBar from '../components/CustomTabBar';
 import MobileTabBar from '../components/MobileTabBar';
+import { useNavigation } from '@react-navigation/native';
 import ProfileImage from '../components/ProfileImage';
 import { getBoardMemberPhoto } from '../utils/boardMemberPhoto';
 import OptimizedImage from '../components/OptimizedImage';
@@ -52,28 +52,37 @@ import {
   ANDROID_PLAY_STORE_URL,
   getIosAppStoreUrl,
 } from '../constants/publicLinks';
+import { useAdminLayout } from '../hooks/useAdminLayout';
+import AdminNav, { AdminMobileMoreSheet } from '../components/admin/AdminNav';
+import AdminOverview from '../components/admin/AdminOverview';
+import { AdminGrid, AdminGridItem } from '../components/admin/AdminGrid';
+import { AdminTabId, CommunitySubTab } from '../components/admin/types';
+import DamageReportsPanel from '../components/admin/DamageReportsPanel';
+import ScrollToTopButton from '../components/ScrollToTopButton';
+import { useScrollToTop } from '../hooks/useScrollToTop';
 
 const AdminScreen = () => {
-  const { user } = useAuth();
+  const { user, updateUser } = useAuth();
   const convex = useConvex();
+  const navigation = useNavigation();
+
+  const handleNavigateHome = () => {
+    navigation.navigate('Home' as never);
+  };
   
-  // State for dynamic responsive behavior (only for web/desktop)
-  const [screenWidth, setScreenWidth] = useState(Dimensions.get('window').width);
-  
-  // Dynamic responsive check - show mobile nav when screen is too narrow for desktop nav
-  // On mobile, always show mobile nav regardless of screen size
-  const isMobileDevice = Platform.OS === 'ios' || Platform.OS === 'android';
-  const showMobileNav = isMobileDevice || screenWidth < 1024; // Always mobile on mobile devices, responsive on web
-  const showDesktopNav = !isMobileDevice && screenWidth >= 1024; // Only desktop nav on web when wide enough
+  const {
+    screenWidth,
+    isMobileDevice,
+    isDesktop,
+    isPhone,
+    showMobileNav,
+    useSidebar,
+    columnWidthPercent,
+    contentMaxWidth,
+  } = useAdminLayout();
+  const formInputGroupStyle = useSidebar ? [styles.inputGroup, styles.inputGroupDesktop] : styles.inputGroup;
+  const overviewCardWidthPercent = isDesktop ? 33.333 : screenWidth >= 760 ? 33.333 : 50;
   const iosAppStoreUrl = getIosAppStoreUrl();
-  
-  // Listen for window/dimension changes (web resize, tablet rotation, etc.)
-  useEffect(() => {
-    const subscription = Dimensions.addEventListener('change', ({ window }) => {
-      setScreenWidth(window.width);
-    });
-    return () => subscription?.remove();
-  }, []);
 
   // Pagination state for large lists
   const [covenantsLimit, setCovenantsLimit] = useState(50);
@@ -81,7 +90,8 @@ const AdminScreen = () => {
   const [pollsLimit, setPollsLimit] = useState(50);
   
   // State (define early so it can be used in conditional queries)
-  const [activeTab, setActiveTab] = useState<'SheltonHOA' | 'residents' | 'board' | 'covenants' | 'Community' | 'fees'>('SheltonHOA');
+  const [activeTab, setActiveTab] = useState<AdminTabId>('overview');
+  const [showAdminMoreSheet, setShowAdminMoreSheet] = useState(false);
   const shareLinkItems = useMemo(
     () =>
       [
@@ -111,7 +121,7 @@ const AdminScreen = () => {
   
   const communityPostsData = useQuery(
     api.communityPosts.getPaginated,
-    activeTab === 'Community' ? { limit: postsLimit, offset: 0 } : "skip"
+    activeTab === 'Community' || activeTab === 'overview' ? { limit: postsLimit, offset: 0 } : "skip"
   );
   const communityPosts = communityPostsData?.items ?? [];
   
@@ -149,7 +159,12 @@ const AdminScreen = () => {
   
   const pendingVenmoPayments = useQuery(
     api.payments.getPendingVenmoPayments,
-    activeTab === 'fees' ? {} : "skip"
+    activeTab === 'fees' || activeTab === 'overview' ? {} : "skip"
+  ) ?? [];
+
+  const damageReports = useQuery(
+    api.damageReports.getAll,
+    activeTab === 'Community' || activeTab === 'overview' ? {} : "skip"
   ) ?? [];
   
   const allPayments = useQuery(
@@ -206,6 +221,19 @@ const AdminScreen = () => {
     };
   }, [residents]);
 
+  const adminNavBadges = useMemo(
+    () => ({
+      residents: residents.length,
+      board: boardMembers.length,
+      complaints: communityPosts.filter((p: any) => p.category === 'Complaint').length,
+      pendingPayments: pendingVenmoPayments.length,
+      pendingDamage: damageReports.filter((report: any) => report.status === 'Pending').length,
+      community:
+        communityPosts.filter((p: any) => p.category === 'Complaint').length +
+        damageReports.filter((report: any) => report.status === 'Pending').length,
+    }),
+    [residents.length, boardMembers.length, communityPosts, pendingVenmoPayments, damageReports],
+  );
 
   // Fees grouped by userId for quick lookup (includes fees by address for households)
   const feesByUserId = useMemo(() => {
@@ -540,7 +568,7 @@ const AdminScreen = () => {
   // State
   const [refreshing, setRefreshing] = useState(false);
   // activeTab moved earlier (before queries) for lazy loading
-  const [postsSubTab, setPostsSubTab] = useState<'posts' | 'comments' | 'polls' | 'pets' | 'complaints'>('posts');
+  const [postsSubTab, setPostsSubTab] = useState<CommunitySubTab>('posts');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   
   // Transactions modal state - declared early so it can be used in queries
@@ -892,6 +920,7 @@ const AdminScreen = () => {
     emergencyContact: '',
     eventText: '',
   });
+  const [editingHoaField, setEditingHoaField] = useState<keyof typeof hoaInfoForm | null>(null);
 
   // Board page content modal state
   const [showBoardContentModal, setShowBoardContentModal] = useState(false);
@@ -943,12 +972,68 @@ const AdminScreen = () => {
   const transactionsModalTranslateY = useRef(new Animated.Value(300)).current;
   const shareQrModalOpacity = useRef(new Animated.Value(0)).current;
   const shareQrModalTranslateY = useRef(new Animated.Value(300)).current;
+  const boardContentModalOpacity = useRef(new Animated.Value(0)).current;
+  const boardContentModalTranslateY = useRef(new Animated.Value(300)).current;
   const categoryDropdownOpacity = useRef(new Animated.Value(0)).current;
   const categoryDropdownScale = useRef(new Animated.Value(0.95)).current;
   const overlayOpacity = useRef(new Animated.Value(0)).current;
   const buttonScale = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current; // Start at 0 for individual item animations
   const scrollViewRef = useRef<ScrollView>(null);
+  const communitySubTabsScrollRef = useRef<ScrollView>(null);
+  const { showScrollToTop, scrollToTop, handleScroll } = useScrollToTop(scrollViewRef, {
+    resetKey: activeTab,
+  });
+
+  // Mouse-drag scrolling for community sub-tabs on web
+  useEffect(() => {
+    if (Platform.OS !== 'web' || activeTab !== 'Community') return;
+
+    const node = (communitySubTabsScrollRef.current as any)?.getScrollableNode?.();
+    if (!node) return;
+
+    let isDown = false;
+    let startX = 0;
+    let startScrollLeft = 0;
+
+    const onMouseDown = (e: MouseEvent) => {
+      isDown = true;
+      startX = e.pageX;
+      startScrollLeft = node.scrollLeft;
+      node.style.cursor = 'grabbing';
+      node.style.userSelect = 'none';
+    };
+    const onMouseUp = () => {
+      if (!isDown) return;
+      isDown = false;
+      node.style.cursor = 'grab';
+      node.style.userSelect = 'auto';
+    };
+    const onMouseLeave = () => {
+      if (!isDown) return;
+      isDown = false;
+      node.style.cursor = 'grab';
+      node.style.userSelect = 'auto';
+    };
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isDown) return;
+      e.preventDefault();
+      node.scrollLeft = startScrollLeft - (e.pageX - startX);
+    };
+
+    node.style.cursor = 'grab';
+    node.addEventListener('mousedown', onMouseDown);
+    node.addEventListener('mouseleave', onMouseLeave);
+    node.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+
+    return () => {
+      node.removeEventListener('mousedown', onMouseDown);
+      node.removeEventListener('mouseleave', onMouseLeave);
+      node.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [activeTab]);
 
   // Handle poll modal animation when visibility changes
   useEffect(() => {
@@ -971,8 +1056,39 @@ const AdminScreen = () => {
     }
   }, [showPollModal]);
 
-  // Check if current user is a board member
+  // Check if current user can access admin (board member or developer)
   const isBoardMember = user?.isBoardMember && user?.isActive;
+  const canAccessAdmin = Boolean(user?.isActive && (user?.isBoardMember || user?.isDev));
+  const [accessDeniedCountdown, setAccessDeniedCountdown] = useState(5);
+
+  // Keep local session in sync when resident record changes in Convex (e.g. isBoardMember toggled in dashboard)
+  useEffect(() => {
+    if (!user?._id || residents.length === 0) return;
+    const fresh = residents.find((r: any) => r._id === user._id);
+    if (!fresh) return;
+    const patch: Partial<typeof user> = {};
+    if (fresh.isBoardMember !== user.isBoardMember) patch.isBoardMember = fresh.isBoardMember;
+    if ((fresh.isDev ?? false) !== (user.isDev ?? false)) patch.isDev = fresh.isDev ?? false;
+    if (fresh.isActive !== user.isActive) patch.isActive = fresh.isActive;
+    if (Object.keys(patch).length > 0) {
+      updateUser(patch).catch(() => {});
+    }
+  }, [user, residents, updateUser]);
+
+  useEffect(() => {
+    if (canAccessAdmin) return;
+    setAccessDeniedCountdown(5);
+    const interval = setInterval(() => {
+      setAccessDeniedCountdown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    const timeout = setTimeout(() => {
+      handleNavigateHome();
+    }, 5000);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [canAccessAdmin]);
 
   // Repair stale residents.isBoardMember flags once per session (board roster ↔ residents sync)
   useEffect(() => {
@@ -982,7 +1098,7 @@ const AdminScreen = () => {
   }, [isBoardMember, syncResidentBoardFlags]);
 
   // Modern animation functions
-  const animateIn = (modalType: 'block' | 'remove' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll' | 'recordPayment' | 'transactions' | 'shareQr') => {
+  const animateIn = (modalType: 'block' | 'remove' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll' | 'recordPayment' | 'transactions' | 'shareQr' | 'boardContent') => {
     const opacity = modalType === 'block' ? blockModalOpacity :
                    modalType === 'remove' ? removeModalOpacity :
                    modalType === 'delete' ? deleteModalOpacity :
@@ -995,6 +1111,7 @@ const AdminScreen = () => {
                    modalType === 'recordPayment' ? recordPaymentModalOpacity :
                    modalType === 'transactions' ? transactionsModalOpacity :
                    modalType === 'shareQr' ? shareQrModalOpacity :
+                   modalType === 'boardContent' ? boardContentModalOpacity :
                    pollModalOpacity;
     const translateY = modalType === 'block' ? blockModalTranslateY :
                       modalType === 'remove' ? removeModalTranslateY :
@@ -1008,6 +1125,7 @@ const AdminScreen = () => {
                       modalType === 'recordPayment' ? recordPaymentModalTranslateY :
                       modalType === 'transactions' ? transactionsModalTranslateY :
                       modalType === 'shareQr' ? shareQrModalTranslateY :
+                      modalType === 'boardContent' ? boardContentModalTranslateY :
                       pollModalTranslateY;
     
     Animated.parallel([
@@ -1030,7 +1148,7 @@ const AdminScreen = () => {
     ]).start();
   };
 
-  const animateOut = (modalType: 'block' | 'remove' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll' | 'recordPayment' | 'transactions' | 'shareQr', callback: () => void) => {
+  const animateOut = (modalType: 'block' | 'remove' | 'delete' | 'boardMember' | 'yearFee' | 'addFine' | 'updateDues' | 'pastDue' | 'covenant' | 'poll' | 'recordPayment' | 'transactions' | 'shareQr' | 'boardContent', callback: () => void) => {
     const opacity = modalType === 'block' ? blockModalOpacity :
                    modalType === 'remove' ? removeModalOpacity :
                    modalType === 'delete' ? deleteModalOpacity :
@@ -1043,6 +1161,7 @@ const AdminScreen = () => {
                    modalType === 'recordPayment' ? recordPaymentModalOpacity :
                    modalType === 'transactions' ? transactionsModalOpacity :
                    modalType === 'shareQr' ? shareQrModalOpacity :
+                   modalType === 'boardContent' ? boardContentModalOpacity :
                    pollModalOpacity;
     const translateY = modalType === 'block' ? blockModalTranslateY :
                       modalType === 'remove' ? removeModalTranslateY :
@@ -1056,6 +1175,7 @@ const AdminScreen = () => {
                       modalType === 'recordPayment' ? recordPaymentModalTranslateY :
                       modalType === 'transactions' ? transactionsModalTranslateY :
                       modalType === 'shareQr' ? shareQrModalTranslateY :
+                      modalType === 'boardContent' ? boardContentModalTranslateY :
                       pollModalTranslateY;
     
     Animated.parallel([
@@ -1259,8 +1379,10 @@ const AdminScreen = () => {
         boardResourceMinutes: boardContentForm.boardResourceMinutes.trim() || undefined,
         boardResourceBylaws: boardContentForm.boardResourceBylaws.trim() || undefined,
       });
-      setShowBoardContentModal(false);
-      Alert.alert('Saved', 'Board page content updated successfully.');
+      animateOut('boardContent', () => {
+        setShowBoardContentModal(false);
+        Alert.alert('Saved', 'Board page content updated successfully.');
+      });
     } catch (error) {
       console.error('Error saving board content:', error);
       Alert.alert('Error', 'Failed to save board page content. Please try again.');
@@ -2190,9 +2312,15 @@ const AdminScreen = () => {
     />
   );
 
-  if (!isBoardMember) {
+  if (!canAccessAdmin) {
     return (
       <SafeAreaView style={styles.safeArea}>
+        {!useSidebar && showMobileNav ? (
+          <MobileTabBar
+            isMenuOpen={isMenuOpen}
+            onMenuClose={() => setIsMenuOpen(false)}
+          />
+        ) : null}
         <View style={styles.container}>
           <View style={styles.accessDeniedContainer}>
             <Ionicons name="lock-closed" size={64} color="#ef4444" />
@@ -2200,133 +2328,231 @@ const AdminScreen = () => {
             <Text style={styles.accessDeniedText}>
               Only board members can access this administrative area.
             </Text>
+            <Text style={styles.accessDeniedRedirectText}>
+              Returning to home in {accessDeniedCountdown} seconds…
+            </Text>
+            <TouchableOpacity style={styles.accessDeniedHomeButton} onPress={handleNavigateHome}>
+              <Ionicons name="home" size={18} color="#ffffff" />
+              <Text style={styles.accessDeniedHomeButtonText}>Go to Home</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </SafeAreaView>
     );
   }
 
+  const handleAdminNavigate = (tab: AdminTabId, communitySubTab?: CommunitySubTab) => {
+    if (tab === 'Community' && communitySubTab) {
+      setPostsSubTab(communitySubTab);
+    }
+    setActiveTab(tab);
+  };
+
   const renderTabContent = () => {
     switch (activeTab) {
+      case 'overview':
+        return (
+          <View style={styles.tabContent}>
+            <AdminOverview
+              badges={adminNavBadges}
+              homeownerCount={residentRoleCounts.homeowners}
+              renterCount={residentRoleCounts.renters}
+              blockedCount={residents.filter((r: any) => r.isBlocked).length}
+              onNavigate={handleAdminNavigate}
+              cardWidthPercent={overviewCardWidthPercent}
+            />
+          </View>
+        );
+
       case 'SheltonHOA':
         return (
           <View style={styles.tabContent}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Shelton HOA Information</Text>
-            </View>
-            
-            <View style={styles.hoaInfoContainer}>
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>HOA Name</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={hoaInfoForm.name}
-                  onChangeText={(text) => setHoaInfoForm({ ...hoaInfoForm, name: text })}
-                  placeholder="e.g., Shelton Homeowners Association"
-                  placeholderTextColor="#9ca3af"
-                />
+            <View style={[styles.sectionHeader, useSidebar && styles.sectionHeaderDesktop]}>
+              <View style={[styles.sectionHeaderTextContainer, !useSidebar && styles.sectionHeaderTextContainerMobile]}>
+                <Text style={styles.sectionTitle}>HOA Information</Text>
+                <Text style={styles.sectionSubtitle}>
+                  Update resident-facing contact details and quick-share links.
+                </Text>
               </View>
-              
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Address</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={hoaInfoForm.address}
-                  onChangeText={(text) => setHoaInfoForm({ ...hoaInfoForm, address: text })}
-                  placeholder="e.g., 123 Main Street, Shelton, CT 06484"
-                  placeholderTextColor="#9ca3af"
-                />
-              </View>
-              
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Phone</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={hoaInfoForm.phone}
-                  onChangeText={(text) => setHoaInfoForm({ ...hoaInfoForm, phone: text })}
-                  placeholder="e.g., (203) 555-1234"
-                  placeholderTextColor="#9ca3af"
-                  keyboardType="phone-pad"
-                />
-              </View>
-              
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Email</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={hoaInfoForm.email}
-                  onChangeText={(text) => setHoaInfoForm({ ...hoaInfoForm, email: text })}
-                  placeholder="e.g., info@sheltonhoa.org"
-                  placeholderTextColor="#9ca3af"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                />
-              </View>
-              
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Website</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={hoaInfoForm.website}
-                  onChangeText={(text) => setHoaInfoForm({ ...hoaInfoForm, website: text })}
-                  placeholder="e.g., https://www.sheltonhoa.org"
-                  placeholderTextColor="#9ca3af"
-                  autoCapitalize="none"
-                />
-              </View>
-              
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Office Hours</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={hoaInfoForm.officeHours}
-                  onChangeText={(text) => setHoaInfoForm({ ...hoaInfoForm, officeHours: text })}
-                  placeholder="e.g., Monday-Friday 9:00 AM - 5:00 PM"
-                  placeholderTextColor="#9ca3af"
-                />
-              </View>
-              
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Emergency Contact</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={hoaInfoForm.emergencyContact}
-                  onChangeText={(text) => setHoaInfoForm({ ...hoaInfoForm, emergencyContact: text })}
-                  placeholder="e.g., (203) 555-9999 or emergency@sheltonhoa.org"
-                  placeholderTextColor="#9ca3af"
-                />
-              </View>
-              
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Upcoming Events Text</Text>
-                <TextInput
-                  style={[styles.textInput, { height: 100, textAlignVertical: 'top' }]}
-                  value={hoaInfoForm.eventText}
-                  onChangeText={(text) => setHoaInfoForm({ ...hoaInfoForm, eventText: text })}
-                  placeholder={"e.g.,\n📅 Board Meeting - Next Tuesday at 7:00 PM\n🏠 Community Cleanup - This Saturday 9:00 AM"}
-                  placeholderTextColor="#9ca3af"
-                  multiline
-                />
-              </View>
-              
               <TouchableOpacity
-                style={[styles.adminFeeButton, { backgroundColor: '#8b5cf6', marginTop: 20 }]}
-                onPress={handleSaveHoaInfo}
-              >
-                <Ionicons name="save" size={16} color="#ffffff" />
-                <Text style={styles.adminFeeButtonText}>Save HOA Information</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.adminFeeButton, { backgroundColor: '#2563eb', marginTop: 12 }]}
+                style={[styles.hoaHeaderQrButton, !useSidebar && styles.hoaHeaderQrButtonMobile]}
                 onPress={() => {
                   setShowShareQrModal(true);
                   animateIn('shareQr');
                 }}
               >
                 <Ionicons name="qr-code-outline" size={16} color="#ffffff" />
-                <Text style={styles.adminFeeButtonText}>Open Share Links & QR Codes</Text>
+                <Text style={styles.hoaHeaderQrButtonText}>{useSidebar ? 'Share Links & QR' : 'QR'}</Text>
               </TouchableOpacity>
+            </View>
+            
+            <View
+              style={[
+                styles.hoaInfoContainer,
+                useSidebar && styles.hoaInfoContainerDesktop,
+                !useSidebar && styles.hoaInfoContainerMobile,
+              ]}
+            >
+              {useSidebar ? (
+                <>
+                  <View style={[styles.hoaInfoPanel, styles.hoaInfoPanelMobile]}>
+                    <View style={styles.hoaInfoDesktopHeader}>
+                      <Text style={styles.hoaInfoDesktopHeaderTitle}>Community Details</Text>
+                      <Text style={styles.hoaInfoDesktopHeaderSubtitle}>
+                        Click edit on any row, then save all changes when finished.
+                      </Text>
+                    </View>
+
+                    <View style={styles.hoaInfoDesktopGrid}>
+                    {([
+                      { key: 'name', label: 'HOA Name', placeholder: 'e.g., Shelton Homeowners Association' },
+                      { key: 'address', label: 'Address', placeholder: 'e.g., 123 Main Street, Shelton, CT 06484' },
+                      { key: 'phone', label: 'Phone', placeholder: 'e.g., (203) 555-1234', keyboardType: 'phone-pad' as const },
+                      { key: 'email', label: 'Email', placeholder: 'e.g., info@sheltonhoa.org', keyboardType: 'email-address' as const, autoCapitalize: 'none' as const },
+                      { key: 'website', label: 'Website', placeholder: 'e.g., https://www.sheltonhoa.org', autoCapitalize: 'none' as const },
+                      { key: 'officeHours', label: 'Office Hours', placeholder: 'e.g., Monday-Friday 9:00 AM - 5:00 PM' },
+                      { key: 'emergencyContact', label: 'Emergency Contact', placeholder: 'e.g., (203) 555-9999 or emergency@sheltonhoa.org' },
+                      {
+                        key: 'eventText',
+                        label: 'Upcoming Events Text',
+                        placeholder: "e.g.,\nBoard Meeting - Next Tuesday at 7:00 PM\nCommunity Cleanup - This Saturday 9:00 AM",
+                        multiline: true,
+                      },
+                    ] as const).map((field) => {
+                      const isEditing = editingHoaField === field.key;
+                      const rawValue = hoaInfoForm[field.key] ?? '';
+                      const hasValue = rawValue.trim().length > 0;
+
+                      return (
+                        <View
+                          key={field.key}
+                          style={[
+                            styles.hoaInfoDesktopRow,
+                            field.multiline ? styles.hoaInfoDesktopRowFull : styles.hoaInfoDesktopRowHalf,
+                          ]}
+                        >
+                          <View style={styles.hoaInfoDesktopRowHeader}>
+                            <Text style={styles.hoaInfoDesktopLabel}>{field.label}</Text>
+                            <TouchableOpacity
+                              style={[styles.hoaInfoEditButton, isEditing && styles.hoaInfoEditButtonActive]}
+                              onPress={async () => {
+                                if (isEditing) {
+                                  setEditingHoaField(null);
+                                  await handleSaveHoaInfo();
+                                  return;
+                                }
+                                setEditingHoaField(field.key);
+                              }}
+                            >
+                              <Ionicons name={isEditing ? 'checkmark' : 'create-outline'} size={14} color={isEditing ? '#ffffff' : '#2563eb'} />
+                              <Text style={[styles.hoaInfoEditButtonText, isEditing && styles.hoaInfoEditButtonTextActive]}>
+                                {isEditing ? 'Done' : 'Edit'}
+                              </Text>
+                            </TouchableOpacity>
+                          </View>
+
+                          {isEditing ? (
+                            <TextInput
+                              style={[styles.textInput, field.multiline && styles.hoaInfoEventInput]}
+                              value={hoaInfoForm[field.key]}
+                              onChangeText={(text) => setHoaInfoForm({ ...hoaInfoForm, [field.key]: text })}
+                              placeholder={field.placeholder}
+                              placeholderTextColor="#9ca3af"
+                              keyboardType={field.keyboardType}
+                              autoCapitalize={field.autoCapitalize ?? 'sentences'}
+                              multiline={field.multiline}
+                            />
+                          ) : (
+                            <View style={[styles.hoaInfoDesktopValue, field.multiline && styles.hoaInfoDesktopValueMultiline]}>
+                              <Text style={[styles.hoaInfoDesktopValueText, !hasValue && styles.hoaInfoDesktopValuePlaceholder]}>
+                                {hasValue ? rawValue : 'Not set'}
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                      );
+                    })}
+                    </View>
+                  </View>
+
+                </>
+              ) : (
+                <>
+                  <View style={[styles.hoaInfoPanel, styles.hoaInfoPanelMobile]}>
+                    <View style={styles.hoaInfoDesktopHeader}>
+                      <Text style={styles.hoaInfoDesktopHeaderTitle}>Community Details</Text>
+                      <Text style={styles.hoaInfoDesktopHeaderSubtitle}>
+                        Tap Edit, then Done to save each field.
+                      </Text>
+                    </View>
+
+                    <View style={styles.hoaInfoDesktopGrid}>
+                      {([
+                        { key: 'name', label: 'HOA Name', placeholder: 'e.g., Shelton Homeowners Association' },
+                        { key: 'address', label: 'Address', placeholder: 'e.g., 123 Main Street, Shelton, CT 06484' },
+                        { key: 'phone', label: 'Phone', placeholder: 'e.g., (203) 555-1234', keyboardType: 'phone-pad' as const },
+                        { key: 'email', label: 'Email', placeholder: 'e.g., info@sheltonhoa.org', keyboardType: 'email-address' as const, autoCapitalize: 'none' as const },
+                        { key: 'website', label: 'Website', placeholder: 'e.g., https://www.sheltonhoa.org', autoCapitalize: 'none' as const },
+                        { key: 'officeHours', label: 'Office Hours', placeholder: 'e.g., Monday-Friday 9:00 AM - 5:00 PM' },
+                        { key: 'emergencyContact', label: 'Emergency Contact', placeholder: 'e.g., (203) 555-9999 or emergency@sheltonhoa.org' },
+                        {
+                          key: 'eventText',
+                          label: 'Upcoming Events Text',
+                          placeholder: "e.g.,\nBoard Meeting - Next Tuesday at 7:00 PM\nCommunity Cleanup - This Saturday 9:00 AM",
+                          multiline: true,
+                        },
+                      ] as const).map((field) => {
+                        const isEditing = editingHoaField === field.key;
+                        const rawValue = hoaInfoForm[field.key] ?? '';
+                        const hasValue = rawValue.trim().length > 0;
+
+                        return (
+                          <View key={field.key} style={[styles.hoaInfoDesktopRow, styles.hoaInfoDesktopRowFull]}>
+                            <View style={styles.hoaInfoDesktopRowHeader}>
+                              <Text style={styles.hoaInfoDesktopLabel}>{field.label}</Text>
+                              <TouchableOpacity
+                                style={[styles.hoaInfoEditButton, isEditing && styles.hoaInfoEditButtonActive]}
+                                onPress={async () => {
+                                  if (isEditing) {
+                                    setEditingHoaField(null);
+                                    await handleSaveHoaInfo();
+                                    return;
+                                  }
+                                  setEditingHoaField(field.key);
+                                }}
+                              >
+                                <Ionicons name={isEditing ? 'checkmark' : 'create-outline'} size={14} color={isEditing ? '#ffffff' : '#2563eb'} />
+                                <Text style={[styles.hoaInfoEditButtonText, isEditing && styles.hoaInfoEditButtonTextActive]}>
+                                  {isEditing ? 'Done' : 'Edit'}
+                                </Text>
+                              </TouchableOpacity>
+                            </View>
+
+                            {isEditing ? (
+                              <TextInput
+                                style={[styles.textInput, styles.hoaMobileTextInput, field.multiline && styles.hoaInfoEventInput]}
+                                value={hoaInfoForm[field.key]}
+                                onChangeText={(text) => setHoaInfoForm({ ...hoaInfoForm, [field.key]: text })}
+                                placeholder={field.placeholder}
+                                placeholderTextColor="#9ca3af"
+                                keyboardType={field.keyboardType}
+                                autoCapitalize={field.autoCapitalize ?? 'sentences'}
+                                multiline={field.multiline}
+                              />
+                            ) : (
+                              <View style={[styles.hoaInfoDesktopValue, field.multiline && styles.hoaInfoDesktopValueMultiline]}>
+                                <Text style={[styles.hoaInfoDesktopValueText, !hasValue && styles.hoaInfoDesktopValuePlaceholder]}>
+                                  {hasValue ? rawValue : 'Not set'}
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+                        );
+                      })}
+                    </View>
+                  </View>
+                </>
+              )}
             </View>
           </View>
         );
@@ -2334,7 +2560,7 @@ const AdminScreen = () => {
       case 'residents':
         return (
           <View style={styles.tabContent}>
-            <View style={styles.sectionHeader}>
+            <View style={[styles.sectionHeader, useSidebar && styles.sectionHeaderDesktop]}>
               <Text style={styles.sectionTitle}>Residents</Text>
             </View>
             
@@ -2445,7 +2671,7 @@ const AdminScreen = () => {
                     <Text style={styles.emptyStateText}>No residents match this filter</Text>
                   </View>
                 ) : (
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+              <AdminGrid>
                 {sortedResidents.map((item: any) => {
                   // Determine primary role (Developer replaces Resident for devs)
                   let primaryRole = 'Resident';
@@ -2475,7 +2701,7 @@ const AdminScreen = () => {
                   }
 
                   return (
-                    <View key={item._id} style={{ width: '50%', padding: 8 }}>
+                    <AdminGridItem key={item._id} columnWidthPercent={columnWidthPercent}>
                       <Animated.View 
                         style={[
                           styles.residentGridCard,
@@ -2586,10 +2812,10 @@ const AdminScreen = () => {
                           </View>
                         </View>
                       </Animated.View>
-                    </View>
+                    </AdminGridItem>
                   );
                 })}
-              </View>
+              </AdminGrid>
                 )}
               </>
             )}
@@ -2599,20 +2825,32 @@ const AdminScreen = () => {
       case 'board':
         return (
           <View style={styles.tabContent}>
-            <View style={styles.sectionHeader}>
+            <View style={[styles.sectionHeader, useSidebar && styles.sectionHeaderDesktop]}>
               <Text style={styles.sectionTitle}>Board Members</Text>
-              <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
+              <View style={styles.sectionHeaderActions}>
                 <TouchableOpacity
-                  style={[styles.addButton, { backgroundColor: '#eab308' }]}
+                  style={styles.boardInfoButton}
                   onPress={() => {
-                    animateButtonPress();
-                    handleAddBoardMember();
+                    setShowBoardContentModal(true);
+                    animateIn('boardContent');
                   }}
                 >
-                  <Ionicons name="add" size={20} color="#ffffff" />
-                  <Text style={styles.addButtonText}>Add Member</Text>
+                  <Ionicons name="create-outline" size={16} color="#ffffff" />
+                  <Text style={styles.boardInfoButtonText}>Edit Board Page Info Cards</Text>
                 </TouchableOpacity>
-              </Animated.View>
+                <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
+                  <TouchableOpacity
+                    style={[styles.addButton, { backgroundColor: '#eab308' }]}
+                    onPress={() => {
+                      animateButtonPress();
+                      handleAddBoardMember();
+                    }}
+                  >
+                    <Ionicons name="add" size={20} color="#ffffff" />
+                    <Text style={styles.addButtonText}>Add Member</Text>
+                  </TouchableOpacity>
+                </Animated.View>
+              </View>
             </View>
             {boardMembers.length === 0 ? (
               <View style={styles.emptyState}>
@@ -2620,7 +2858,7 @@ const AdminScreen = () => {
                 <Text style={styles.emptyStateText}>No board members found</Text>
               </View>
             ) : (
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+              <AdminGrid>
                 {boardMembers.map((item: any, index: number) => {
                   // Determine role icon and color
                   let roleIcon = 'person';
@@ -2646,7 +2884,7 @@ const AdminScreen = () => {
                   }
 
                   return (
-                    <View key={item._id} style={{ width: '50%', padding: 8 }}>
+                    <AdminGridItem key={item._id} columnWidthPercent={columnWidthPercent}>
                       <Animated.View 
                         style={[
                           styles.residentGridCard,
@@ -2727,28 +2965,20 @@ const AdminScreen = () => {
                           </View>
                         </View>
                       </Animated.View>
-                    </View>
+                    </AdminGridItem>
                   );
                 })}
-              </View>
+              </AdminGrid>
             )}
-
-            <TouchableOpacity
-              style={[styles.adminFeeButton, { backgroundColor: '#0ea5e9', marginTop: 16, marginBottom: 4 }]}
-              onPress={() => setShowBoardContentModal(true)}
-            >
-              <Ionicons name="create-outline" size={16} color="#ffffff" />
-              <Text style={styles.adminFeeButtonText}>Edit Board Page Info Cards</Text>
-            </TouchableOpacity>
           </View>
         );
       
       case 'covenants':
         return (
           <View style={styles.tabContent}>
-            <View style={styles.sectionHeader}>
+            <View style={[styles.sectionHeader, useSidebar && styles.sectionHeaderDesktop]}>
               <Text style={styles.sectionTitle}>Covenants & Rules</Text>
-              <View style={styles.covenantButtonsContainer}>
+              <View style={styles.sectionHeaderActions}>
                 <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
                   <TouchableOpacity
                     style={[styles.addButton, { backgroundColor: '#2563eb' }]}
@@ -2834,7 +3064,7 @@ const AdminScreen = () => {
                 <Text style={styles.emptyStateText}>No covenants found</Text>
               </View>
             ) : (
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+              <AdminGrid>
                 {covenants.map((item: any, index: number) => {
                   // Determine covenant icon and color based on category
                   let covenantIcon = 'document-text';
@@ -2861,10 +3091,11 @@ const AdminScreen = () => {
                   }
 
                   return (
-                    <View key={item._id} style={{ width: '50%', padding: 8 }}>
+                    <AdminGridItem key={item._id} columnWidthPercent={columnWidthPercent}>
                       <Animated.View 
                         style={[
                           styles.residentGridCard,
+                          styles.covenantGridCard,
                           {
                             opacity: fadeAnim,
                             transform: [{
@@ -2886,17 +3117,14 @@ const AdminScreen = () => {
                             </View>
                             
                             <View style={styles.residentGridDetails}>
-                              {/* Title and Category Row */}
-                              <View style={styles.residentGridNameRow}>
-                                <Text style={styles.residentGridName} numberOfLines={2}>
-                                  {item.title}
+                              <Text style={styles.residentGridName} numberOfLines={2}>
+                                {item.title}
+                              </Text>
+                              <View style={[styles.residentGridRoleBadge, styles.covenantCategoryBadge, { backgroundColor: covenantColor + '20' }]}>
+                                <Ionicons name={covenantIcon as any} size={12} color={covenantColor} />
+                                <Text style={[styles.residentGridRoleText, { color: covenantColor }]} numberOfLines={1}>
+                                  {item.category}
                                 </Text>
-                                <View style={[styles.residentGridRoleBadge, { backgroundColor: covenantColor + '20' }]}>
-                                  <Ionicons name={covenantIcon as any} size={12} color={covenantColor} />
-                                  <Text style={[styles.residentGridRoleText, { color: covenantColor }]} numberOfLines={1}>
-                                    {item.category}
-                                  </Text>
-                                </View>
                               </View>
                               
                               {/* Last Updated */}
@@ -2907,14 +3135,14 @@ const AdminScreen = () => {
                               )}
                               
                               {/* Description */}
-                              <Text style={styles.residentGridAddress} numberOfLines={2}>
+                              <Text style={styles.residentGridAddress} numberOfLines={3}>
                                 {item.description}
                               </Text>
                             </View>
                           </View>
                           
                           {/* Action Buttons */}
-                          <View style={styles.residentGridActions}>
+                          <View style={[styles.residentGridActions, styles.covenantGridActions]}>
                             <View style={styles.boardActionButtons}>
                               <TouchableOpacity
                                 style={[styles.boardActionButton, styles.editButton]}
@@ -2934,10 +3162,10 @@ const AdminScreen = () => {
                           </View>
                         </View>
                       </Animated.View>
-                    </View>
+                    </AdminGridItem>
                   );
                 })}
-              </View>
+              </AdminGrid>
             )}
           </View>
         );
@@ -2945,44 +3173,35 @@ const AdminScreen = () => {
       case 'Community':
         return (
           <View style={styles.tabContent}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Community Posts</Text>
+            <View style={[styles.sectionHeader, useSidebar && styles.sectionHeaderDesktop]}>
+              <Text style={styles.sectionTitle}>Community</Text>
             </View>
             
-            {/* Posts Sub-tabs */}
+            {/* Community Sub-tabs */}
             <ScrollView 
+              ref={communitySubTabsScrollRef}
               horizontal 
               showsHorizontalScrollIndicator={false}
               style={styles.communitySubTabsContainer}
               contentContainerStyle={styles.communitySubTabsContent}
             >
               <TouchableOpacity
-                style={[styles.communitySubTab, postsSubTab === 'complaints' && styles.activeCommunitySubTab]}
-                onPress={() => setPostsSubTab('complaints')}
-              >
-                <Ionicons name="warning" size={18} color={postsSubTab === 'complaints' ? '#3b82f6' : '#6b7280'} />
-                <Text style={[styles.communitySubTabText, postsSubTab === 'complaints' && styles.activeCommunitySubTabText]}>
-                  Complaints ({communityPosts.filter((p: any) => p.category === 'Complaint').length})
-                </Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity
                 style={[styles.communitySubTab, postsSubTab === 'posts' && styles.activeCommunitySubTab]}
                 onPress={() => setPostsSubTab('posts')}
               >
                 <Ionicons name="chatbubbles" size={18} color={postsSubTab === 'posts' ? '#3b82f6' : '#6b7280'} />
                 <Text style={[styles.communitySubTabText, postsSubTab === 'posts' && styles.activeCommunitySubTabText]}>
-                  Posts ({communityPosts.filter((p: any) => p.category !== 'Complaint').length})
+                  Posts
                 </Text>
               </TouchableOpacity>
-              
+
               <TouchableOpacity
-                style={[styles.communitySubTab, postsSubTab === 'comments' && styles.activeCommunitySubTab]}
-                onPress={() => setPostsSubTab('comments')}
+                style={[styles.communitySubTab, postsSubTab === 'damage' && styles.activeCommunitySubTab]}
+                onPress={() => setPostsSubTab('damage')}
               >
-                <Ionicons name="chatbox" size={18} color={postsSubTab === 'comments' ? '#3b82f6' : '#6b7280'} />
-                <Text style={[styles.communitySubTabText, postsSubTab === 'comments' && styles.activeCommunitySubTabText]}>
-                  Comments ({comments.length})
+                <Ionicons name="construct" size={18} color={postsSubTab === 'damage' ? '#3b82f6' : '#6b7280'} />
+                <Text style={[styles.communitySubTabText, postsSubTab === 'damage' && styles.activeCommunitySubTabText]}>
+                  Damage Reports
                 </Text>
               </TouchableOpacity>
               
@@ -2992,20 +3211,48 @@ const AdminScreen = () => {
               >
                 <Ionicons name="bar-chart" size={18} color={postsSubTab === 'polls' ? '#3b82f6' : '#6b7280'} />
                 <Text style={[styles.communitySubTabText, postsSubTab === 'polls' && styles.activeCommunitySubTabText]}>
-                  Polls ({polls.length})
+                  Polls
                 </Text>
               </TouchableOpacity>
-              
+
               <TouchableOpacity
                 style={[styles.communitySubTab, postsSubTab === 'pets' && styles.activeCommunitySubTab]}
                 onPress={() => setPostsSubTab('pets')}
               >
                 <Ionicons name="paw" size={18} color={postsSubTab === 'pets' ? '#3b82f6' : '#6b7280'} />
                 <Text style={[styles.communitySubTabText, postsSubTab === 'pets' && styles.activeCommunitySubTabText]}>
-                  Pets ({totalPetsCount})
+                  Pets
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.communitySubTab, postsSubTab === 'complaints' && styles.activeCommunitySubTab]}
+                onPress={() => setPostsSubTab('complaints')}
+              >
+                <Ionicons name="warning" size={18} color={postsSubTab === 'complaints' ? '#3b82f6' : '#6b7280'} />
+                <Text style={[styles.communitySubTabText, postsSubTab === 'complaints' && styles.activeCommunitySubTabText]}>
+                  Complaints
+                </Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[styles.communitySubTab, postsSubTab === 'comments' && styles.activeCommunitySubTab]}
+                onPress={() => setPostsSubTab('comments')}
+              >
+                <Ionicons name="chatbox" size={18} color={postsSubTab === 'comments' ? '#3b82f6' : '#6b7280'} />
+                <Text style={[styles.communitySubTabText, postsSubTab === 'comments' && styles.activeCommunitySubTabText]}>
+                  Comments
                 </Text>
               </TouchableOpacity>
             </ScrollView>
+
+            {postsSubTab === 'damage' && (
+              <DamageReportsPanel
+                damageReports={damageReports}
+                configuredCategories={hoaInfo?.damageCategories}
+                isDesktop={isDesktop}
+              />
+            )}
             
             {postsSubTab === 'posts' && (
               (() => {
@@ -3016,9 +3263,9 @@ const AdminScreen = () => {
                     <Text style={styles.emptyStateText}>No posts found</Text>
                   </View>
                 ) : (
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                  <AdminGrid>
                     {filteredPosts.map((item: any) => (
-                      <View key={item._id} style={{ width: '50%', padding: 8 }}>
+                      <AdminGridItem key={item._id} columnWidthPercent={columnWidthPercent}>
                         <Animated.View 
                           style={[
                             styles.residentGridCard,
@@ -3077,9 +3324,9 @@ const AdminScreen = () => {
                             </View>
                           </View>
                         </Animated.View>
-                      </View>
+                      </AdminGridItem>
                     ))}
-                  </View>
+                  </AdminGrid>
                 );
               })()
             )}
@@ -3091,9 +3338,9 @@ const AdminScreen = () => {
                   <Text style={styles.emptyStateText}>No comments found</Text>
                 </View>
               ) : (
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                <AdminGrid>
                   {comments.map((item: any) => (
-                    <View key={item._id} style={{ width: '50%', padding: 8 }}>
+                    <AdminGridItem key={item._id} columnWidthPercent={columnWidthPercent}>
                       <Animated.View 
                         style={[
                           styles.residentGridCard,
@@ -3152,9 +3399,9 @@ const AdminScreen = () => {
                           </View>
                         </View>
                       </Animated.View>
-                    </View>
+                    </AdminGridItem>
                   ))}
-                </View>
+                </AdminGrid>
               )
             )}
             
@@ -3325,7 +3572,16 @@ const AdminScreen = () => {
                 </View>
               ) : (
                 <View style={[styles.petsGridContainer, (isMobileDevice || screenWidth < 640) && styles.petsGridContainerSingleColumn]}>
-                  {petsGrouped.map((group: any) => (
+                  {petsGrouped.map((group: any) => {
+                    const petCount = group.pets.length;
+                    const petTileStyle =
+                      petCount === 1
+                        ? styles.adminPetTileSingle
+                        : petCount === 2
+                          ? styles.adminPetTileDouble
+                          : styles.adminPetTileTriple;
+
+                    return (
                     <View key={group.residentId} style={[
                       styles.petCardWrapper,
                       Platform.OS === 'web' && screenWidth >= 1024 && !(isMobileDevice || screenWidth < 640) && styles.petCardWrapperDesktop,
@@ -3346,34 +3602,36 @@ const AdminScreen = () => {
                         ]}
                       >
                         <View style={styles.petGridCardContent}>
-                          {/* Owner & Address - Top */}
-                          <View style={styles.petCardTextContent}>
-                            <Text style={styles.petCardOwner} numberOfLines={1}>
-                              Owner: {group.residentName || 'Unknown'}
+                          <View style={styles.adminPetCardHeader}>
+                            <Text style={styles.adminPetCardOwner} numberOfLines={1}>
+                              {group.residentName || 'Unknown'}
                             </Text>
-                            <Text style={styles.petCardAddress} numberOfLines={2}>
-                              {group.residentAddress || ''}
-                            </Text>
+                            {group.residentAddress ? (
+                              <Text style={styles.adminPetCardAddress} numberOfLines={2}>
+                                {group.residentAddress}
+                              </Text>
+                            ) : null}
                           </View>
-                          {/* Pets in group - images and names with delete */}
-                          <View style={styles.adminPetsInGroupContainer}>
+
+                          <View
+                            style={[
+                              styles.adminPetsInGroupContainer,
+                              petCount === 1 && styles.adminPetsInGroupContainerSingle,
+                            ]}
+                          >
                             {group.pets.map((pet: any) => (
-                              <View key={pet._id} style={styles.adminPetInGroupItem}>
-                                <View style={[styles.petCardImageContainer, styles.adminPetThumbnail]}>
-                                  <View style={[styles.petImageAvatar, styles.adminPetAvatarSmall]}>
-                                    <PetImage storageId={pet.image} />
-                                  </View>
+                              <View key={pet._id} style={[styles.adminPetTile, petTileStyle]}>
+                                <View style={styles.adminPetImageWrapper}>
+                                  <PetImage storageId={pet.image} />
                                 </View>
-                                <View style={styles.adminPetInfoRow}>
-                                  <Text style={styles.petCardName} numberOfLines={1}>{pet.name}</Text>
-                                  <Text style={styles.petCardDate} numberOfLines={1}>{formatDate(pet.createdAt)}</Text>
-                                </View>
+                                <Text style={styles.adminPetName} numberOfLines={1}>{pet.name}</Text>
+                                <Text style={styles.adminPetDate} numberOfLines={1}>{formatDate(pet.createdAt)}</Text>
                                 <TouchableOpacity
-                                  style={[styles.petCardActionButton, styles.blockButton]}
+                                  style={styles.adminPetDeleteButton}
                                   onPress={() => handleDeleteItem(pet, 'pet')}
                                 >
-                                  <Ionicons name="trash" size={18} color="#ef4444" />
-                                  <Text style={styles.petCardActionText}>Delete</Text>
+                                  <Ionicons name="trash-outline" size={14} color="#ef4444" />
+                                  <Text style={styles.adminPetDeleteText}>Delete</Text>
                                 </TouchableOpacity>
                               </View>
                             ))}
@@ -3381,7 +3639,8 @@ const AdminScreen = () => {
                         </View>
                       </Animated.View>
                     </View>
-                  ))}
+                    );
+                  })}
                 </View>
               )
             )}
@@ -3395,9 +3654,9 @@ const AdminScreen = () => {
                     <Text style={styles.emptyStateText}>No complaints found</Text>
                   </View>
                 ) : (
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                  <AdminGrid>
                     {filteredComplaints.map((item: any) => (
-                      <View key={item._id} style={{ width: '50%', padding: 8 }}>
+                      <AdminGridItem key={item._id} columnWidthPercent={columnWidthPercent}>
                         <Animated.View 
                           style={[
                             styles.residentGridCard,
@@ -3456,9 +3715,9 @@ const AdminScreen = () => {
                             </View>
                           </View>
                         </Animated.View>
-                      </View>
+                      </AdminGridItem>
                     ))}
-                  </View>
+                  </AdminGrid>
                 );
               })()
             )}
@@ -3468,7 +3727,7 @@ const AdminScreen = () => {
       case 'fees':
         return (
           <View style={styles.tabContent}>
-            <View style={styles.sectionHeader}>
+            <View style={[styles.sectionHeader, useSidebar && styles.sectionHeaderDesktop]}>
               <Text style={styles.sectionTitle}>Fees Management</Text>
             </View>
             
@@ -3764,7 +4023,7 @@ const AdminScreen = () => {
                   </Text>
                 </View>
               ) : (
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                <AdminGrid>
                   {sortedHomeownersGroupedByAddress.map((addressGroup: any) => {
                     const {
                       homeowners,
@@ -3818,6 +4077,7 @@ const AdminScreen = () => {
                         width: itemWidth as any,
                         padding: isSingleColumn ? 0 : 8,
                         minWidth: 0,
+                        alignSelf: 'stretch',
                         opacity: pressed ? 0.86 : 1,
                         transform: [{ scale: pressed ? 0.972 : 1 }],
                       })}
@@ -3847,7 +4107,8 @@ const AdminScreen = () => {
                           width: screenWidth < 400 ? screenWidth - 32 : Math.min(screenWidth - 40, 600),
                         },
                         !isSingleColumn && {
-                          width: '100%', // Fill the container on desktop
+                          width: '100%',
+                          flex: 1,
                         },
                         {
                           opacity: fadeAnim,
@@ -3941,88 +4202,98 @@ const AdminScreen = () => {
                               marginTop: 12,
                             }
                           ]}>
-                            <Text style={[
-                              styles.gridFeeAmount,
-                              isSingleColumn && {
-                                fontSize: 20,
-                                marginBottom: 4,
-                              }
-                            ]}>
-                              ${outstandingBalance.toFixed(2)}
-                            </Text>
-                            <Text style={[
-                              styles.gridFeeLabel,
-                              isSingleColumn && {
-                                fontSize: 12,
-                                marginBottom: 8,
-                              }
-                            ]}>
-                              {homeownerFees.length > 0 && homeownerFines.length > 0
-                                ? `Fees (${homeownerFees.length}) & fines (${homeownerFines.length})`
-                                : homeownerFees.length > 0
-                                  ? homeownerFees.length === 1
-                                    ? 'Fee'
-                                    : `Fees (${homeownerFees.length})`
-                                  : `Fines (${homeownerFines.length})`}
-                            </Text>
-                            {isPartiallyPaid && (
-                              <Text style={[
-                                styles.gridPartialPaymentText,
-                                isSingleColumn && {
-                                  fontSize: 11,
-                                  marginBottom: 4,
-                                }
-                              ]}>
-                                Verified: ${totalPaidAmount.toFixed(2)} of ${totalAssessed.toFixed(2)} assessed
-                              </Text>
-                            )}
-                            <View style={[
-                              styles.gridStatusBadge,
-                              allFeesPaid
-                                ? styles.gridPaidBadge 
-                                : isPartiallyPaid
-                                ? styles.gridPartialPaidBadge
-                                : styles.gridPendingBadge,
-                              isSingleColumn && {
-                                paddingHorizontal: 12,
-                                paddingVertical: 6,
-                              }
-                            ]}>
-                              <Ionicons 
-                                name={allFeesPaid ? "checkmark-circle" : isPartiallyPaid ? "hourglass" : "time"} 
-                                size={isSingleColumn ? 16 : 14} 
-                                color={allFeesPaid ? "#10b981" : isPartiallyPaid ? "#f59e0b" : "#f59e0b"} 
-                              />
-                              <Text style={[
-                                styles.gridStatusText,
-                                { 
-                                  color: allFeesPaid ? "#10b981" : isPartiallyPaid ? "#f59e0b" : "#f59e0b" 
-                                },
-                                isSingleColumn && {
-                                  fontSize: 12,
-                                }
-                              ]}>
-                                {allFeesPaid ? 'Paid' : isPartiallyPaid ? 'Partially Paid' : 'Pending'}
-                              </Text>
-                            </View>
-                            
-                            {/* Show payment method if paid or partially paid */}
-                            {(allFeesPaid || isPartiallyPaid) && paymentMethod && (
-                              <View style={[
-                                styles.paymentMethodBadge,
-                                isSingleColumn && { marginTop: 6 }
-                              ]}>
-                                <Ionicons 
-                                  name={paymentMethod === 'Venmo' ? 'logo-venmo' : paymentMethod === 'Check' ? 'document-text' : 'cash'} 
-                                  size={isSingleColumn ? 12 : 10} 
-                                  color="#6b7280" 
-                                />
-                                <Text style={styles.paymentMethodBadgeText}>
-                                  via {paymentMethod}
+                            {allFeesPaid ? (
+                              <>
+                                <View style={styles.gridAllSettledBadge}>
+                                  <Ionicons name="checkmark-circle" size={isSingleColumn ? 18 : 16} color="#10b981" />
+                                  <Text style={[styles.gridAllSettledText, isSingleColumn && { fontSize: 14 }]}>
+                                    All Settled
+                                  </Text>
+                                </View>
+                                {paymentMethod && (
+                                  <View style={[styles.paymentMethodBadge, isSingleColumn && { marginTop: 6 }]}>
+                                    <Ionicons
+                                      name={paymentMethod === 'Venmo' ? 'logo-venmo' : paymentMethod === 'Check' ? 'document-text' : 'cash'}
+                                      size={isSingleColumn ? 12 : 10}
+                                      color="#6b7280"
+                                    />
+                                    <Text style={styles.paymentMethodBadgeText}>via {paymentMethod}</Text>
+                                  </View>
+                                )}
+                              </>
+                            ) : (
+                              <>
+                                <Text style={[
+                                  styles.gridFeeAmount,
+                                  isSingleColumn && {
+                                    fontSize: 20,
+                                    marginBottom: 4,
+                                  }
+                                ]}>
+                                  ${outstandingBalance.toFixed(2)}
                                 </Text>
-                              </View>
+                                <Text style={[
+                                  styles.gridFeeLabel,
+                                  isSingleColumn && {
+                                    fontSize: 12,
+                                    marginBottom: 8,
+                                  }
+                                ]}>
+                                  {homeownerFees.length > 0 && homeownerFines.length > 0
+                                    ? `Fees (${homeownerFees.length}) & fines (${homeownerFines.length})`
+                                    : homeownerFees.length > 0
+                                      ? homeownerFees.length === 1
+                                        ? 'Fee'
+                                        : `Fees (${homeownerFees.length})`
+                                      : `Fines (${homeownerFines.length})`}
+                                </Text>
+                                {isPartiallyPaid && (
+                                  <Text style={[
+                                    styles.gridPartialPaymentText,
+                                    isSingleColumn && {
+                                      fontSize: 11,
+                                      marginBottom: 4,
+                                    }
+                                  ]}>
+                                    Verified: ${totalPaidAmount.toFixed(2)} of ${totalAssessed.toFixed(2)} assessed
+                                  </Text>
+                                )}
+                                <View style={[
+                                  styles.gridStatusBadge,
+                                  isPartiallyPaid ? styles.gridPartialPaidBadge : styles.gridPendingBadge,
+                                  isSingleColumn && {
+                                    paddingHorizontal: 12,
+                                    paddingVertical: 6,
+                                  }
+                                ]}>
+                                  <Ionicons
+                                    name={isPartiallyPaid ? "hourglass" : "time"}
+                                    size={isSingleColumn ? 16 : 14}
+                                    color="#f59e0b"
+                                  />
+                                  <Text style={[
+                                    styles.gridStatusText,
+                                    { color: "#f59e0b" },
+                                    isSingleColumn && { fontSize: 12 }
+                                  ]}>
+                                    {isPartiallyPaid ? 'Partially Paid' : 'Pending'}
+                                  </Text>
+                                </View>
+                                {isPartiallyPaid && paymentMethod && (
+                                  <View style={[
+                                    styles.paymentMethodBadge,
+                                    isSingleColumn && { marginTop: 6 }
+                                  ]}>
+                                    <Ionicons
+                                      name={paymentMethod === 'Venmo' ? 'logo-venmo' : paymentMethod === 'Check' ? 'document-text' : 'cash'}
+                                      size={isSingleColumn ? 12 : 10}
+                                      color="#6b7280"
+                                    />
+                                    <Text style={styles.paymentMethodBadgeText}>via {paymentMethod}</Text>
+                                  </View>
+                                )}
+                              </>
                             )}
-
                           </View>
                         ) : (
                           <View style={[
@@ -4068,15 +4339,23 @@ const AdminScreen = () => {
                           </View>
                         )}
                         
-                        {/* Show fines for this homeowner */}
-                        {homeownerFines.length > 0 && (
+                        {/* Show fines for this homeowner — only those with an outstanding balance */}
+                        {homeownerFines.length > 0 && (() => {
+                          const unpaidFines = homeownerFines.filter((fine: any) => {
+                            const paid = (homeownerPayments as any[])
+                              .filter((p: any) => p.fineId === fine._id && p.verificationStatus === 'Verified')
+                              .reduce((s: number, p: any) => s + p.amount, 0);
+                            return Math.max(0, fine.amount - paid) >= 0.01;
+                          });
+                          if (unpaidFines.length === 0) return null;
+                          return (
                           <View style={styles.gridFinesSection}>
                             <View style={styles.gridFinesHeader}>
                               <Ionicons name="warning" size={14} color="#dc2626" />
-                              <Text style={styles.gridFinesLabel}>Fines ({homeownerFines.length})</Text>
+                              <Text style={styles.gridFinesLabel}>Fines ({unpaidFines.length})</Text>
                             </View>
                             <View style={styles.gridFinesList}>
-                              {homeownerFines.map((fine: any, index: number) => {
+                              {unpaidFines.map((fine: any, index: number) => {
                                 const paidTowardFine = (homeownerPayments as any[])
                                   .filter(
                                     (p: any) =>
@@ -4105,7 +4384,7 @@ const AdminScreen = () => {
                                 return (
                                   <View key={fine._id} style={[
                                     styles.gridFineItem,
-                                    index === homeownerFines.length - 1 && styles.gridFineItemLast
+                                    index === unpaidFines.length - 1 && styles.gridFineItemLast
                                   ]}>
                                     <View style={styles.gridFineLeft}>
                                       <Text style={styles.gridFineTitle} numberOfLines={2}>
@@ -4146,18 +4425,20 @@ const AdminScreen = () => {
                               })}
                             </View>
                           </View>
-                        )}
+                          );
+                        })()}
                       </View>
-                      {/* Tap to view full record */}
-                      <View style={styles.gridCardTapHint}>
+                      <View style={styles.gridCardFooter}>
+                        <View style={styles.gridCardTapHint}>
                           <Ionicons name="chevron-forward" size={13} color="#64748b" />
                           <Text style={styles.gridCardTapHintText}>View full record</Text>
                         </View>
+                      </View>
                     </Animated.View>
                       </Pressable>
                     );
                   })}
-                </View>
+                </AdminGrid>
               )}
             </View>
               </View>
@@ -4169,21 +4450,86 @@ const AdminScreen = () => {
     }
   };
 
+  const renderAdminHeader = () => (
+    <View style={[styles.headerContainerIOS, !useSidebar && { width: screenWidth }]}>
+      <ImageBackground
+        source={require('../../assets/hoa-4k.jpg')}
+        style={[styles.header, useSidebar && styles.headerCompact]}
+        imageStyle={useSidebar ? styles.headerImageCover : [styles.headerImage, { width: screenWidth }]}
+        resizeMode={useSidebar ? 'cover' : 'stretch'}
+      >
+        <View style={[styles.headerOverlay, useSidebar && styles.headerOverlayCompact]} />
+        <View style={styles.headerTop}>
+          {showMobileNav && (
+            <TouchableOpacity
+              style={styles.menuButton}
+              onPress={() => setIsMenuOpen(true)}
+            >
+              <Ionicons name="menu" size={24} color="#ffffff" />
+            </TouchableOpacity>
+          )}
+
+          <View style={styles.headerLeft}>
+            <View style={styles.titleContainer}>
+              <Text style={styles.headerTitle}>Admin Dashboard</Text>
+            </View>
+            <Text style={styles.headerSubtitle}>
+              Manage community content and residents
+            </Text>
+            <View style={styles.indicatorsContainer}>
+              <DeveloperIndicator />
+              <BoardMemberIndicator />
+            </View>
+          </View>
+        </View>
+      </ImageBackground>
+    </View>
+  );
+
   return (
     <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
-        {/* Mobile Navigation - Only when screen is narrow */}
-        {showMobileNav && (
+      <View style={[styles.container, useSidebar && styles.containerWithSidebar]}>
+        {!useSidebar && showMobileNav && (
           <MobileTabBar 
             isMenuOpen={isMenuOpen}
             onMenuClose={() => setIsMenuOpen(false)}
           />
         )}
+
+        {useSidebar ? (
+          <AdminNav
+            variant="sidebar"
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+            badges={adminNavBadges}
+            onNavigateHome={handleNavigateHome}
+          />
+        ) : null}
+
+        <View style={[styles.adminMainColumn, useSidebar && styles.adminMainColumnDesktop]}>
+          <AdminMobileMoreSheet
+            visible={showAdminMoreSheet}
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+            onClose={() => setShowAdminMoreSheet(false)}
+            badges={adminNavBadges}
+          />
+
+          {useSidebar ? renderAdminHeader() : null}
         
         <ScrollView 
           ref={scrollViewRef}
-          style={[styles.scrollContainer, Platform.OS === 'web' && styles.webScrollContainer]}
-          contentContainerStyle={[styles.scrollContent, Platform.OS === 'web' && styles.webScrollContent]}
+          style={[
+            styles.scrollContainer,
+            Platform.OS === 'web' && styles.webScrollContainer,
+            useSidebar && styles.webScrollContainerDesktop,
+          ]}
+          contentContainerStyle={[
+            styles.scrollContent,
+            Platform.OS === 'web' && styles.webScrollContent,
+            Platform.OS === 'web' && !useSidebar && styles.webScrollContentFill,
+            useSidebar && styles.scrollContentDesktop,
+          ]}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}
@@ -4193,11 +4539,10 @@ const AdminScreen = () => {
           nestedScrollEnabled={true}
           removeClippedSubviews={false}
           scrollEventThrottle={16}
-          // Enhanced desktop scrolling
+          onScroll={handleScroll}
           decelerationRate="normal"
           directionalLockEnabled={true}
           canCancelContentTouches={true}
-          // Web-specific enhancements
           {...(Platform.OS === 'web' && {
             onScrollBeginDrag: () => {
               if (Platform.OS === 'web') {
@@ -4211,151 +4556,24 @@ const AdminScreen = () => {
                 document.body.style.userSelect = 'auto';
               }
             },
-            onScroll: () => {
-              // Ensure scrolling is working
-            },
           })}
         >
-          {/* Header with ImageBackground */}
-          <View style={[styles.headerContainerIOS, { width: screenWidth }]}>
-            <ImageBackground
-              source={require('../../assets/hoa-4k.jpg')}
-              style={styles.header}
-              imageStyle={[styles.headerImage, { width: screenWidth }]}
-              resizeMode="stretch"
-            >
-            <View style={styles.headerOverlay} />
-            <View style={styles.headerTop}>
-              {/* Hamburger Menu - Only when mobile nav is shown */}
-              {showMobileNav && (
-                <TouchableOpacity 
-                  style={styles.menuButton}
-                  onPress={() => setIsMenuOpen(true)}
-                >
-                  <Ionicons name="menu" size={24} color="#ffffff" />
-                </TouchableOpacity>
-              )}
-              
-              <View style={styles.headerLeft}>
-                <View style={styles.titleContainer}>
-                  <Text style={styles.headerTitle}>Admin Dashboard</Text>
-                </View>
-                <Text style={styles.headerSubtitle}>
-                  Manage community content and residents
-                </Text>
-                <View style={styles.indicatorsContainer}>
-                  <DeveloperIndicator />
-                  <BoardMemberIndicator />
-                </View>
-              </View>
-            </View>
-            </ImageBackground>
-          </View>
+          {!useSidebar ? renderAdminHeader() : null}
 
-          {/* Custom Tab Bar - Only when screen is wide enough */}
-          {showDesktopNav && (
-            <CustomTabBar />
-          )}
+          {!useSidebar && !isMobileDevice ? (
+            <AdminNav
+              variant="horizontal"
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              badges={adminNavBadges}
+            />
+          ) : null}
 
-        {/* Folder Tabs */}
-        <ScrollView 
-          horizontal 
-          showsHorizontalScrollIndicator={Platform.OS === 'web'}
-          scrollEnabled={true}
-          bounces={true}
-          alwaysBounceHorizontal={true}
-          style={styles.folderTabs}
-          contentContainerStyle={styles.folderTabsContent}
-          nestedScrollEnabled={true}
-          keyboardShouldPersistTaps="handled"
-        >
-          <TouchableOpacity
-            style={[
-              styles.folderTab, 
-              activeTab === 'SheltonHOA' && styles.activeFolderTab,
-              activeTab === 'SheltonHOA' && { borderColor: '#ef4444' }
-            ]}
-            onPress={() => setActiveTab('SheltonHOA')}
-          >
-            <Ionicons name="business" size={20} color={activeTab === 'SheltonHOA' ? '#ef4444' : '#6b7280'} />
-            <Text style={[styles.folderTabText, activeTab === 'SheltonHOA' && styles.activeFolderTabText, activeTab === 'SheltonHOA' && { color: '#ef4444' }]}>
-              SheltonHOA
-            </Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={[
-              styles.folderTab, 
-              activeTab === 'residents' && styles.activeFolderTab,
-              activeTab === 'residents' && { borderColor: '#f97316' }
-            ]}
-            onPress={() => setActiveTab('residents')}
-          >
-            <Ionicons name="people" size={20} color={activeTab === 'residents' ? '#f97316' : '#6b7280'} />
-            <Text style={[styles.folderTabText, activeTab === 'residents' && styles.activeFolderTabText, activeTab === 'residents' && { color: '#f97316' }]}>
-              Residents
-            </Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={[
-              styles.folderTab, 
-              activeTab === 'board' && styles.activeFolderTab,
-              activeTab === 'board' && { borderColor: '#eab308' }
-            ]}
-            onPress={() => setActiveTab('board')}
-          >
-            <Ionicons name="shield" size={20} color={activeTab === 'board' ? '#eab308' : '#6b7280'} />
-            <Text style={[styles.folderTabText, activeTab === 'board' && styles.activeFolderTabText, activeTab === 'board' && { color: '#eab308' }]}>
-              Board
-            </Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={[
-              styles.folderTab, 
-              activeTab === 'covenants' && styles.activeFolderTab,
-              activeTab === 'covenants' && { borderColor: '#22c55e' }
-            ]}
-            onPress={() => setActiveTab('covenants')}
-          >
-            <Ionicons name="document-text" size={20} color={activeTab === 'covenants' ? '#22c55e' : '#6b7280'} />
-            <Text style={[styles.folderTabText, activeTab === 'covenants' && styles.activeFolderTabText, activeTab === 'covenants' && { color: '#22c55e' }]}>
-              Covenants
-            </Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={[
-              styles.folderTab, 
-              activeTab === 'Community' && styles.activeFolderTab,
-              activeTab === 'Community' && { borderColor: '#3b82f6' }
-            ]}
-            onPress={() => setActiveTab('Community')}
-          >
-            <Ionicons name="chatbubbles" size={20} color={activeTab === 'Community' ? '#3b82f6' : '#6b7280'} />
-            <Text style={[styles.folderTabText, activeTab === 'Community' && styles.activeFolderTabText, activeTab === 'Community' && { color: '#3b82f6' }]}>
-              Community
-            </Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={[
-              styles.folderTab, 
-              activeTab === 'fees' && styles.activeFolderTab,
-              activeTab === 'fees' && { borderColor: '#ec4899' }
-            ]}
-            onPress={() => setActiveTab('fees')}
-          >
-            <Ionicons name="card" size={20} color={activeTab === 'fees' ? '#ec4899' : '#6b7280'} />
-              <Text style={[styles.folderTabText, activeTab === 'fees' && styles.activeFolderTabText, activeTab === 'fees' && { color: '#ec4899' }]}>
-                Fees & Payments
-              </Text>
-          </TouchableOpacity>
-        </ScrollView>
-
-        {/* Content Area */}
-        <View style={styles.contentArea}>
+        <View style={[
+          styles.contentArea,
+          useSidebar && styles.contentAreaDesktop,
+          contentMaxWidth && !useSidebar ? { maxWidth: contentMaxWidth, alignSelf: 'center', width: '100%' } : null,
+        ]}>
           {renderTabContent()}
         </View>
 
@@ -4363,21 +4581,37 @@ const AdminScreen = () => {
         <Modal
           visible={showBoardContentModal}
           transparent={true}
-          animationType="slide"
-          onRequestClose={() => setShowBoardContentModal(false)}
+          animationType="none"
+          onRequestClose={() => animateOut('boardContent', () => setShowBoardContentModal(false))}
         >
-          <View style={styles.modalOverlay}>
-            <View style={[styles.formModalContent, { maxHeight: '92%' }]}>
+          <Animated.View style={[styles.modalOverlay, { opacity: overlayOpacity }]}>
+            <Animated.View style={[
+              styles.formModalContent,
+              {
+                opacity: boardContentModalOpacity,
+                transform: [{ translateY: boardContentModalTranslateY }],
+                maxHeight: Platform.OS === 'web' ? '92%' : Dimensions.get('window').height * 0.9,
+                maxWidth: Platform.OS === 'web' ? 680 : '95%',
+              },
+            ]}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Edit Board Page Content</Text>
-                <TouchableOpacity onPress={() => setShowBoardContentModal(false)}>
-                  <Ionicons name="close" size={24} color="#374151" />
+                <TouchableOpacity
+                  style={styles.closeButton}
+                  onPress={() => animateOut('boardContent', () => setShowBoardContentModal(false))}
+                >
+                  <Ionicons name="close" size={24} color="#6b7280" />
                 </TouchableOpacity>
               </View>
-              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }} keyboardShouldPersistTaps="handled">
+              <ScrollView
+                style={styles.modalForm}
+                contentContainerStyle={styles.modalFormContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={true}
+              >
                 {/* Board Meetings */}
                 <Text style={[styles.sectionTitle, { marginBottom: 10 }]}>Board Meetings</Text>
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.label}>Schedule</Text>
                   <TextInput
                     style={styles.textInput}
@@ -4387,7 +4621,7 @@ const AdminScreen = () => {
                     placeholderTextColor="#9ca3af"
                   />
                 </View>
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.label}>Location</Text>
                   <TextInput
                     style={styles.textInput}
@@ -4397,7 +4631,7 @@ const AdminScreen = () => {
                     placeholderTextColor="#9ca3af"
                   />
                 </View>
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.label}>Open Forum Note</Text>
                   <TextInput
                     style={styles.textInput}
@@ -4410,7 +4644,7 @@ const AdminScreen = () => {
 
                 {/* Contact the Board */}
                 <Text style={[styles.sectionTitle, { marginTop: 16, marginBottom: 10 }]}>Contact the Board</Text>
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.label}>General Inquiries</Text>
                   <TextInput
                     style={[styles.textInput, { height: 70, textAlignVertical: 'top' }]}
@@ -4421,7 +4655,7 @@ const AdminScreen = () => {
                     multiline
                   />
                 </View>
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.label}>Urgent Matters</Text>
                   <TextInput
                     style={[styles.textInput, { height: 70, textAlignVertical: 'top' }]}
@@ -4435,7 +4669,7 @@ const AdminScreen = () => {
 
                 {/* Resources */}
                 <Text style={[styles.sectionTitle, { marginTop: 16, marginBottom: 10 }]}>Resources</Text>
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.label}>First Resource Line</Text>
                   <TextInput
                     style={[styles.textInput, { height: 70, textAlignVertical: 'top' }]}
@@ -4446,7 +4680,7 @@ const AdminScreen = () => {
                     multiline
                   />
                 </View>
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.label}>Second Resource Line</Text>
                   <TextInput
                     style={[styles.textInput, { height: 70, textAlignVertical: 'top' }]}
@@ -4470,8 +4704,8 @@ const AdminScreen = () => {
                   <Text style={styles.adminFeeButtonText}>Save Board Content</Text>
                 </TouchableOpacity>
               </ScrollView>
-            </View>
-          </View>
+            </Animated.View>
+          </Animated.View>
         </Modal>
 
         {/* Share QR Links Modal */}
@@ -4731,7 +4965,7 @@ const AdminScreen = () => {
                 contentContainerStyle={styles.modalFormContent}
                 showsVerticalScrollIndicator={false}
               >
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Name *</Text>
                   <TextInput
                     style={styles.textInput}
@@ -4742,7 +4976,7 @@ const AdminScreen = () => {
                   />
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Profile Picture (Optional)</Text>
                   <View style={styles.imageSection}>
                     <View style={styles.imageContainer}>
@@ -4779,7 +5013,7 @@ const AdminScreen = () => {
                   </View>
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Position *</Text>
                   <TextInput
                     style={styles.textInput}
@@ -4790,7 +5024,7 @@ const AdminScreen = () => {
                   />
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Email *</Text>
                   <TextInput
                     style={styles.textInput}
@@ -4802,7 +5036,7 @@ const AdminScreen = () => {
                   />
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Phone (Optional)</Text>
                   <TextInput
                     style={styles.textInput}
@@ -4813,7 +5047,7 @@ const AdminScreen = () => {
                   />
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Bio (Optional)</Text>
                   <TextInput
                     style={[styles.textInput, styles.textArea]}
@@ -4826,7 +5060,7 @@ const AdminScreen = () => {
                   />
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Term End (Optional)</Text>
                   <TextInput
                     style={styles.textInput}
@@ -4888,7 +5122,7 @@ const AdminScreen = () => {
                 contentContainerStyle={styles.modalFormContent}
                 showsVerticalScrollIndicator={false}
               >
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Year *</Text>
                   <TextInput
                     style={styles.textInput}
@@ -4899,7 +5133,7 @@ const AdminScreen = () => {
                   />
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Amount ($) *</Text>
                   <TextInput
                     style={styles.textInput}
@@ -4910,7 +5144,7 @@ const AdminScreen = () => {
                   />
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Description</Text>
                   <TextInput
                     style={[styles.textInput, styles.textArea]}
@@ -4972,7 +5206,7 @@ const AdminScreen = () => {
                 contentContainerStyle={styles.modalFormContent}
                 showsVerticalScrollIndicator={false}
               >
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Select Property Address *</Text>
                   <TextInput
                     style={styles.modalSearchInput}
@@ -5014,7 +5248,7 @@ const AdminScreen = () => {
                   </ScrollView>
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Fine Amount ($) *</Text>
                   <TextInput
                     style={styles.textInput}
@@ -5025,7 +5259,7 @@ const AdminScreen = () => {
                   />
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Reason for Fine *</Text>
                   <TextInput
                     style={styles.textInput}
@@ -5036,7 +5270,7 @@ const AdminScreen = () => {
                   />
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Description</Text>
                   <TextInput
                     style={[styles.textInput, styles.textArea]}
@@ -5099,7 +5333,7 @@ const AdminScreen = () => {
                 contentContainerStyle={styles.modalFormContent}
                 showsVerticalScrollIndicator={false}
               >
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>New Dues Amount ($) *</Text>
                   <Text style={styles.inputDescription}>
                     This will update the dues amount for all {unpaidAnnualFees.length} homeowners with unpaid annual fees.
@@ -5162,7 +5396,7 @@ const AdminScreen = () => {
                 contentContainerStyle={styles.modalFormContent}
                 showsVerticalScrollIndicator={false}
               >
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Select Homeowner *</Text>
                   <TextInput
                     style={styles.modalSearchInput}
@@ -5205,7 +5439,7 @@ const AdminScreen = () => {
                   </ScrollView>
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Past Due Amount ($) *</Text>
                   <TextInput
                     style={styles.textInput}
@@ -5216,7 +5450,7 @@ const AdminScreen = () => {
                   />
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Description *</Text>
                   <TextInput
                     style={styles.textInput}
@@ -5227,7 +5461,7 @@ const AdminScreen = () => {
                   />
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Original Due Date *</Text>
                   <TextInput
                     style={styles.textInput}
@@ -5287,7 +5521,7 @@ const AdminScreen = () => {
                 showsVerticalScrollIndicator={false}
               >
                 {/* Homeowner Selection */}
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Select Homeowner *</Text>
                   <TextInput
                     style={styles.modalSearchInput}
@@ -5335,7 +5569,7 @@ const AdminScreen = () => {
                 </View>
 
                 {/* Amount */}
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Amount ($) *</Text>
                   <TextInput
                     style={styles.textInput}
@@ -5347,7 +5581,7 @@ const AdminScreen = () => {
                 </View>
 
                 {/* Payment Method */}
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Payment Method *</Text>
                   <View style={styles.paymentMethodContainer}>
                     <TouchableOpacity
@@ -5394,7 +5628,7 @@ const AdminScreen = () => {
 
                 {/* Check Number (only show for check payments) */}
                 {paymentForm.paymentMethod === 'Check' && (
-                  <View style={styles.inputGroup}>
+                  <View style={formInputGroupStyle}>
                     <Text style={styles.inputLabel}>Check Number (Optional)</Text>
                     <TextInput
                       style={styles.textInput}
@@ -5407,7 +5641,7 @@ const AdminScreen = () => {
 
                 {/* Venmo Username (only show for Venmo payments) */}
                 {paymentForm.paymentMethod === 'Venmo' && (
-                  <View style={styles.inputGroup}>
+                  <View style={formInputGroupStyle}>
                     <Text style={styles.inputLabel}>Venmo Username (Optional)</Text>
                     <TextInput
                       style={styles.textInput}
@@ -5420,7 +5654,7 @@ const AdminScreen = () => {
 
                 {/* Venmo Transaction ID (only show for Venmo payments) */}
                 {paymentForm.paymentMethod === 'Venmo' && (
-                  <View style={styles.inputGroup}>
+                  <View style={formInputGroupStyle}>
                     <Text style={styles.inputLabel}>Venmo Transaction ID (Optional)</Text>
                     <TextInput
                       style={styles.textInput}
@@ -5432,7 +5666,7 @@ const AdminScreen = () => {
                 )}
 
                 {/* Payment Date */}
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Payment Date *</Text>
                   <TextInput
                     style={styles.textInput}
@@ -5443,7 +5677,7 @@ const AdminScreen = () => {
                 </View>
 
                 {/* Notes */}
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Notes (Optional)</Text>
                   <TextInput
                     style={[styles.textInput, styles.textArea]}
@@ -5755,7 +5989,7 @@ const AdminScreen = () => {
                   </View>
                   
                   {/* Corrected Amount Input */}
-                  <View style={styles.inputGroup}>
+                  <View style={formInputGroupStyle}>
                     <Text style={styles.inputLabel}>Corrected Amount *</Text>
                     <TextInput
                       style={styles.textInput}
@@ -5805,7 +6039,7 @@ const AdminScreen = () => {
                     const isFullPayment = feeAmount !== null && correctedAmountNum >= feeAmount;
                     
                     return feeAmount !== null ? (
-                      <View style={styles.inputGroup}>
+                      <View style={formInputGroupStyle}>
                         <View style={styles.verificationPaymentInfo}>
                           <Text style={styles.verificationPaymentLabel}>Fee Amount:</Text>
                           <Text style={styles.verificationPaymentValue}>
@@ -5852,7 +6086,7 @@ const AdminScreen = () => {
                     ) : null;
                   })()}
                   
-                  <View style={styles.inputGroup}>
+                  <View style={formInputGroupStyle}>
                     <Text style={styles.inputLabel}>Correction Notes (Optional)</Text>
                     <TextInput
                       style={[styles.textInput, styles.textArea]}
@@ -5957,7 +6191,7 @@ const AdminScreen = () => {
                   </View>
                   
                   {/* Corrected Amount Input */}
-                  <View style={styles.inputGroup}>
+                  <View style={formInputGroupStyle}>
                     <Text style={styles.inputLabel}>Corrected Amount *</Text>
                     <TextInput
                       style={styles.textInput}
@@ -6007,7 +6241,7 @@ const AdminScreen = () => {
                     const isFullPayment = feeAmount !== null && correctedAmountNum >= feeAmount;
                     
                     return feeAmount !== null ? (
-                      <View style={styles.inputGroup}>
+                      <View style={formInputGroupStyle}>
                         <View style={styles.verificationPaymentInfo}>
                           <Text style={styles.verificationPaymentLabel}>Fee Amount:</Text>
                           <Text style={styles.verificationPaymentValue}>
@@ -6054,7 +6288,7 @@ const AdminScreen = () => {
                     ) : null;
                   })()}
                   
-                  <View style={styles.inputGroup}>
+                  <View style={formInputGroupStyle}>
                     <Text style={styles.inputLabel}>Correction Notes (Optional)</Text>
                     <TextInput
                       style={[styles.textInput, styles.textArea]}
@@ -6127,32 +6361,39 @@ const AdminScreen = () => {
           animationType="none"
           onRequestClose={handleCancelCovenant}
         >
-          <Animated.View style={[styles.modalOverlay, { opacity: overlayOpacity }]}>
-            <Animated.View style={[
-              styles.boardMemberModalContent,
-              {
-                opacity: covenantModalOpacity,
-                transform: [{ translateY: covenantModalTranslateY }],
-              }
-            ]}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>
-                  {isEditingCovenant ? 'Edit Covenant' : 'Add Covenant'}
-                </Text>
-                <TouchableOpacity
-                  style={styles.closeButton}
-                  onPress={handleCancelCovenant}
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.modalKeyboardAvoid}
+          >
+            <Animated.View style={[styles.modalOverlay, { opacity: overlayOpacity }]}>
+              <Animated.View style={[
+                styles.formModalContent,
+                {
+                  opacity: covenantModalOpacity,
+                  transform: [{ translateY: covenantModalTranslateY }],
+                  maxHeight: Platform.OS === 'web' ? '92%' : Dimensions.get('window').height * 0.9,
+                  maxWidth: Platform.OS === 'web' ? 680 : '95%',
+                }
+              ]}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>
+                    {isEditingCovenant ? 'Edit Covenant' : 'Add Covenant'}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.closeButton}
+                    onPress={handleCancelCovenant}
+                  >
+                    <Ionicons name="close" size={24} color="#6b7280" />
+                  </TouchableOpacity>
+                </View>
+                
+                <ScrollView 
+                  style={[styles.modalForm, styles.modalFormScrollable]} 
+                  contentContainerStyle={styles.modalFormContent}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={true}
                 >
-                  <Ionicons name="close" size={24} color="#6b7280" />
-                </TouchableOpacity>
-              </View>
-              
-              <ScrollView 
-                style={styles.modalForm} 
-                contentContainerStyle={styles.modalFormContent}
-                showsVerticalScrollIndicator={false}
-              >
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Title *</Text>
                   <TextInput
                     style={styles.textInput}
@@ -6163,7 +6404,7 @@ const AdminScreen = () => {
                   />
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Category *</Text>
                   <TouchableOpacity
                     style={styles.categoryPicker}
@@ -6220,7 +6461,7 @@ const AdminScreen = () => {
                   )}
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Description *</Text>
                   <TextInput
                     style={[styles.textInput, styles.textArea]}
@@ -6233,7 +6474,7 @@ const AdminScreen = () => {
                   />
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Last Updated</Text>
                   <TextInput
                     style={styles.textInput}
@@ -6243,7 +6484,7 @@ const AdminScreen = () => {
                   />
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Attachment (optional)</Text>
                   <Text style={{ fontSize: 11, color: '#6b7280', marginBottom: 8, lineHeight: 15 }}>
                     Documents: PDF, Word (.doc, .docx), max 10MB. Photos: compressed (WebP or JPEG) for smaller
@@ -6318,32 +6559,35 @@ const AdminScreen = () => {
                     </TouchableOpacity>
                   )}
                 </View>
+                </ScrollView>
 
-                <View style={styles.modalActions}>
-                  <TouchableOpacity
-                    style={styles.cancelButton}
-                    onPress={handleCancelCovenant}
-                    disabled={covenantUploading}
-                  >
-                    <Text style={styles.cancelButtonText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.confirmButton, covenantUploading && { opacity: 0.7 }]}
-                    onPress={isEditingCovenant ? handleUpdateCovenant : handleAddCovenant}
-                    disabled={covenantUploading}
-                  >
-                    {covenantUploading ? (
-                      <ActivityIndicator color="#ffffff" size="small" />
-                    ) : (
-                      <Text style={styles.confirmButtonText}>
-                        {isEditingCovenant ? 'Update Covenant' : 'Add Covenant'}
-                      </Text>
-                    )}
-                  </TouchableOpacity>
+                <View style={styles.modalFooter}>
+                  <View style={styles.modalActions}>
+                    <TouchableOpacity
+                      style={styles.cancelButton}
+                      onPress={handleCancelCovenant}
+                      disabled={covenantUploading}
+                    >
+                      <Text style={styles.cancelButtonText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.covenantConfirmButton, covenantUploading && { opacity: 0.7 }]}
+                      onPress={isEditingCovenant ? handleUpdateCovenant : handleAddCovenant}
+                      disabled={covenantUploading}
+                    >
+                      {covenantUploading ? (
+                        <ActivityIndicator color="#ffffff" size="small" />
+                      ) : (
+                        <Text style={styles.confirmButtonText}>
+                          {isEditingCovenant ? 'Update Covenant' : 'Add Covenant'}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
                 </View>
-              </ScrollView>
+              </Animated.View>
             </Animated.View>
-          </Animated.View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* Poll Modal */}
@@ -6381,7 +6625,7 @@ const AdminScreen = () => {
                 contentContainerStyle={styles.modalFormContent}
                 showsVerticalScrollIndicator={false}
               >
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Poll Title *</Text>
                   <TextInput
                     style={styles.textInput}
@@ -6392,7 +6636,7 @@ const AdminScreen = () => {
                   />
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Description</Text>
                   <TextInput
                     style={[styles.textInput, styles.textArea]}
@@ -6405,7 +6649,7 @@ const AdminScreen = () => {
                   />
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Poll Options *</Text>
                   {pollForm.options.map((option, index) => (
                     <View key={index} style={styles.pollOptionInput}>
@@ -6437,7 +6681,7 @@ const AdminScreen = () => {
                   )}
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Settings</Text>
                   
                   <TouchableOpacity
@@ -6453,7 +6697,7 @@ const AdminScreen = () => {
                   </TouchableOpacity>
                 </View>
 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Expiration Date (Optional)</Text>
                   <TextInput
                     style={styles.textInput}
@@ -6488,6 +6732,18 @@ const AdminScreen = () => {
           {/* Additional content to ensure scrollable content */}
           <View style={styles.spacer} />
         </ScrollView>
+        <ScrollToTopButton visible={showScrollToTop} onPress={scrollToTop} />
+
+          {!useSidebar && isMobileDevice ? (
+            <AdminNav
+              variant="mobile-bar"
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              badges={adminNavBadges}
+              onMorePress={() => setShowAdminMoreSheet(true)}
+            />
+          ) : null}
+        </View>
       </View>
 
       {/* Payment Verification Modal */}
@@ -6537,7 +6793,7 @@ const AdminScreen = () => {
                 </View>
                 
                 {/* Payment Amount Input */}
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Payment Amount *</Text>
                   <TextInput
                     style={styles.textInput}
@@ -6587,7 +6843,7 @@ const AdminScreen = () => {
                   const isFullPayment = feeAmount !== null && adjustedAmount >= feeAmount;
                   
                   return feeAmount !== null ? (
-                    <View style={styles.inputGroup}>
+                    <View style={formInputGroupStyle}>
                       <View style={styles.verificationPaymentInfo}>
                         <Text style={styles.verificationPaymentLabel}>Fee Amount:</Text>
                         <Text style={styles.verificationPaymentValue}>
@@ -6634,7 +6890,7 @@ const AdminScreen = () => {
                   ) : null;
                 })()}
                 
-                <View style={styles.inputGroup}>
+                <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Admin Notes (Optional)</Text>
                   <TextInput
                     style={[styles.textInput, styles.textArea]}
@@ -6787,7 +7043,7 @@ const AdminScreen = () => {
                   </View>
                   
                   {/* Payment Amount Input */}
-                  <View style={styles.inputGroup}>
+                  <View style={formInputGroupStyle}>
                     <Text style={styles.inputLabel}>Payment Amount *</Text>
                     <TextInput
                       style={styles.textInput}
@@ -6837,7 +7093,7 @@ const AdminScreen = () => {
                     const isFullPayment = feeAmount !== null && adjustedAmount >= feeAmount;
                     
                     return feeAmount !== null ? (
-                      <View style={styles.inputGroup}>
+                      <View style={formInputGroupStyle}>
                         <View style={styles.verificationPaymentInfo}>
                           <Text style={styles.verificationPaymentLabel}>Fee Amount:</Text>
                           <Text style={styles.verificationPaymentValue}>
@@ -6884,7 +7140,7 @@ const AdminScreen = () => {
                     ) : null;
                   })()}
                   
-                  <View style={styles.inputGroup}>
+                  <View style={formInputGroupStyle}>
                     <Text style={styles.inputLabel}>Admin Notes (Optional)</Text>
                     <TextInput
                       style={[styles.textInput, styles.textArea]}
@@ -7031,15 +7287,40 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#f3f4f6',
+    ...(Platform.OS === 'web' && {
+      height: '100vh' as any,
+      overflow: 'hidden' as any,
+    }),
   },
   container: {
     flex: 1,
+  },
+  containerWithSidebar: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    flex: 1,
+  },
+  adminMainColumn: {
+    flex: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+  },
+  adminMainColumnDesktop: {
+    flexDirection: 'column',
+    ...(Platform.OS === 'web' && {
+      height: '100vh' as any,
+      maxHeight: '100vh' as any,
+    }),
   },
   scrollContainer: {
     flex: 1,
   },
   scrollContent: {
     paddingBottom: 20,
+  },
+  scrollContentDesktop: {
+    width: '100%',
+    flexGrow: 1,
   },
   webScrollContainer: {
     ...(Platform.OS === 'web' && {
@@ -7049,16 +7330,28 @@ const styles = StyleSheet.create({
       MozUserSelect: 'none' as any,
       msUserSelect: 'none' as any,
       overflow: 'auto' as any,
+      flex: 1,
       height: '100vh' as any,
       maxHeight: '100vh' as any,
-      position: 'relative' as any,
+    }),
+  },
+  webScrollContainerDesktop: {
+    flex: 1,
+    minHeight: 0,
+    ...(Platform.OS === 'web' && {
+      height: 'auto' as any,
+      maxHeight: 'none' as any,
     }),
   },
   webScrollContent: {
     ...(Platform.OS === 'web' && {
+      paddingBottom: 100 as any,
+    }),
+  },
+  webScrollContentFill: {
+    ...(Platform.OS === 'web' && {
       minHeight: '100vh' as any,
       flexGrow: 1,
-      paddingBottom: 100 as any,
     }),
   },
   accessDeniedContainer: {
@@ -7080,8 +7373,29 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 24,
   },
+  accessDeniedRedirectText: {
+    fontSize: 14,
+    color: '#9ca3af',
+    textAlign: 'center',
+    marginTop: 16,
+  },
+  accessDeniedHomeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 20,
+    backgroundColor: '#2563eb',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  accessDeniedHomeButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
   headerContainerIOS: {
-    width: Dimensions.get('window').width,
+    width: '100%',
     alignSelf: 'stretch',
     overflow: 'hidden',
     marginLeft: 0,
@@ -7097,6 +7411,14 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     width: '100%',
     alignSelf: 'stretch',
+  },
+  headerCompact: {
+    height: 140,
+    paddingTop: 28,
+  },
+  headerImageCover: {
+    width: '100%',
+    height: '100%',
   },
   headerImage: {
     borderRadius: 0,
@@ -7116,6 +7438,9 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  headerOverlayCompact: {
+    backgroundColor: 'rgba(0, 0, 0, 0.62)',
   },
   headerTop: {
     flexDirection: 'row',
@@ -7348,9 +7673,17 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   contentArea: {
-    flex: 1,
     padding: 20,
-    paddingTop: 0, // Reduce top padding to match CommunityScreen
+    paddingTop: 0,
+  },
+  contentAreaDesktop: {
+    flex: 1,
+    width: '100%',
+    alignSelf: 'stretch',
+    paddingHorizontal: 32,
+    paddingTop: 24,
+    paddingBottom: 32,
+    maxWidth: '100%' as any,
   },
   tableRow: {
     flexDirection: 'row',
@@ -7564,6 +7897,9 @@ const styles = StyleSheet.create({
   inputGroup: {
     marginBottom: 20,
   },
+  inputGroupDesktop: {
+    marginBottom: 14,
+  },
   textInput: {
     borderWidth: 1,
     borderColor: '#d1d5db',
@@ -7581,6 +7917,157 @@ const styles = StyleSheet.create({
   },
   hoaInfoContainer: {
     padding: 20,
+  },
+  hoaInfoContainerMobile: {
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  hoaInfoContainerDesktop: {
+    maxWidth: 980,
+    width: '100%',
+    alignSelf: 'center',
+    paddingHorizontal: 0,
+    paddingTop: 8,
+    paddingBottom: 0,
+  },
+  hoaInfoPanel: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  hoaInfoPanelMobile: {
+    padding: 12,
+    borderRadius: 10,
+  },
+  hoaInfoDesktopHeader: {
+    marginBottom: 12,
+  },
+  hoaInfoDesktopGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  hoaInfoDesktopHeaderTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  hoaInfoDesktopHeaderSubtitle: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 4,
+  },
+  hoaInfoDesktopRow: {
+    borderWidth: 1,
+    borderColor: '#eef2f7',
+    borderRadius: 10,
+    backgroundColor: '#fbfdff',
+    padding: 10,
+  },
+  hoaInfoDesktopRowHalf: {
+    width: '49%',
+  },
+  hoaInfoDesktopRowFull: {
+    width: '100%',
+  },
+  hoaInfoDesktopRowHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  hoaInfoDesktopLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  hoaInfoEditButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  hoaInfoEditButtonActive: {
+    backgroundColor: '#2563eb',
+    borderColor: '#2563eb',
+  },
+  hoaInfoEditButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#2563eb',
+  },
+  hoaInfoEditButtonTextActive: {
+    color: '#ffffff',
+  },
+  hoaInfoDesktopValue: {
+    paddingHorizontal: 2,
+    paddingVertical: 2,
+  },
+  hoaInfoDesktopValueMultiline: {
+    minHeight: 56,
+  },
+  hoaInfoDesktopValueText: {
+    fontSize: 14,
+    color: '#1f2937',
+    lineHeight: 20,
+  },
+  hoaInfoDesktopValuePlaceholder: {
+    color: '#9ca3af',
+    fontStyle: 'italic',
+  },
+  hoaHeaderQrButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#2563eb',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+    marginLeft: 12,
+  },
+  hoaHeaderQrButtonMobile: {
+    paddingHorizontal: 10,
+    marginLeft: 8,
+  },
+  hoaHeaderQrButtonText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  hoaInfoEventInput: {
+    height: 100,
+    textAlignVertical: 'top',
+  },
+  hoaInfoActions: {
+    marginTop: 16,
+  },
+  hoaInfoActionsMobile: {
+    marginTop: 12,
+    paddingBottom: 8,
+  },
+  hoaInfoActionButtonMobile: {
+    width: '100%',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
+  hoaMobileTextInput: {
+    fontSize: 15,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
   },
   shareQrSubtitle: {
     fontSize: 13,
@@ -7652,9 +8139,43 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
   },
+  sectionHeaderDesktop: {
+    paddingHorizontal: 0,
+    paddingVertical: 8,
+    backgroundColor: 'transparent',
+    borderBottomWidth: 0,
+    marginBottom: 12,
+  },
+  sectionHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
+    flexShrink: 1,
+    flexWrap: 'wrap',
+  },
+  boardInfoButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0ea5e9',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+    flexShrink: 1,
+  },
+  boardInfoButtonText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '600',
+    flexShrink: 1,
+  },
   sectionHeaderTextContainer: {
     flex: 1,
     marginLeft: 12,
+  },
+  sectionHeaderTextContainerMobile: {
+    marginLeft: 0,
   },
   sectionTitle: {
     fontSize: 18,
@@ -7676,10 +8197,42 @@ const styles = StyleSheet.create({
     gap: 6,
     minWidth: 0, // Allow button to shrink if needed
   },
-  covenantButtonsContainer: {
+  modalKeyboardAvoid: {
+    flex: 1,
+    width: '100%',
+  },
+  modalFormScrollable: {
+    flexGrow: 1,
+    flexShrink: 1,
+    maxHeight: undefined,
+  },
+  modalFooter: {
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
+  covenantConfirmButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#22c55e',
+  },
+  covenantGridCard: {
+    flex: 1,
     flexDirection: 'column',
-    gap: 10,
-    alignItems: 'flex-end',
+    height: '100%',
+  },
+  covenantCategoryBadge: {
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  covenantGridActions: {
+    marginTop: 'auto',
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#f3f4f6',
   },
   addButtonText: {
     color: '#ffffff',
@@ -7690,9 +8243,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#eff6ff',
     marginRight: 8,
   },
-  tabContent: {
-    flex: 1,
-  },
+  tabContent: {},
   // Board member display styles
   memberHeader: {
     flexDirection: 'row',
@@ -8074,13 +8625,13 @@ const styles = StyleSheet.create({
   // Grid layout styles
   gridCard: {
     backgroundColor: '#ffffff',
-    // Default desktop styles
+    flexDirection: 'column',
     ...(Platform.OS === 'web' 
       ? { 
           flex: 1,
           margin: 6, 
           borderRadius: 12,
-          width: '100%', // Fill the container width
+          width: '100%',
         }
       : {
           flex: 1,
@@ -8091,9 +8642,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
+    overflow: 'hidden',
   },
   gridCardContent: {
+    flex: 1,
     padding: 12,
+    width: '100%',
   },
   gridProfileSection: {
     flexDirection: 'row',
@@ -8160,6 +8714,22 @@ const styles = StyleSheet.create({
   },
   gridPaidBadge: {
     backgroundColor: '#d1fae5',
+  },
+  gridAllSettledBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#d1fae5',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 20,
+    alignSelf: 'center',
+    marginBottom: 4,
+  },
+  gridAllSettledText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#059669',
   },
   gridPartialPaidBadge: {
     backgroundColor: '#fef3c7',
@@ -8787,10 +9357,13 @@ const styles = StyleSheet.create({
     elevation: 2,
     borderWidth: 1,
     borderColor: '#f3f4f6',
+    flex: 1,
+    flexDirection: 'column',
   },
   residentGridCardContent: {
     padding: 8,
     flex: 1,
+    flexDirection: 'column',
   },
   residentGridMainInfo: {
     flexDirection: 'row',
@@ -9012,6 +9585,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 16,
     padding: 8,
+    alignItems: 'stretch',
   },
   petsGridContainerSingleColumn: {
     paddingHorizontal: 16,
@@ -9019,6 +9593,7 @@ const styles = StyleSheet.create({
   petCardWrapper: {
     width: '47%',
     minWidth: 200,
+    alignSelf: 'stretch',
   },
   petCardWrapperSingleColumn: {
     width: '100%',
@@ -9036,6 +9611,7 @@ const styles = StyleSheet.create({
   },
   petGridCard: {
     width: '100%',
+    flex: 1,
     backgroundColor: '#ffffff',
     borderRadius: 12,
     shadowColor: '#000',
@@ -9048,6 +9624,25 @@ const styles = StyleSheet.create({
   },
   petGridCardContent: {
     padding: 16,
+    flex: 1,
+    flexDirection: 'column',
+  },
+  adminPetCardHeader: {
+    marginBottom: 12,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  adminPetCardOwner: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 2,
+  },
+  adminPetCardAddress: {
+    fontSize: 12,
+    color: '#6b7280',
+    lineHeight: 16,
   },
   petCardActions: {
     marginTop: 12,
@@ -9072,28 +9667,71 @@ const styles = StyleSheet.create({
   adminPetsInGroupContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 12,
-    marginTop: 8,
+    gap: 10,
+    flex: 1,
   },
-  adminPetInGroupItem: {
-    alignItems: 'center',
-    minWidth: 100,
-    padding: 8,
+  adminPetsInGroupContainerSingle: {
+    justifyContent: 'center',
+  },
+  adminPetTile: {
+    padding: 10,
     backgroundColor: '#f9fafb',
-    borderRadius: 8,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: '#e5e7eb',
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    flexGrow: 1,
   },
-  adminPetThumbnail: {
+  adminPetTileSingle: {
+    flexBasis: '100%',
+    maxWidth: 200,
+    alignSelf: 'center',
+  },
+  adminPetTileDouble: {
+    flexBasis: '47%',
+    minWidth: 120,
+  },
+  adminPetTileTriple: {
+    flexBasis: '30%',
+    minWidth: 100,
+  },
+  adminPetImageWrapper: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#e5e7eb',
     marginBottom: 8,
   },
-  adminPetAvatarSmall: {
-    width: 80,
-    height: 80,
+  adminPetName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 2,
   },
-  adminPetInfoRow: {
+  adminPetDate: {
+    fontSize: 11,
+    color: '#6b7280',
+    marginBottom: 10,
+  },
+  adminPetDeleteButton: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    gap: 4,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    marginTop: 'auto',
+  },
+  adminPetDeleteText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#ef4444',
   },
   // Poll styles
   pollOptionsContainer: {
@@ -10469,19 +11107,20 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginLeft: 6,
   },
+  gridCardFooter: {
+    marginTop: 'auto',
+    width: '100%',
+    borderTopWidth: 1,
+    borderTopColor: '#f3f4f6',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#fafbfc',
+  },
   gridCardTapHint: {
     flexDirection: 'row' as const,
     alignItems: 'center' as const,
-    alignSelf: 'flex-start' as const,
+    justifyContent: 'center' as const,
     gap: 4,
-    marginTop: 8,
-    marginBottom: 2,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
   },
   gridCardTapHintText: {
     fontSize: 11,

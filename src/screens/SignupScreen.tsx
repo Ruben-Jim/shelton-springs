@@ -200,6 +200,8 @@ const SignupScreen = () => {
 
     if (!formData.phone.trim()) {
       newErrors.phone = 'Phone number is required';
+    } else if (formData.phone.replace(/\D/g, '').length !== 10) {
+      newErrors.phone = 'Please enter a valid 10-digit phone number';
     }
 
     if (!formData.address.trim()) {
@@ -413,12 +415,15 @@ const SignupScreen = () => {
               style={[styles.input, errors.phone ? styles.inputError : null]}
               placeholder="(555) 123-4567"
               value={formData.phone}
-              onChangeText={(text) => updateFormData('phone', text)}
-              onBlur={() => {
-                const formatted = formatPhoneNumber(formData.phone);
-                if (formatted) updateFormData('phone', formatted);
+              onChangeText={(text) => {
+                const formatted = formatPhoneNumber(text);
+                updateFormData('phone', formatted);
               }}
               keyboardType="phone-pad"
+              textContentType="telephoneNumber"
+              autoComplete="tel"
+              autoCorrect={false}
+              autoCapitalize="none"
               maxLength={14}
             />
             {errors.phone ? <Text style={styles.errorText}>{errors.phone}</Text> : null}

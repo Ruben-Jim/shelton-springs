@@ -94,7 +94,30 @@ export const update = mutation({
 export const remove = mutation({
   args: { id: v.id("fees") },
   handler: async (ctx, args) => {
+    const fee = await ctx.db.get(args.id);
+    if (!fee) {
+      throw new Error(`Fee with ID ${args.id} not found`);
+    }
+
+    const linkedPayments = await ctx.db
+      .query("payments")
+      .filter((q) => q.eq(q.field("feeId"), args.id))
+      .collect();
+
+    const now = Date.now();
+    for (const payment of linkedPayments) {
+      await ctx.db.patch(payment._id, {
+        feeId: undefined,
+        updatedAt: now,
+      });
+    }
+
     await ctx.db.delete(args.id);
+
+    return {
+      success: true,
+      unlinkedPaymentCount: linkedPayments.length,
+    };
   },
 });
 

@@ -1,6 +1,67 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { api } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
+
+async function syncFeeStatusFromVerifiedPayments(
+  ctx: MutationCtx,
+  feeId: Id<"fees">,
+) {
+  const fee = await ctx.db.get(feeId);
+  if (!fee) return;
+
+  const linkedPayments = await ctx.db
+    .query("payments")
+    .filter((q) => q.eq(q.field("feeId"), feeId))
+    .collect();
+
+  const verifiedTotal = linkedPayments
+    .filter((payment) => payment.verificationStatus === "Verified")
+    .reduce((sum, payment) => sum + payment.amount, 0);
+
+  let status: "Pending" | "Partial" | "Paid" | "Overdue";
+  if (verifiedTotal >= fee.amount - 0.01) {
+    status = "Paid";
+  } else if (verifiedTotal > 0) {
+    status = "Partial";
+  } else if (fee.isLate || fee.status === "Overdue") {
+    status = "Overdue";
+  } else {
+    status = "Pending";
+  }
+
+  await ctx.db.patch(feeId, { status, updatedAt: Date.now() });
+}
+
+async function syncFineStatusFromVerifiedPayments(
+  ctx: MutationCtx,
+  fineId: Id<"fines">,
+) {
+  const fine = await ctx.db.get(fineId);
+  if (!fine) return;
+
+  const linkedPayments = await ctx.db
+    .query("payments")
+    .filter((q) => q.eq(q.field("fineId"), fineId))
+    .collect();
+
+  const verifiedTotal = linkedPayments
+    .filter((payment) => payment.verificationStatus === "Verified")
+    .reduce((sum, payment) => sum + payment.amount, 0);
+
+  let status: "Pending" | "Partial" | "Paid" | "Overdue";
+  if (verifiedTotal >= fine.amount - 0.01) {
+    status = "Paid";
+  } else if (verifiedTotal > 0) {
+    status = "Partial";
+  } else if (fine.status === "Overdue") {
+    status = "Overdue";
+  } else {
+    status = "Pending";
+  }
+
+  await ctx.db.patch(fineId, { status, updatedAt: Date.now() });
+}
 
 // Create a Venmo payment record in the database
 export const createVenmoPayment = mutation({
@@ -496,6 +557,30 @@ export const correctPaymentAmount = mutation({
       newPaymentStatus: newPaymentStatus,
       message: `Payment amount corrected from $${oldAmount.toFixed(2)} to $${correctedAmount.toFixed(2)}. Fee status updated accordingly.`,
     };
+  },
+});
+
+export const remove = mutation({
+  args: { paymentId: v.id("payments") },
+  handler: async (ctx, args) => {
+    const payment = await ctx.db.get(args.paymentId);
+    if (!payment) {
+      throw new Error("Payment not found");
+    }
+
+    const feeId = payment.feeId;
+    const fineId = payment.fineId;
+
+    await ctx.db.delete(args.paymentId);
+
+    if (feeId) {
+      await syncFeeStatusFromVerifiedPayments(ctx, feeId);
+    }
+    if (fineId) {
+      await syncFineStatusFromVerifiedPayments(ctx, fineId);
+    }
+
+    return { success: true };
   },
 });
 

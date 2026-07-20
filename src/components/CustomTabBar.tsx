@@ -12,10 +12,9 @@ import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
-  withTiming,
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useNavigationState } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 
 const { width: screenWidth } = Dimensions.get('window');
@@ -38,9 +37,15 @@ interface TabItem {
   color: string;
 }
 
-const CustomTabBar = () => {
-  const navigation = useNavigation();
-  const route = useRoute();
+interface CustomTabBarViewProps {
+  routeName: string;
+  onNavigate: (routeName: string) => void;
+  embedded?: boolean;
+}
+
+let tabBarMountedOnce = false;
+
+function CustomTabBarView({ routeName, onNavigate, embedded = false }: CustomTabBarViewProps) {
   const { user } = useAuth();
 
   const isBoardMember = user?.isBoardMember && user?.isActive;
@@ -49,40 +54,38 @@ const CustomTabBar = () => {
 
   const tabs: TabItem[] = [
     { name: 'Home', icon: 'home', label: 'Home', color: '#6b7280' },
-    { name: 'Board', icon: 'people', label: 'Board', color: '#6b7280' },
+    { name: 'Board', icon: 'business', label: 'HOA', color: '#6b7280' },
     { name: 'Community', icon: 'chatbubbles', label: 'Community', color: '#6b7280' },
-    { name: 'Covenants', icon: 'document-text', label: 'Covenants', color: '#6b7280' },
-    { name: 'Documents', icon: 'folder', label: 'Documents', color: '#6b7280' },
     ...(isBoardMember || !isRenter ? [{ name: 'Fees', icon: 'card', label: 'Fees', color: '#6b7280' }] : []),
     ...(isBoardMember || isDev ? [{ name: 'Admin', icon: 'settings', label: 'Admin', color: '#6b7280' }] : []),
   ];
 
-  const activeIndex = tabs.findIndex((t) => t.name === route.name);
+  const activeIndex = tabs.findIndex((t) => t.name === routeName);
   const safeActiveIndex = activeIndex >= 0 ? activeIndex : 0;
 
   const pillPosition = useSharedValue(safeActiveIndex);
-  const containerOpacity = useSharedValue(0);
-  const containerTranslateY = useSharedValue(-8);
+  const containerWidth = useSharedValue(screenWidth - 30);
 
   useEffect(() => {
+    if (!tabBarMountedOnce) {
+      pillPosition.value = safeActiveIndex;
+      tabBarMountedOnce = true;
+      return;
+    }
     pillPosition.value = withSpring(safeActiveIndex, springConfig);
   }, [safeActiveIndex, pillPosition]);
 
-  useEffect(() => {
-    containerOpacity.value = withTiming(1, { duration: 280 });
-    containerTranslateY.value = withSpring(0, springConfigSoft);
-  }, [containerOpacity, containerTranslateY]);
-
   const handleTabPress = (tabName: string) => {
-    navigation.navigate(tabName as never);
+    if (routeName === tabName) return;
+    onNavigate(tabName);
   };
 
   const onContainerLayout = (e: LayoutChangeEvent) => {
     const { width } = e.nativeEvent.layout;
-    containerWidth.value = width;
+    if (width > 0) {
+      containerWidth.value = width;
+    }
   };
-
-  const containerWidth = useSharedValue(screenWidth - 30);
 
   if (isMobile) {
     return null;
@@ -100,30 +103,46 @@ const CustomTabBar = () => {
     };
   }, [tabCount]);
 
-  const containerAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: containerOpacity.value,
-    transform: [{ translateY: containerTranslateY.value }],
-  }));
-
   return (
-    <Animated.View
-      style={[styles.container, containerAnimatedStyle]}
-      onLayout={onContainerLayout}
-    >
+    <View style={[styles.container, embedded && styles.containerEmbedded]} onLayout={onContainerLayout}>
       <View style={styles.pillTrack}>
         <Animated.View style={[styles.pill, pillAnimatedStyle]} />
       </View>
-      {tabs.map((tab, index) => (
+      {tabs.map((tab) => (
         <TabButton
           key={tab.name}
           tab={tab}
-          isActive={route.name === tab.name}
+          isActive={routeName === tab.name}
           onPress={() => handleTabPress(tab.name)}
         />
       ))}
-    </Animated.View>
+    </View>
   );
-};
+}
+
+interface CustomTabBarEmbeddedProps {
+  routeName: string;
+  onNavigate: (routeName: string) => void;
+}
+
+export function CustomTabBarEmbedded({ routeName, onNavigate }: CustomTabBarEmbeddedProps) {
+  return <CustomTabBarView routeName={routeName} onNavigate={onNavigate} embedded />;
+}
+
+function CustomTabBarWithNavigation() {
+  const navigation = useNavigation();
+  const routeName = useNavigationState((state) => {
+    if (!state || state.index == null) return 'Home';
+    return state.routes[state.index]?.name ?? 'Home';
+  });
+
+  return (
+    <CustomTabBarView
+      routeName={routeName}
+      onNavigate={(name) => navigation.navigate(name as never)}
+    />
+  );
+}
 
 interface TabButtonProps {
   tab: TabItem;
@@ -218,6 +237,11 @@ const styles = StyleSheet.create({
       },
     }),
   },
+  containerEmbedded: {
+    marginHorizontal: 0,
+    marginTop: 0,
+    flex: 1,
+  },
   pillTrack: {
     ...StyleSheet.absoluteFillObject,
     left: 8,
@@ -274,4 +298,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default CustomTabBar;
+export default React.memo(CustomTabBarWithNavigation);

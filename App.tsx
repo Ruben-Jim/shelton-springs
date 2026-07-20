@@ -1,7 +1,11 @@
-import React, { useMemo, useEffect, useState } from 'react';
+import React, { useMemo, useEffect, useState, useRef, useCallback } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, Text, View, Platform, ScrollView } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import {
+  NavigationContainer,
+  createNavigationContainerRef,
+  NavigationState,
+} from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
@@ -11,11 +15,15 @@ import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { MessagingProvider, useMessaging } from './src/context/MessagingContext';
 import { QueryCacheProvider } from './src/context/QueryCacheContext';
 import AuthNavigator from './src/navigation/AuthNavigator';
+import { defaultStackScreenOptions } from './src/navigation/screenTransitionOptions';
+import { getActiveRouteName } from './src/navigation/getActiveRouteName';
 import enhancedUnifiedNotificationManager from './src/services/EnhancedUnifiedNotificationManager';
 import MessagingOverlay from './src/components/MessagingOverlay';
 import MinimizedMessageBubble from './src/components/MinimizedMessageBubble';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import AnimatedSplashScreen from './src/components/AnimatedSplashScreen';
+import { DesktopTabBarProvider } from './src/components/DesktopTabBarLayer';
+import IosAppUpdatePrompt from './src/components/IosAppUpdatePrompt';
 import { useUserNotifications } from './src/hooks/useUserNotifications';
 
 import HomeScreen from './src/screens/HomeScreen';
@@ -28,8 +36,14 @@ import BlockedAccountScreen from './src/screens/BlockedAccountScreen';
 import AdminScreen from './src/screens/AdminScreen';
 
 const Stack = createStackNavigator();
+const navigationRef = createNavigationContainerRef();
 
-const MainAppContent = () => {
+type MainAppContentProps = {
+  activeRouteName: string;
+  onTabNavigate: (routeName: string) => void;
+};
+
+const MainAppContent = ({ activeRouteName, onTabNavigate }: MainAppContentProps) => {
   const { isAuthenticated, isLoading, isUserBlocked, user } = useAuth();
   const { showOverlay, setShowOverlay } = useMessaging();
   // Initialize notification hook to reactively get and display notifications
@@ -56,10 +70,14 @@ const MainAppContent = () => {
   const isDev = user?.isDev ?? false;
 
   return (
-    <>
+    <DesktopTabBarProvider
+      activeRouteName={activeRouteName}
+      onNavigate={onTabNavigate}
+    >
       <Stack.Navigator
         screenOptions={{
-          headerShown: false,
+          ...defaultStackScreenOptions,
+          detachInactiveScreens: false,
         }}
       >
         <Stack.Screen name="Home" component={HomeScreen} />
@@ -82,7 +100,8 @@ const MainAppContent = () => {
       <MinimizedMessageBubble
         onPress={() => setShowOverlay(true)}
       />
-    </>
+      <IosAppUpdatePrompt />
+    </DesktopTabBarProvider>
   );
 };
 
@@ -171,6 +190,7 @@ export default function App() {
   // Persistent navigation state
   const [isReady, setIsReady] = React.useState(false);
   const [initialState, setInitialState] = React.useState<any>();
+  const [activeRouteName, setActiveRouteName] = useState('Home');
 
   // Validate environment variables
   const hasRequiredEnvVars = !!convexUrl;
@@ -244,7 +264,9 @@ export default function App() {
         if (Platform.OS === 'web') {
           const savedState = localStorage.getItem('navState');
           if (savedState !== null) {
-            setInitialState(JSON.parse(savedState));
+            const parsed = JSON.parse(savedState);
+            setInitialState(parsed);
+            setActiveRouteName(getActiveRouteName(parsed));
           }
         }
       } catch (e) {
@@ -257,11 +279,24 @@ export default function App() {
     restoreState();
   }, []);
 
-  const onStateChange = (state: any) => {
-    if (Platform.OS === 'web') {
+  const onStateChange = (state?: NavigationState) => {
+    setActiveRouteName(getActiveRouteName(state));
+    if (Platform.OS === 'web' && state) {
       localStorage.setItem('navState', JSON.stringify(state));
     }
   };
+
+  const handleNavigationReady = useCallback(() => {
+    if (navigationRef.isReady()) {
+      setActiveRouteName(getActiveRouteName(navigationRef.getRootState()));
+    }
+  }, []);
+
+  const handleTabNavigate = useCallback((routeName: string) => {
+    if (navigationRef.isReady()) {
+      navigationRef.navigate(routeName as never);
+    }
+  }, []);
 
   // Show animated splash screen first (only on iOS and Android)
   // This must be after all hooks are called
@@ -303,8 +338,16 @@ export default function App() {
           <AuthProvider>
             <QueryCacheProvider>
               <MessagingProvider>
-                <NavigationContainer initialState={initialState} onStateChange={onStateChange}>
-                  <MainAppContent />
+                <NavigationContainer
+                  ref={navigationRef}
+                  initialState={initialState}
+                  onStateChange={onStateChange}
+                  onReady={handleNavigationReady}
+                >
+                  <MainAppContent
+                    activeRouteName={activeRouteName}
+                    onTabNavigate={handleTabNavigate}
+                  />
                   <StatusBar style="dark" />
                 </NavigationContainer>
               </MessagingProvider>
@@ -314,8 +357,16 @@ export default function App() {
       ) : (
         <AuthProvider>
           <MessagingProvider>
-            <NavigationContainer initialState={initialState} onStateChange={onStateChange}>
-              <MainAppContent />
+            <NavigationContainer
+              ref={navigationRef}
+              initialState={initialState}
+              onStateChange={onStateChange}
+              onReady={handleNavigationReady}
+            >
+              <MainAppContent
+                activeRouteName={activeRouteName}
+                onTabNavigate={handleTabNavigate}
+              />
               <StatusBar style="dark" />
             </NavigationContainer>
           </MessagingProvider>

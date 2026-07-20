@@ -8,6 +8,7 @@ import {
   Platform,
   ScrollView,
   KeyboardAvoidingView,
+  Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import VenmoCheckout from './VenmoCheckout';
@@ -39,6 +40,29 @@ const PaymentModal: React.FC<PaymentModalProps> = ({
   const [error, setError] = React.useState<string | null>(null);
   const [success, setSuccess] = React.useState(false);
 
+  const overlayAnim = React.useRef(new Animated.Value(0)).current;
+  const slideAnim = React.useRef(new Animated.Value(60)).current;
+
+  React.useEffect(() => {
+    if (visible) {
+      overlayAnim.setValue(0);
+      slideAnim.setValue(60);
+      Animated.parallel([
+        Animated.timing(overlayAnim, {
+          toValue: 1,
+          duration: 250,
+          useNativeDriver: true,
+        }),
+        Animated.spring(slideAnim, {
+          toValue: 0,
+          tension: 65,
+          friction: 11,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [visible]);
+
   const handleSuccess = () => {
     setSuccess(true);
     setError(null);
@@ -63,17 +87,17 @@ const PaymentModal: React.FC<PaymentModalProps> = ({
   return (
     <Modal
       visible={visible}
-      animationType="slide"
+      animationType="none"
       transparent={true}
       onRequestClose={handleClose}
       presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
     >
-      <View style={styles.overlay}>
+      <Animated.View style={[styles.overlay, { opacity: overlayAnim }]}>
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.keyboardView}
         >
-        <View style={styles.modalContainer}>
+        <Animated.View style={[styles.modalContainer, { transform: [{ translateY: slideAnim }] }]}>
           {/* Header */}
           <View style={styles.header}>
             <Text style={styles.headerTitle}>Complete Payment</Text>
@@ -137,9 +161,9 @@ const PaymentModal: React.FC<PaymentModalProps> = ({
               />
             )}
           </ScrollView>
-        </View>
+        </Animated.View>
         </KeyboardAvoidingView>
-      </View>
+      </Animated.View>
     </Modal>
   );
 };

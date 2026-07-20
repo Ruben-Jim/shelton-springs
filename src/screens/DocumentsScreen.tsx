@@ -26,7 +26,7 @@ import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
-import CustomTabBar from '../components/CustomTabBar';
+import { DesktopTabBarSlot, useDesktopTabBarScrollSync } from '../components/DesktopTabBarLayer';
 import MobileTabBar from '../components/MobileTabBar';
 import { useStorageUrl } from '../hooks/useStorageUrl';
 import CustomAlert from '../components/CustomAlert';
@@ -71,6 +71,7 @@ const DocumentsScreen = () => {
   const overlayOpacity = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const scrollViewRef = useRef<ScrollView>(null);
+  const syncDesktopTabBar = useDesktopTabBarScrollSync();
 
   // Listen for window size changes (only on web/desktop)
   useEffect(() => {
@@ -404,7 +405,7 @@ const DocumentsScreen = () => {
                 document.body.style.userSelect = 'auto';
               }
             },
-            onScroll: () => {},
+            onScroll: syncDesktopTabBar,
           })}
         >
           {/* Header */}
@@ -462,7 +463,7 @@ const DocumentsScreen = () => {
           {/* Custom Tab Bar - Only when screen is wide enough */}
           {showDesktopNav && (
             <Animated.View style={{ opacity: fadeAnim }}>
-              <CustomTabBar />
+              <DesktopTabBarSlot />
             </Animated.View>
           )}
 

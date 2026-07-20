@@ -41,6 +41,8 @@ import { useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import type { Id } from '../../convex/_generated/dataModel';
 import ProfileImage from './ProfileImage';
+import CustomAlert from './CustomAlert';
+import { useCustomAlert } from '../hooks/useCustomAlert';
 
 // ─── Types (mirroring convex schema exactly) ──────────────────────────────────
 
@@ -136,6 +138,75 @@ interface HomeownerRecordsModalProps {
 
 /** Stored on fee/fine records; editable in admin modal */
 type EditLedgerStatus = 'Pending' | 'Partial' | 'Paid' | 'Overdue';
+
+type DeleteTarget =
+  | { kind: 'fee'; record: Fee }
+  | { kind: 'fine'; record: Fine }
+  | { kind: 'payment'; record: Payment };
+
+function formatPaymentSummary(payment: Payment): string {
+  const method = payment.paymentMethod ?? 'Payment';
+  const amount = `$${payment.amount.toFixed(2)}`;
+  const date = payment.paymentDate ? ` on ${payment.paymentDate}` : '';
+  const check = payment.checkNumber ? ` (Check #${payment.checkNumber})` : '';
+  return `• ${method} ${amount}${date}${check}`;
+}
+
+function buildDeleteConfirmMessage(
+  target: DeleteTarget,
+  linkedPayments: Payment[],
+  fees: Fee[],
+  fines: Fine[],
+): string {
+  if (target.kind === 'payment') {
+    const payment = target.record;
+    const summary = formatPaymentSummary(payment).replace(/^• /, '');
+    let message = `Delete this payment?\n\n${summary}\n\nThis payment will be permanently removed from payment history.`;
+
+    if (payment.feeId) {
+      const fee = fees.find((entry) => entry._id === payment.feeId);
+      message += fee
+        ? `\n\nThe linked fee "${fee.name}" balance will be recalculated.`
+        : '\n\nThe linked fee balance will be recalculated.';
+    }
+    if (payment.fineId) {
+      const fine = fines.find((entry) => entry._id === payment.fineId);
+      message += fine
+        ? `\n\nThe linked fine "${fine.violation}" balance will be recalculated.`
+        : '\n\nThe linked fine balance will be recalculated.';
+    }
+
+    message += '\n\nThis cannot be undone.';
+    return message;
+  }
+
+  const recordLabel =
+    target.kind === 'fee' ? `"${target.record.name}"` : `"${target.record.violation}"`;
+  const recordType = target.kind === 'fee' ? 'fee' : 'fine';
+
+  let message = `Delete ${recordLabel}?\n\nThis ${recordType} will be permanently removed.`;
+
+  if (linkedPayments.length > 0) {
+    const paymentLines = linkedPayments.map(formatPaymentSummary).join('\n');
+    message += `\n\n${linkedPayments.length} linked payment${
+      linkedPayments.length === 1 ? '' : 's'
+    } will remain in payment history but will no longer count toward this ${recordType}:\n${paymentLines}`;
+  }
+
+  message += '\n\nThis cannot be undone.';
+  return message;
+}
+
+function deleteConfirmTitle(target: DeleteTarget): string {
+  switch (target.kind) {
+    case 'fee':
+      return 'Delete fee?';
+    case 'fine':
+      return 'Delete fine?';
+    case 'payment':
+      return 'Delete payment?';
+  }
+}
 
 // ─── Config & helpers ─────────────────────────────────────────────────────────
 
@@ -258,9 +329,13 @@ export default function HomeownerRecordsModal({
 }: HomeownerRecordsModalProps) {
   const updateFeeMutation = useMutation(api.fees.update);
   const updateFineMutation = useMutation(api.fines.update);
+  const removeFeeMutation = useMutation(api.fees.remove);
+  const removeFineMutation = useMutation(api.fines.remove);
+  const removePaymentMutation = useMutation(api.payments.remove);
   const reconcileFeePaidMutation = useMutation(api.payments.adminReconcileVerifiedPaidForFee);
   const reconcileFinePaidMutation = useMutation(api.payments.adminReconcileVerifiedPaidForFine);
   const createAnnualFeeForAddressMutation = useMutation(api.fees.createAnnualFeeForAddress);
+  const { alertState, showAlert, hideAlert } = useCustomAlert();
 
   const [editTarget, setEditTarget] = useState<
     null | { kind: 'fee'; fee: Fee } | { kind: 'fine'; fine: Fine }
@@ -269,6 +344,7 @@ export default function HomeownerRecordsModal({
   const [editAmountPaid, setEditAmountPaid] = useState('');
   const [editStatus, setEditStatus] = useState<EditLedgerStatus>('Pending');
   const [savingEdit, setSavingEdit] = useState(false);
+  const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
 
   const [showAddAnnualModal, setShowAddAnnualModal] = useState(false);
   const [savingAnnual, setSavingAnnual] = useState(false);
@@ -285,6 +361,7 @@ export default function HomeownerRecordsModal({
       setEditTarget(null);
       setEditAmountPaid('');
       setShowAddAnnualModal(false);
+      setDeletingRecordId(null);
     }
   }, [visible]);
 
@@ -330,6 +407,66 @@ export default function HomeownerRecordsModal({
     fines,
     payments,
   } = addressGroup;
+
+  const getLinkedPayments = (target: DeleteTarget) => {
+    if (target.kind === 'payment') return [];
+    return payments.filter((payment) =>
+      target.kind === 'fee'
+        ? payment.feeId === target.record._id
+        : payment.fineId === target.record._id,
+    );
+  };
+
+  const requestDeleteRecord = (target: DeleteTarget) => {
+    const linkedPayments = getLinkedPayments(target);
+    showAlert({
+      title: deleteConfirmTitle(target),
+      message: buildDeleteConfirmMessage(target, linkedPayments, fees, fines),
+      type: 'warning',
+      buttons: [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => handleDeleteRecord(target),
+        },
+      ],
+    });
+  };
+
+  const handleDeleteRecord = async (target: DeleteTarget) => {
+    const recordId = target.record._id;
+    setDeletingRecordId(recordId);
+    try {
+      if (target.kind === 'fee') {
+        await removeFeeMutation({ id: recordId as Id<'fees'> });
+      } else if (target.kind === 'fine') {
+        await removeFineMutation({ id: recordId as Id<'fines'> });
+      } else {
+        await removePaymentMutation({ paymentId: recordId as Id<'payments'> });
+      }
+
+      if (
+        editTarget &&
+        ((editTarget.kind === 'fee' && editTarget.fee._id === recordId) ||
+          (editTarget.kind === 'fine' && editTarget.fine._id === recordId))
+      ) {
+        setEditTarget(null);
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Delete failed';
+      showAlert({
+        title: `Could not delete ${target.kind}`,
+        message: msg,
+        type: 'error',
+        buttons: [{ text: 'OK', style: 'default' }],
+      });
+    } finally {
+      setDeletingRecordId(null);
+    }
+  };
+
+  const isDeletingRecord = (target: DeleteTarget) => deletingRecordId === target.record._id;
 
   const paymentUserIdForFee = (fee: Fee) => {
     if (fee.userId) return String(fee.userId);
@@ -655,17 +792,17 @@ export default function HomeownerRecordsModal({
               const pct = fee.amount > 0
                 ? Math.min(100, (paidTowardsFee / fee.amount) * 100)
                 : 0;
+              const isDeletingFee = isDeletingRecord({ kind: 'fee', record: fee });
 
               return (
-                <TouchableOpacity
-                  key={fee._id}
-                  style={styles.recordCard}
-                  activeOpacity={0.85}
-                  onPress={() => openEditFee(fee)}
-                >
+                <View key={fee._id} style={styles.recordCard}>
                   <View style={styles.recordRow}>
-                    <View style={styles.recordLeft}>
-                      {/* Fee name is the human label; description is the admin note */}
+                    <TouchableOpacity
+                      style={styles.recordLeftTap}
+                      activeOpacity={0.85}
+                      onPress={() => openEditFee(fee)}
+                      disabled={isDeletingFee}
+                    >
                       <Text style={styles.recordTitle}>{fee.name}</Text>
                       <View style={styles.recordMeta}>
                         <Text style={styles.recordMetaText}>{fee.frequency}</Text>
@@ -684,15 +821,39 @@ export default function HomeownerRecordsModal({
                       {fee.description ? (
                         <Text style={styles.recordNote}>{fee.description}</Text>
                       ) : null}
-                    </View>
+                    </TouchableOpacity>
                     <View style={styles.recordRight}>
                       <Text style={styles.recordAmount}>${fee.amount.toFixed(2)}</Text>
                       <StatusPill statusKey={st} />
-                      <Ionicons name="create-outline" size={14} color="#9ca3af" style={{ marginTop: 4 }} />
+                      <View style={styles.recordActions}>
+                        <TouchableOpacity
+                          style={styles.recordActionBtn}
+                          onPress={() => openEditFee(fee)}
+                          disabled={isDeletingFee}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Edit ${fee.name}`}
+                        >
+                          <Ionicons name="create-outline" size={16} color="#6b7280" />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.recordActionBtn, styles.recordActionBtnDanger]}
+                          onPress={() => requestDeleteRecord({ kind: 'fee', record: fee })}
+                          disabled={isDeletingFee}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Delete ${fee.name}`}
+                        >
+                          {isDeletingFee ? (
+                            <ActivityIndicator size="small" color="#dc2626" />
+                          ) : (
+                            <Ionicons name="trash-outline" size={16} color="#dc2626" />
+                          )}
+                        </TouchableOpacity>
+                      </View>
                     </View>
                   </View>
 
-                  {/* Partial payment progress bar */}
                   {paidTowardsFee > 0 && paidTowardsFee < fee.amount && (
                     <View style={styles.progressSection}>
                       <Text style={styles.progressLabel}>
@@ -705,7 +866,7 @@ export default function HomeownerRecordsModal({
                       </View>
                     </View>
                   )}
-                </TouchableOpacity>
+                </View>
               );
             })
           )}
@@ -722,16 +883,17 @@ export default function HomeownerRecordsModal({
               );
               const paidTowardsFine = finePayments.reduce((s, p) => s + p.amount, 0);
               const st = fineDisplayStatus(fine, paidTowardsFine);
+              const isDeletingFine = isDeletingRecord({ kind: 'fine', record: fine });
 
               return (
-                <TouchableOpacity
-                  key={fine._id}
-                  style={[styles.recordCard, styles.fineAccent]}
-                  activeOpacity={0.85}
-                  onPress={() => openEditFine(fine)}
-                >
+                <View key={fine._id} style={[styles.recordCard, styles.fineAccent]}>
                   <View style={styles.recordRow}>
-                    <View style={styles.recordLeft}>
+                    <TouchableOpacity
+                      style={styles.recordLeftTap}
+                      activeOpacity={0.85}
+                      onPress={() => openEditFine(fine)}
+                      disabled={isDeletingFine}
+                    >
                       <View style={styles.fineViolationRow}>
                         <Ionicons
                           name="warning-outline"
@@ -747,13 +909,38 @@ export default function HomeownerRecordsModal({
                       {fine.description ? (
                         <Text style={styles.recordNote}>{fine.description}</Text>
                       ) : null}
-                    </View>
+                    </TouchableOpacity>
                     <View style={styles.recordRight}>
                       <Text style={[styles.recordAmount, { color: '#dc2626' }]}>
                         ${fine.amount.toFixed(2)}
                       </Text>
                       <StatusPill statusKey={st} />
-                      <Ionicons name="create-outline" size={14} color="#9ca3af" style={{ marginTop: 4 }} />
+                      <View style={styles.recordActions}>
+                        <TouchableOpacity
+                          style={styles.recordActionBtn}
+                          onPress={() => openEditFine(fine)}
+                          disabled={isDeletingFine}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Edit ${fine.violation}`}
+                        >
+                          <Ionicons name="create-outline" size={16} color="#6b7280" />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.recordActionBtn, styles.recordActionBtnDanger]}
+                          onPress={() => requestDeleteRecord({ kind: 'fine', record: fine })}
+                          disabled={isDeletingFine}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Delete ${fine.violation}`}
+                        >
+                          {isDeletingFine ? (
+                            <ActivityIndicator size="small" color="#dc2626" />
+                          ) : (
+                            <Ionicons name="trash-outline" size={16} color="#dc2626" />
+                          )}
+                        </TouchableOpacity>
+                      </View>
                     </View>
                   </View>
 
@@ -772,7 +959,7 @@ export default function HomeownerRecordsModal({
                       </View>
                     </View>
                   )}
-                </TouchableOpacity>
+                </View>
               );
             })
           )}
@@ -782,10 +969,12 @@ export default function HomeownerRecordsModal({
           {verifiedPayments.length === 0 ? (
             <EmptyRow icon="receipt-outline" text="No verified payments yet" />
           ) : (
-            verifiedPayments.map((pmt) => (
+            verifiedPayments.map((pmt) => {
+              const isDeletingPayment = isDeletingRecord({ kind: 'payment', record: pmt });
+
+              return (
               <View key={pmt._id} style={styles.paymentCard}>
                 <View style={styles.paymentRow}>
-                  {/* Method icon circle */}
                   <View style={styles.pmtIconCircle}>
                     <Ionicons
                       name={paymentMethodIcon(pmt.paymentMethod)}
@@ -794,7 +983,6 @@ export default function HomeownerRecordsModal({
                     />
                   </View>
 
-                  {/* Details */}
                   <View style={styles.pmtDetails}>
                     <Text style={styles.pmtMethod}>
                       {pmt.paymentMethod ?? 'Payment'}
@@ -817,18 +1005,33 @@ export default function HomeownerRecordsModal({
                     )}
                   </View>
 
-                  {/* Amount */}
-                  <Text style={styles.pmtAmount}>${pmt.amount.toFixed(2)}</Text>
+                  <View style={styles.pmtRight}>
+                    <Text style={styles.pmtAmount}>${pmt.amount.toFixed(2)}</Text>
+                    <TouchableOpacity
+                      style={[styles.recordActionBtn, styles.recordActionBtnDanger]}
+                      onPress={() => requestDeleteRecord({ kind: 'payment', record: pmt })}
+                      disabled={isDeletingPayment}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      accessibilityRole="button"
+                      accessibilityLabel="Delete payment"
+                    >
+                      {isDeletingPayment ? (
+                        <ActivityIndicator size="small" color="#dc2626" />
+                      ) : (
+                        <Ionicons name="trash-outline" size={16} color="#dc2626" />
+                      )}
+                    </TouchableOpacity>
+                  </View>
                 </View>
 
-                {/* Admin notes / user notes */}
                 {(pmt.notes || pmt.adminNotes) ? (
                   <Text style={styles.pmtNotes}>
                     {pmt.notes ?? pmt.adminNotes}
                   </Text>
                 ) : null}
               </View>
-            ))
+            );
+            })
           )}
 
           <View style={{ height: 40 }} />
@@ -921,24 +1124,56 @@ export default function HomeownerRecordsModal({
             </View>
 
             <View style={styles.editActions}>
-              <TouchableOpacity
-                style={styles.editCancelBtn}
-                onPress={() => !savingEdit && setEditTarget(null)}
-                disabled={savingEdit}
-              >
-                <Text style={styles.editCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.editSaveBtn}
-                onPress={handleSaveEdit}
-                disabled={savingEdit}
-              >
-                {savingEdit ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <Text style={styles.editSaveText}>Save</Text>
-                )}
-              </TouchableOpacity>
+              {editTarget ? (
+                <TouchableOpacity
+                  style={styles.editDeleteBtn}
+                  onPress={() => {
+                    if (!savingEdit && editTarget) {
+                      requestDeleteRecord(
+                        editTarget.kind === 'fee'
+                          ? { kind: 'fee', record: editTarget.fee }
+                          : { kind: 'fine', record: editTarget.fine },
+                      );
+                    }
+                  }}
+                  disabled={
+                    savingEdit ||
+                    (editTarget.kind === 'fee'
+                      ? isDeletingRecord({ kind: 'fee', record: editTarget.fee })
+                      : isDeletingRecord({ kind: 'fine', record: editTarget.fine }))
+                  }
+                >
+                  {(editTarget.kind === 'fee'
+                    ? isDeletingRecord({ kind: 'fee', record: editTarget.fee })
+                    : isDeletingRecord({ kind: 'fine', record: editTarget.fine })) ? (
+                    <ActivityIndicator color="#dc2626" size="small" />
+                  ) : (
+                    <Text style={styles.editDeleteText}>Delete</Text>
+                  )}
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.editDeleteBtnSpacer} />
+              )}
+              <View style={styles.editPrimaryActions}>
+                <TouchableOpacity
+                  style={styles.editCancelBtn}
+                  onPress={() => !savingEdit && setEditTarget(null)}
+                  disabled={savingEdit}
+                >
+                  <Text style={styles.editCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.editSaveBtn}
+                  onPress={handleSaveEdit}
+                  disabled={savingEdit}
+                >
+                  {savingEdit ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <Text style={styles.editSaveText}>Save</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         </KeyboardAvoidingView>
@@ -1022,6 +1257,15 @@ export default function HomeownerRecordsModal({
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        buttons={alertState.buttons}
+        type={alertState.type}
+        onClose={hideAlert}
+      />
     </Modal>
   );
 }
@@ -1234,6 +1478,27 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 1,
   },
+  recordLeftTap: {
+    flex: 1,
+    marginRight: 12,
+  },
+  recordActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+  },
+  recordActionBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f3f4f6',
+  },
+  recordActionBtnDanger: {
+    backgroundColor: '#fef2f2',
+  },
   // Fine gets a red left accent
   fineAccent: {
     borderLeftWidth: 3,
@@ -1381,6 +1646,12 @@ const styles = StyleSheet.create({
     color: '#10b981',
     flexShrink: 0,
   },
+  pmtRight: {
+    alignItems: 'flex-end',
+    gap: 8,
+    flexShrink: 0,
+    minWidth: 72,
+  },
   pmtNotes: {
     fontSize: 11,
     color: '#6b7280',
@@ -1514,9 +1785,30 @@ const styles = StyleSheet.create({
   },
   editActions: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: 10,
     marginTop: 4,
+  },
+  editDeleteBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    minWidth: 56,
+    alignItems: 'flex-start',
+  },
+  editDeleteBtnSpacer: {
+    minWidth: 56,
+  },
+  editDeleteText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#dc2626',
+  },
+  editPrimaryActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginLeft: 'auto',
   },
   editCancelBtn: {
     paddingVertical: 10,

@@ -22,7 +22,7 @@ import { useStorageUrl } from '../hooks/useStorageUrl';
 import { Linking, ActivityIndicator } from 'react-native';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
-import CustomTabBar from '../components/CustomTabBar';
+import { DesktopTabBarSlot, useDesktopTabBarScrollSync } from '../components/DesktopTabBarLayer';
 import MobileTabBar from '../components/MobileTabBar';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
@@ -90,6 +90,7 @@ const CovenantsScreen = () => {
 
   // ScrollView ref for better control
   const scrollViewRef = useRef<ScrollView>(null);
+  const syncDesktopTabBar = useDesktopTabBarScrollSync();
 
   // Listen for window size changes (only on web/desktop)
   useEffect(() => {
@@ -220,9 +221,7 @@ const CovenantsScreen = () => {
               document.body.style.userSelect = 'auto';
             }
           },
-          onScroll: () => {
-            // Ensure scrolling is working
-          },
+          onScroll: syncDesktopTabBar,
         })}
       >
         {/* Header with ImageBackground */}
@@ -273,7 +272,7 @@ const CovenantsScreen = () => {
 
         {/* Custom Tab Bar - Only when screen is wide enough */}
         {showDesktopNav && (
-          <CustomTabBar />
+          <DesktopTabBarSlot />
         )}
       
       {/* CC&Rs PDF View Button */}

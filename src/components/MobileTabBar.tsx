@@ -122,12 +122,8 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
 
   const tabs: TabItem[] = [
     { name: 'Home', icon: 'home', label: 'Home', color: '#6b7280' },
-    { name: 'Board', icon: 'people', label: 'Board', color: '#6b7280' },
+    { name: 'Board', icon: 'business', label: 'HOA', color: '#6b7280' },
     { name: 'Community', icon: 'chatbubbles', label: 'Community', color: '#6b7280' },
-    // { name: 'ResidentNotifications', icon: 'home', label: 'Residents', color: '#6b7280' },
-    { name: 'Covenants', icon: 'document-text', label: 'Covenants', color: '#6b7280' },
-    { name: 'Documents', icon: 'folder', label: 'Documents', color: '#6b7280' },
-    // Hide fees tab for renters and regular residents (only show for board members and homeowners)
     ...(isBoardMember || !isRenter ? [{ name: 'Fees', icon: 'card', label: 'Fees', color: '#6b7280' }] : []),
     ...(isBoardMember || isDev ? [{ name: 'Admin', icon: 'settings', label: 'Admin', color: '#6b7280' }] : []),
   ];

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,9 +12,12 @@ import {
   Dimensions,
   Animated,
   Platform,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRoute } from '@react-navigation/native';
 import { useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 
@@ -22,18 +25,28 @@ import { useAuth } from '../context/AuthContext';
 import { useCachedResidents } from '../context/QueryCacheContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
-import CustomTabBar from '../components/CustomTabBar';
+import { DesktopTabBarSlot, useDesktopTabBarScrollSync } from '../components/DesktopTabBarLayer';
 import MobileTabBar from '../components/MobileTabBar';
 import ProfileImage from '../components/ProfileImage';
 import { getBoardMemberPhoto } from '../utils/boardMemberPhoto';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
+import CovenantsContent from '../components/board/CovenantsContent';
+import DocumentsContent from '../components/board/DocumentsContent';
+import ScrollToTopButton from '../components/ScrollToTopButton';
+import { useScrollToTop } from '../hooks/useScrollToTop';
+
+type BoardSubTab = 'board' | 'covenants' | 'documents';
+
+const HOA_TAB_ACCENT = '#f97316';
 
 const BoardScreen = () => {
   const { user } = useAuth();
+  const route = useRoute();
   const { setShowOverlay } = useMessaging();
   const isBoardMember = user?.isBoardMember && user?.isActive;
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [activeSubTab, setActiveSubTab] = useState<BoardSubTab>('board');
   
   // State for dynamic responsive behavior (only for web/desktop)
   const [screenWidth, setScreenWidth] = useState(Dimensions.get('window').width);
@@ -51,6 +64,15 @@ const BoardScreen = () => {
   
   // ScrollView ref for better control
   const scrollViewRef = useRef<ScrollView>(null);
+  const { showScrollToTop, scrollToTop, handleScroll: baseHandleScroll } = useScrollToTop(scrollViewRef);
+  const syncDesktopTabBar = useDesktopTabBarScrollSync();
+  const handleScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      baseHandleScroll(event);
+      syncDesktopTabBar();
+    },
+    [baseHandleScroll, syncDesktopTabBar]
+  );
   
   const handleContact = (member: any, type: 'phone' | 'email') => {
     if (type === 'phone') {
@@ -132,6 +154,13 @@ const BoardScreen = () => {
     }
   }, []);
 
+  useEffect(() => {
+    const params = route.params as { activeSubTab?: BoardSubTab } | undefined;
+    if (params?.activeSubTab) {
+      setActiveSubTab(params.activeSubTab);
+    }
+  }, [route.params]);
+
   // Set initial cursor and cleanup on unmount (web only)
   useEffect(() => {
     if (Platform.OS === 'web') {
@@ -177,6 +206,7 @@ const BoardScreen = () => {
         nestedScrollEnabled={true}
         removeClippedSubviews={false}
         scrollEventThrottle={16}
+        onScroll={handleScroll}
         // Enhanced desktop scrolling
         decelerationRate="normal"
         directionalLockEnabled={true}
@@ -194,9 +224,6 @@ const BoardScreen = () => {
               document.body.style.cursor = 'grab';
               document.body.style.userSelect = 'auto';
             }
-          },
-          onScroll: () => {
-            // Ensure scrolling is working
           },
         })}
       >
@@ -259,12 +286,47 @@ const BoardScreen = () => {
           <Animated.View style={{
             opacity: fadeAnim,
           }}>
-            <CustomTabBar />
+            <DesktopTabBarSlot />
           </Animated.View>
+        )}
+
+        {/* Board Sub-Tab Bar */}
+        <View style={styles.subTabBar}>
+          {([
+            { id: 'board', label: 'Board Members', icon: 'people' },
+            { id: 'covenants', label: 'Covenants', icon: 'document-text' },
+            { id: 'documents', label: 'Documents', icon: 'folder' },
+          ] as { id: BoardSubTab; label: string; icon: string }[]).map((tab) => (
+            <TouchableOpacity
+              key={tab.id}
+              style={[styles.subTab, activeSubTab === tab.id && styles.subTabActive]}
+              onPress={() => setActiveSubTab(tab.id)}
+            >
+              <Ionicons
+                name={tab.icon as any}
+                size={16}
+                color={activeSubTab === tab.id ? HOA_TAB_ACCENT : '#6b7280'}
+              />
+              <Text style={[styles.subTabText, activeSubTab === tab.id && styles.subTabTextActive]}>
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Covenants Sub-Tab Content */}
+        {activeSubTab === 'covenants' && (
+          <CovenantsContent isActive={activeSubTab === 'covenants'} />
+        )}
+
+        {/* Documents Sub-Tab Content */}
+        {activeSubTab === 'documents' && (
+          <DocumentsContent isActive={activeSubTab === 'documents'} />
         )}
 
       <Animated.View style={{
         opacity: membersAnim,
+        display: activeSubTab === 'board' ? 'flex' : 'none',
       }}>
         {members.map((member: any, index: number) => (
           <View key={member._id} style={[
@@ -335,6 +397,7 @@ const BoardScreen = () => {
 
       <Animated.View style={{
         opacity: infoAnim,
+        display: activeSubTab === 'board' ? 'flex' : 'none',
       }}>
         {/* Board Meetings Section */}
         <View style={[styles.infoSection, {
@@ -411,6 +474,7 @@ const BoardScreen = () => {
       {/* Additional content to ensure scrollable content */}
       <View style={styles.spacer} />
       </ScrollView>
+      <ScrollToTopButton visible={showScrollToTop} onPress={scrollToTop} />
     </SafeAreaView>
   );
 };
@@ -445,6 +509,36 @@ const styles = StyleSheet.create({
   },
   spacer: {
     height: Platform.OS === 'web' ? 200 : 100,
+  },
+  subTabBar: {
+    flexDirection: 'row',
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+    paddingHorizontal: 8,
+  },
+  subTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    gap: 6,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+  },
+  subTabActive: {
+    borderBottomColor: HOA_TAB_ACCENT,
+  },
+  subTabText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#6b7280',
+  },
+  subTabTextActive: {
+    color: HOA_TAB_ACCENT,
+    fontWeight: '600',
   },
   safeArea: {
     flex: 1,

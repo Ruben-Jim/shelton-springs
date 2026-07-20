@@ -1,0 +1,476 @@
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+  Alert,
+  Linking,
+  ActivityIndicator,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useQuery } from 'convex/react';
+import { api } from '../../../convex/_generated/api';
+import { useCachedHoaInfo } from '../../context/QueryCacheContext';
+import { useStorageUrl } from '../../hooks/useStorageUrl';
+
+function CovenantAttachmentButton({
+  fileStorageId,
+  pdfUrl,
+}: {
+  fileStorageId?: string;
+  pdfUrl?: string;
+}) {
+  const resolvedUrl = useStorageUrl(fileStorageId || null);
+
+  if (!fileStorageId && !pdfUrl) return null;
+
+  const open = () => {
+    if (fileStorageId) {
+      if (resolvedUrl) {
+        Linking.openURL(resolvedUrl);
+      } else {
+        Alert.alert('Please wait', 'Loading document link…');
+      }
+    } else if (pdfUrl) {
+      Linking.openURL(pdfUrl);
+    }
+  };
+
+  const loading = !!fileStorageId && resolvedUrl === undefined;
+
+  return (
+    <TouchableOpacity style={styles.pdfButton} onPress={open} disabled={loading}>
+      {loading ? (
+        <ActivityIndicator size="small" color="#2563eb" />
+      ) : (
+        <>
+          <Ionicons name="document" size={16} color="#2563eb" />
+          <Text style={styles.pdfButtonText}>View attachment</Text>
+        </>
+      )}
+    </TouchableOpacity>
+  );
+}
+
+interface CovenantsContentProps {
+  isActive: boolean;
+}
+
+const CovenantsContent = ({ isActive }: CovenantsContentProps) => {
+  const hoaInfo = useCachedHoaInfo();
+  const ccrsPdfUrl = useStorageUrl(hoaInfo?.ccrsPdfStorageId || null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [covenantsLimit] = useState(50);
+
+  const categories = ['Architecture', 'Landscaping', 'Minutes', 'Caveats', 'General'];
+
+  const covenantsData = useQuery(
+    api.covenants.getPaginated,
+    isActive ? { limit: covenantsLimit, offset: 0 } : 'skip'
+  );
+  const covenants = covenantsData?.items ?? [];
+
+  const filteredCovenants = covenants.filter((covenant: any) => {
+    const matchesSearch =
+      covenant.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      covenant.description.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesCategory = !selectedCategory || covenant.category === selectedCategory;
+    return matchesSearch && matchesCategory;
+  });
+
+  const formatDate = (dateString: string) =>
+    new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+
+  const getCategoryIcon = (category: string) => {
+    switch (category) {
+      case 'Architecture': return 'home';
+      case 'Landscaping': return 'leaf';
+      case 'Minutes': return 'clipboard';
+      case 'Caveats': return 'warning';
+      default: return 'document-text';
+    }
+  };
+
+  const getCategoryColor = (category: string) => {
+    switch (category) {
+      case 'Architecture': return '#3b82f6';
+      case 'Landscaping': return '#10b981';
+      case 'Minutes': return '#06b6d4';
+      case 'Caveats': return '#f59e0b';
+      default: return '#6b7280';
+    }
+  };
+
+  return (
+    <View>
+      {/* CC&Rs PDF Button */}
+      {ccrsPdfUrl && (
+        <View style={styles.ccrsContainer}>
+          <TouchableOpacity
+            style={styles.ccrsButton}
+            onPress={() =>
+              ccrsPdfUrl
+                ? Linking.openURL(ccrsPdfUrl).catch(() =>
+                    Alert.alert('Error', 'Unable to open PDF. Please try again.')
+                  )
+                : undefined
+            }
+          >
+            <Ionicons name="document-text" size={20} color="#2563eb" />
+            <Text style={styles.ccrsButtonText}>View CC&Rs PDF</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Search Bar */}
+      <View style={styles.searchContainer}>
+        <View style={styles.searchBar}>
+          <Ionicons name="search" size={20} color="#6b7280" />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search covenants..."
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <Ionicons name="close-circle" size={20} color="#6b7280" />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      {/* Category Filter */}
+      <View style={styles.categoryContainer}>
+        <View style={styles.filterRow}>
+          <View style={styles.filterLabelContainer}>
+            <Ionicons name="filter" size={16} color="#6b7280" style={styles.filterIcon} />
+            <Text style={styles.filterLabel}>Filter:</Text>
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.categoryContent}
+            style={styles.categoryScrollView}
+          >
+            <TouchableOpacity
+              style={[styles.categoryButton, !selectedCategory && styles.categoryButtonActive]}
+              onPress={() => setSelectedCategory(null)}
+            >
+              <Text
+                style={[
+                  styles.categoryButtonText,
+                  !selectedCategory && styles.categoryButtonTextActive,
+                ]}
+              >
+                All
+              </Text>
+            </TouchableOpacity>
+            {categories.map((category) => (
+              <TouchableOpacity
+                key={category}
+                style={[
+                  styles.categoryButton,
+                  selectedCategory === category && styles.categoryButtonActive,
+                ]}
+                onPress={() => setSelectedCategory(category)}
+              >
+                <Text
+                  style={[
+                    styles.categoryButtonText,
+                    selectedCategory === category && styles.categoryButtonTextActive,
+                  ]}
+                >
+                  {category}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+
+      {/* Covenants List */}
+      <View style={styles.covenantsContainer}>
+        {filteredCovenants.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Ionicons name="document-text-outline" size={48} color="#9ca3af" />
+            <Text style={styles.emptyStateText}>No covenants found</Text>
+            <Text style={styles.emptyStateSubtext}>
+              Try adjusting your search or filter criteria
+            </Text>
+          </View>
+        ) : (
+          filteredCovenants.map((covenant: any) => (
+            <View key={covenant._id} style={styles.covenantCard}>
+              <View style={styles.covenantHeader}>
+                <View style={styles.covenantIcon}>
+                  <Ionicons
+                    name={getCategoryIcon(covenant.category) as any}
+                    size={24}
+                    color={getCategoryColor(covenant.category)}
+                  />
+                </View>
+                <View style={styles.covenantInfo}>
+                  <Text style={styles.covenantTitle}>{covenant.title}</Text>
+                  <Text style={styles.covenantCategory}>{covenant.category}</Text>
+                </View>
+              </View>
+              <Text style={styles.covenantDescription} numberOfLines={3}>
+                {covenant.description}
+              </Text>
+              <View style={styles.covenantFooter}>
+                <Text style={styles.covenantDate}>
+                  Last updated: {formatDate(covenant.lastUpdated)}
+                </Text>
+                <CovenantAttachmentButton
+                  fileStorageId={covenant.fileStorageId}
+                  pdfUrl={covenant.pdfUrl}
+                />
+              </View>
+            </View>
+          ))
+        )}
+      </View>
+
+      {/* Info Section */}
+      <View style={styles.infoSection}>
+        <Text style={styles.infoTitle}>About Covenants</Text>
+        <Text style={styles.infoText}>
+          Please be aware that the summaries provided above are brief highlights of the community
+          regulations; for a complete and authoritative understanding of all rules, rights, and
+          obligations, you should refer to the full descriptions contained within the official
+          Shelton Springs CC&R PDF.
+        </Text>
+        <Text style={styles.infoText}>
+          Covenants, Conditions, and Restrictions (CC&Rs) are the rules and regulations that govern
+          our community. All residents are required to follow these guidelines to maintain the
+          quality and appearance of our neighborhood.
+        </Text>
+        <Text style={styles.infoText}>
+          If you have questions about any covenant or need to request approval for modifications,
+          please contact the architectural committee or HOA board.
+        </Text>
+      </View>
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  ccrsContainer: {
+    backgroundColor: '#ffffff',
+    padding: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  ccrsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#eff6ff',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#2563eb',
+    gap: 8,
+  },
+  ccrsButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#2563eb',
+  },
+  searchContainer: {
+    backgroundColor: '#ffffff',
+    padding: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f9fafb',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  searchInput: {
+    flex: 1,
+    marginLeft: 8,
+    fontSize: 16,
+    color: '#374151',
+  },
+  categoryContainer: {
+    backgroundColor: '#f9fafb',
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  filterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 15,
+  },
+  filterLabelContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 12,
+    paddingRight: 12,
+    borderRightWidth: 1,
+    borderRightColor: '#e5e7eb',
+  },
+  filterIcon: {
+    marginRight: 6,
+  },
+  filterLabel: {
+    fontSize: 13,
+    color: '#6b7280',
+    fontWeight: '600',
+  },
+  categoryScrollView: {
+    flex: 1,
+  },
+  categoryContent: {
+    alignItems: 'center',
+  },
+  categoryButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    marginRight: 8,
+    borderRadius: 20,
+    backgroundColor: '#f3f4f6',
+  },
+  categoryButtonActive: {
+    backgroundColor: '#22c55e',
+  },
+  categoryButtonText: {
+    fontSize: 14,
+    color: '#6b7280',
+    fontWeight: '500',
+  },
+  categoryButtonTextActive: {
+    color: '#ffffff',
+  },
+  covenantsContainer: {
+    padding: 15,
+  },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  emptyStateText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#6b7280',
+    marginTop: 16,
+  },
+  emptyStateSubtext: {
+    fontSize: 14,
+    color: '#9ca3af',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  covenantCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  covenantHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  covenantIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#f3f4f6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  covenantInfo: {
+    flex: 1,
+  },
+  covenantTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#1f2937',
+    marginBottom: 2,
+  },
+  covenantCategory: {
+    fontSize: 12,
+    color: '#6b7280',
+    textTransform: 'uppercase',
+    fontWeight: '500',
+  },
+  covenantDescription: {
+    fontSize: 14,
+    color: '#6b7280',
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  covenantFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  covenantDate: {
+    fontSize: 12,
+    color: '#9ca3af',
+  },
+  pdfButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: '#eff6ff',
+    borderRadius: 6,
+  },
+  pdfButtonText: {
+    fontSize: 12,
+    color: '#2563eb',
+    marginLeft: 4,
+    fontWeight: '500',
+  },
+  infoSection: {
+    backgroundColor: '#ffffff',
+    margin: 15,
+    borderRadius: 12,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  infoTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#1f2937',
+    marginBottom: 12,
+  },
+  infoText: {
+    fontSize: 14,
+    color: '#6b7280',
+    lineHeight: 20,
+    marginBottom: 8,
+  },
+});
+
+export default CovenantsContent;

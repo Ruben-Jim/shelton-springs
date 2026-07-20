@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -17,19 +17,24 @@ import {
   ActivityIndicator,
   FlatList,
   Pressable,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useIsFocused } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery, useMutation } from 'convex/react';
 import { useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
-import { useCachedResidents } from '../context/QueryCacheContext';
+import { useCachedResidents, useCachedHoaInfo } from '../context/QueryCacheContext';
+import { resolveDamageCategories } from '../constants/damageCategories';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
-import CustomTabBar from '../components/CustomTabBar';
+import CommunityForumHeader from '../components/CommunityForumHeader';
+import { DesktopTabBarSlot, useDesktopTabBarScrollSync } from '../components/DesktopTabBarLayer';
 import MobileTabBar from '../components/MobileTabBar';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
@@ -41,8 +46,12 @@ import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
 import * as Linking from 'expo-linking';
 import { notifyNewCommunityPost, notifyNewComment, notifyNewPoll, notifyResidentNotification } from '../utils/notificationHelpers';
+import ScrollToTopButton from '../components/ScrollToTopButton';
+import { useScrollToTop } from '../hooks/useScrollToTop';
 
 // Stable component reference so list re-renders don't remount images (prevents image flash)
+const COMMUNITY_DAMAGE_UPDATE_VERSION = '2026-07-community-damage-v1';
+
 const PostImage = ({
   storageId,
   onPress,
@@ -73,7 +82,7 @@ const CommunityScreen = () => {
   const isFocused = useIsFocused();
   const { alertState, showAlert, hideAlert } = useCustomAlert();
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-  const [activeSubTab, setActiveSubTab] = useState<'posts' | 'polls' | 'notifications' | 'pets'>('posts');
+  const [activeSubTab, setActiveSubTab] = useState<'posts' | 'polls' | 'notifications' | 'pets' | 'damage'>('posts');
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
   const [showNewPostModal, setShowNewPostModal] = useState(false);
   const [showCommentModal, setShowCommentModal] = useState(false);
@@ -82,6 +91,7 @@ const CommunityScreen = () => {
   const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
   const [loadedComments, setLoadedComments] = useState<{[postId: string]: any[]}>({});
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [showDamageUpdateNoticeModal, setShowDamageUpdateNoticeModal] = useState(false);
   
   // Pagination state
   const [postsLimit, setPostsLimit] = useState(20);
@@ -127,6 +137,21 @@ const CommunityScreen = () => {
   const petModalOpacity = useRef(new Animated.Value(0)).current;
   const petModalTranslateY = useRef(new Animated.Value(300)).current;
 
+  // Damage report state
+  const [showDamageReportModal, setShowDamageReportModal] = useState(false);
+  const [damageFormData, setDamageFormData] = useState({
+    category: 'Park',
+    description: '',
+  });
+  const [damagePhotoUris, setDamagePhotoUris] = useState<string[]>([]);
+  const [damageExistingPhotoIds, setDamageExistingPhotoIds] = useState<string[]>([]);
+  const [editingDamageReport, setEditingDamageReport] = useState<any>(null);
+  const [isSubmittingDamageReport, setIsSubmittingDamageReport] = useState(false);
+  const [uploadingDamagePhotos, setUploadingDamagePhotos] = useState(false);
+  const [deletingDamageReportId, setDeletingDamageReportId] = useState<string | null>(null);
+  const damageModalOpacity = useRef(new Animated.Value(0)).current;
+  const damageModalTranslateY = useRef(new Animated.Value(300)).current;
+
   // Poll voting state
   const [selectedPollVotes, setSelectedPollVotes] = useState<{[pollId: string]: number[]}>({});
   
@@ -168,6 +193,15 @@ const CommunityScreen = () => {
   const isMobileDevice = Platform.OS === 'ios' || Platform.OS === 'android';
   const showMobileNav = isMobileDevice || screenWidth < 1024; // Always mobile on mobile devices, responsive on web
   const showDesktopNav = !isMobileDevice && screenWidth >= 1024; // Only desktop nav on web when wide enough
+  const hasDesktopAddButton =
+    showDesktopNav &&
+    (activeSubTab === 'posts' ||
+      activeSubTab === 'notifications' ||
+      activeSubTab === 'pets' ||
+      activeSubTab === 'damage');
+  const showFloatingAddButton =
+    !hasDesktopAddButton &&
+    ((activeSubTab === 'polls' && isBoardMember) || activeSubTab !== 'polls');
 
   // Animation values
   const postModalOpacity = useRef(new Animated.Value(0)).current;
@@ -178,10 +212,56 @@ const CommunityScreen = () => {
   const notificationModalTranslateY = useRef(new Animated.Value(300)).current;
   const pollModalOpacity = useRef(new Animated.Value(0)).current;
   const pollModalTranslateY = useRef(new Animated.Value(300)).current;
+  const imageModalOpacity = useRef(new Animated.Value(0)).current;
+  const imageModalTranslateY = useRef(new Animated.Value(300)).current;
   const contentAnim = useRef(new Animated.Value(1)).current;
   
   // Scroll reference for better control
   const listRef = useRef<FlatList<any>>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
+  const postsScrollToTop = useScrollToTop(listRef, { resetKey: activeSubTab });
+  const tabScrollToTop = useScrollToTop(scrollViewRef, { resetKey: activeSubTab });
+  const {
+    showScrollToTop,
+    scrollToTop,
+    handleScroll: baseHandleScroll,
+  } = activeSubTab === 'posts' ? postsScrollToTop : tabScrollToTop;
+  const syncDesktopTabBar = useDesktopTabBarScrollSync();
+  const handleScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      baseHandleScroll(event);
+      syncDesktopTabBar();
+    },
+    [baseHandleScroll, syncDesktopTabBar]
+  );
+
+  const communityScrollProps = {
+    keyboardShouldPersistTaps: 'handled' as const,
+    keyboardDismissMode: 'on-drag' as const,
+    showsVerticalScrollIndicator: false,
+    bounces: true,
+    scrollEnabled: true,
+    alwaysBounceVertical: false,
+    nestedScrollEnabled: true,
+    removeClippedSubviews: false,
+    scrollEventThrottle: 16,
+    onScroll: handleScroll,
+    decelerationRate: 'normal' as const,
+    directionalLockEnabled: true,
+    canCancelContentTouches: true,
+    ...(Platform.OS === 'web'
+      ? {
+          onScrollBeginDrag: () => {
+            document.body.style.cursor = 'grabbing';
+            document.body.style.userSelect = 'none';
+          },
+          onScrollEndDrag: () => {
+            document.body.style.cursor = 'grab';
+            document.body.style.userSelect = 'auto';
+          },
+        }
+      : {}),
+  };
 
   // Listen for window size changes (only on web/desktop)
   useEffect(() => {
@@ -197,46 +277,36 @@ const CommunityScreen = () => {
   // Set initial cursor and cleanup on unmount (web only)
   useEffect(() => {
     if (Platform.OS === 'web') {
-      // Set initial cursor
       document.body.style.cursor = 'grab';
-      
-      // Ensure scroll view is properly initialized
-      setTimeout(() => {
-        if (listRef.current) {
-          // Force a layout update
-          listRef.current.scrollToOffset({ offset: 0, animated: false });
-          
-          // Debug logging removed
-        }
-      }, 100);
-      
+
       return () => {
         document.body.style.cursor = 'default';
       };
     }
-  }, [screenWidth, showMobileNav, showDesktopNav]);
+  }, []);
   const overlayOpacity = useRef(new Animated.Value(0)).current;
   const buttonScale = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(1)).current; // Start at 1 to avoid flash on tab click
 
-  // Convex queries - using paginated queries (conditional based on screen focus)
+  // Convex queries — keep subscribed so tab switches don't flash empty state
   const postsData = useQuery(
     api.communityPosts.getPaginated,
-    isFocused ? { limit: postsLimit, offset: 0 } : "skip"
+    { limit: postsLimit, offset: 0 }
   );
   const posts = postsData?.items ?? [];
+  const postsLoading = postsData === undefined;
   const postsTotal = postsData?.total ?? 0;
   
   const pollsData = useQuery(
     api.polls.getPaginated,
-    isFocused ? { limit: pollsLimit, offset: 0 } : "skip"
+    { limit: pollsLimit, offset: 0 }
   );
   const polls = pollsData?.items ?? [];
   const pollsTotal = pollsData?.total ?? 0;
   
   const userVotes = useQuery(
     api.polls.getAllUserVotes,
-    isFocused && user ? { userId: user._id } : "skip"
+    user ? { userId: user._id } : "skip"
   );
   
   // Lazy load comments for posts when expanded
@@ -249,13 +319,31 @@ const CommunityScreen = () => {
   });
   const notifications = useQuery(
     api.residentNotifications.getAllActive,
-    isFocused ? {} : "skip"
+    {}
   );
   // Use cached residents to prevent duplicate queries
   const residents = useCachedResidents();
+  const hoaInfo = useCachedHoaInfo();
+  const damageCategories = useMemo(
+    () => resolveDamageCategories(hoaInfo?.damageCategories),
+    [hoaInfo?.damageCategories]
+  );
+  const damageModalCategories = useMemo(() => {
+    if (
+      editingDamageReport?.category &&
+      !damageCategories.includes(editingDamageReport.category)
+    ) {
+      return [...damageCategories, editingDamageReport.category];
+    }
+    return damageCategories;
+  }, [damageCategories, editingDamageReport?.category]);
   const petsGrouped = useQuery(
     api.pets.getAllGroupedByResident,
-    isFocused ? {} : "skip"
+    {}
+  ) || [];
+  const myDamageReports = useQuery(
+    api.damageReports.getByResident,
+    user?._id ? { residentId: user._id } : "skip"
   ) || [];
   
   // Helper function to check if a comment author is a board member
@@ -294,6 +382,9 @@ const CommunityScreen = () => {
   const createPet = useMutation(api.pets.create);
   const updatePet = useMutation(api.pets.update);
   const deletePet = useMutation(api.pets.remove);
+  const createDamageReport = useMutation(api.damageReports.create);
+  const updateDamageReport = useMutation(api.damageReports.updateByResident);
+  const removeDamageReport = useMutation(api.damageReports.remove);
 
   const categories = ['General', 'Event', 'Suggestion', 'Lost & Found'];
   const postCategories = ['General', 'Event', 'Complaint', 'Suggestion', 'Lost & Found']; // Include Complaint for post creation
@@ -386,7 +477,7 @@ const CommunityScreen = () => {
   // Handle route params to set active sub-tab and selected post
   useEffect(() => {
     const params = route.params as {
-      activeSubTab?: 'posts' | 'polls' | 'notifications' | 'pets';
+      activeSubTab?: 'posts' | 'polls' | 'notifications' | 'pets' | 'damage';
       selectedPostId?: string;
     } | undefined;
     if (params?.activeSubTab) {
@@ -396,6 +487,49 @@ const CommunityScreen = () => {
       setSelectedPostId(params.selectedPostId);
     }
   }, [route.params]);
+
+  // One-time damage report announcement when Community tab is opened
+  useEffect(() => {
+    if (!isFocused) return;
+
+    let cancelled = false;
+    const storageKey = `community_damage_notice_seen_${COMMUNITY_DAMAGE_UPDATE_VERSION}_${user?._id ?? 'guest'}`;
+
+    const maybeShowDamageUpdateNotice = async () => {
+      try {
+        const seen = await AsyncStorage.getItem(storageKey);
+        if (seen === 'true' || cancelled) return;
+        requestAnimationFrame(() => {
+          if (!cancelled) {
+            setShowDamageUpdateNoticeModal(true);
+          }
+        });
+      } catch (error) {
+        // Best effort only.
+      }
+    };
+
+    maybeShowDamageUpdateNotice();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isFocused, user?._id]);
+
+  useEffect(() => {
+    if (!isFocused) return;
+    requestAnimationFrame(() => syncDesktopTabBar());
+  }, [isFocused, syncDesktopTabBar]);
+
+  const handleDismissDamageUpdateNotice = async () => {
+    const storageKey = `community_damage_notice_seen_${COMMUNITY_DAMAGE_UPDATE_VERSION}_${user?._id ?? 'guest'}`;
+    try {
+      await AsyncStorage.setItem(storageKey, 'true');
+    } catch (error) {
+      // Best effort only.
+    }
+    setShowDamageUpdateNoticeModal(false);
+  };
 
   // Clear selected post when navigating away from posts tab
   useEffect(() => {
@@ -968,7 +1102,51 @@ const CommunityScreen = () => {
 
   const handlePostImagePress = (storageId: string) => {
     setSelectedImageStorageId(storageId);
+    overlayOpacity.setValue(0);
+    imageModalOpacity.setValue(0);
+    imageModalTranslateY.setValue(300);
     setShowImageModal(true);
+    Animated.parallel([
+      Animated.timing(overlayOpacity, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+      Animated.timing(imageModalOpacity, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+      Animated.spring(imageModalTranslateY, {
+        toValue: 0,
+        tension: 100,
+        friction: 8,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+    ]).start();
+  };
+
+  const closeImageModal = () => {
+    Animated.parallel([
+      Animated.timing(overlayOpacity, {
+        toValue: 0,
+        duration: 250,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+      Animated.timing(imageModalOpacity, {
+        toValue: 0,
+        duration: 250,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+      Animated.timing(imageModalTranslateY, {
+        toValue: 300,
+        duration: 250,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+    ]).start(() => {
+      setShowImageModal(false);
+      setSelectedImageStorageId(null);
+    });
   };
 
   // Helper component for notification house images
@@ -1488,6 +1666,238 @@ const CommunityScreen = () => {
     );
   };
 
+  const getDamageStatusColor = (status: string) => {
+    switch (status) {
+      case 'Pending':
+        return '#f59e0b';
+      case 'In Progress':
+        return '#3b82f6';
+      case 'Resolved':
+        return '#10b981';
+      default:
+        return '#6b7280';
+    }
+  };
+
+  const animateDamageModalIn = () => {
+    Animated.parallel([
+      Animated.timing(overlayOpacity, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+      Animated.timing(damageModalOpacity, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+      Animated.spring(damageModalTranslateY, {
+        toValue: 0,
+        tension: 100,
+        friction: 8,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+    ]).start();
+  };
+
+  const animateDamageModalOut = (callback: () => void) => {
+    Animated.parallel([
+      Animated.timing(overlayOpacity, {
+        toValue: 0,
+        duration: 250,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+      Animated.timing(damageModalOpacity, {
+        toValue: 0,
+        duration: 250,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+      Animated.timing(damageModalTranslateY, {
+        toValue: 300,
+        duration: 250,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+    ]).start(callback);
+  };
+
+  const resetDamageReportModal = () => {
+    setEditingDamageReport(null);
+    setDamageFormData({
+      category: damageCategories[0] ?? 'Park',
+      description: '',
+    });
+    setDamagePhotoUris([]);
+    setDamageExistingPhotoIds([]);
+  };
+
+  const handleCloseDamageReportModal = () => {
+    animateDamageModalOut(() => {
+      setShowDamageReportModal(false);
+      resetDamageReportModal();
+    });
+  };
+
+  const handleOpenDamageReportModal = () => {
+    if (!user?._id) {
+      Alert.alert('Error', 'Please sign in to report damage');
+      return;
+    }
+    resetDamageReportModal();
+    setShowDamageReportModal(true);
+    animateDamageModalIn();
+  };
+
+  const handleEditDamageReport = (report: any) => {
+    if (report.status === 'Resolved') {
+      Alert.alert('Cannot edit', 'Resolved damage reports cannot be edited.');
+      return;
+    }
+    setEditingDamageReport(report);
+    setDamageFormData({
+      category: report.category,
+      description: report.description,
+    });
+    setDamagePhotoUris([]);
+    setDamageExistingPhotoIds(report.photos ?? []);
+    setShowDamageReportModal(true);
+    animateDamageModalIn();
+  };
+
+  const handleDeleteDamageReport = (report: any) => {
+    if (!user?._id) {
+      showAlert({
+        title: 'Error',
+        message: 'Please sign in to delete this report',
+        type: 'error',
+        buttons: [{ text: 'OK', style: 'default' }],
+      });
+      return;
+    }
+
+    showAlert({
+      title: 'Delete damage report?',
+      message: `Remove your ${report.category} damage report? This cannot be undone.`,
+      type: 'warning',
+      buttons: [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setDeletingDamageReportId(report._id);
+              await removeDamageReport({
+                reportId: report._id,
+                requesterId: user._id,
+              });
+            } catch (error: any) {
+              showAlert({
+                title: 'Error',
+                message: error.message || 'Failed to delete damage report',
+                type: 'error',
+                buttons: [{ text: 'OK', style: 'default' }],
+              });
+            } finally {
+              setDeletingDamageReportId(null);
+            }
+          },
+        },
+      ],
+    });
+  };
+
+  const pickDamagePhotos = async () => {
+    try {
+      const remainingSlots = 5 - damageExistingPhotoIds.length - damagePhotoUris.length;
+      if (remainingSlots <= 0) {
+        Alert.alert('Limit reached', 'You can attach up to 5 photos per report.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsMultipleSelection: true,
+        selectionLimit: remainingSlots,
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets.length > 0) {
+        const newUris = result.assets.map((asset) => asset.uri);
+        setDamagePhotoUris((prev) => [...prev, ...newUris].slice(0, 5));
+      }
+    } catch (error) {
+      console.error('Error picking damage photos:', error);
+      Alert.alert('Error', 'Failed to pick photos. Please try again.');
+    }
+  };
+
+  const uploadDamagePhoto = async (imageUri: string): Promise<string> => {
+    const uploadUrl = await generateUploadUrl();
+    const { blob, mimeType } = await getUploadReadyImage(imageUri);
+    const uploadResponse = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': mimeType },
+      body: blob,
+    });
+    const { storageId } = await uploadResponse.json();
+    return storageId;
+  };
+
+  const handleSubmitDamageReport = async () => {
+    if (!damageFormData.description.trim()) {
+      Alert.alert('Error', 'Please describe the damage');
+      return;
+    }
+
+    if (!user?._id) {
+      Alert.alert('Error', 'Please sign in to report damage');
+      return;
+    }
+
+    try {
+      setIsSubmittingDamageReport(true);
+      let photoIds: string[] | undefined;
+
+      if (damagePhotoUris.length > 0) {
+        setUploadingDamagePhotos(true);
+        photoIds = [];
+        for (const uri of damagePhotoUris) {
+          const storageId = await uploadDamagePhoto(uri);
+          photoIds.push(storageId);
+        }
+        setUploadingDamagePhotos(false);
+      }
+
+      if (editingDamageReport) {
+        const allPhotoIds = [...damageExistingPhotoIds, ...(photoIds ?? [])];
+        await updateDamageReport({
+          reportId: editingDamageReport._id,
+          residentId: user._id,
+          category: damageFormData.category,
+          description: damageFormData.description.trim(),
+          photos: allPhotoIds.length > 0 ? allPhotoIds : undefined,
+        });
+      } else {
+        const residentName = `${user.firstName} ${user.lastName}`.trim();
+        await createDamageReport({
+          residentId: user._id,
+          residentName,
+          category: damageFormData.category,
+          description: damageFormData.description.trim(),
+          photos: photoIds,
+        });
+      }
+
+      setShowDamageReportModal(false);
+      resetDamageReportModal();
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to submit damage report');
+    } finally {
+      setIsSubmittingDamageReport(false);
+      setUploadingDamagePhotos(false);
+    }
+  };
+
   // Helper component for pet images
   const PetImage = ({ storageId, isFullScreen = false }: { storageId: string; isFullScreen?: boolean }) => (
     <OptimizedImage
@@ -1536,54 +1946,12 @@ const CommunityScreen = () => {
     }
   };
 
-  // Fixed top (header + nav + sub-tabs) - rendered outside FlatList to prevent flash when list data updates
-  const renderFixedTopContent = () => (
-    <>
-      <Animated.View
-        style={[
-          { opacity: fadeAnim },
-          styles.headerContainerIOS,
-          { width: screenWidth },
-        ]}
-      >
-        <ImageBackground
-          source={Platform.OS === 'ios' ? require('../../assets/hoa-1k.jpg') : require('../../assets/hoa-2k.jpg')}
-          style={[styles.header, !isBoardMember && styles.headerNonMember]}
-          imageStyle={[styles.headerImage, { width: screenWidth }]}
-          resizeMode="stretch"
-        >
-          <View style={styles.headerOverlay} />
-          <View style={styles.headerTop}>
-            {showMobileNav && (
-              <TouchableOpacity style={styles.menuButton} onPress={() => setIsMenuOpen(true)}>
-                <Ionicons name="menu" size={24} color="#ffffff" />
-              </TouchableOpacity>
-            )}
-            <View style={styles.headerLeft}>
-              <View style={styles.titleContainer}>
-                <Text style={styles.headerTitle}>Community Forum</Text>
-              </View>
-              <Text style={styles.headerSubtitle}>Connect with your neighbors and stay informed</Text>
-              <View style={styles.indicatorsContainer}>
-                <DeveloperIndicator />
-                <BoardMemberIndicator />
-              </View>
-            </View>
-            {!isBoardMember && <View style={styles.headerSpacer} />}
-            {isBoardMember && (
-              <View style={styles.headerRight}>
-                <MessagingButton onPress={() => setShowOverlay(true)} />
-              </View>
-            )}
-          </View>
-        </ImageBackground>
-      </Animated.View>
-      {showDesktopNav && (
-        <Animated.View style={{ opacity: fadeAnim }}>
-          <CustomTabBar />
-        </Animated.View>
-      )}
-      <Animated.View style={[styles.subTabContainer, { opacity: fadeAnim }]}>
+  const openCommunityMenu = useCallback(() => setIsMenuOpen(true), []);
+  const openMessagingOverlay = useCallback(() => setShowOverlay(true), [setShowOverlay]);
+
+  const communitySubTabsRow = useMemo(
+    () => (
+      <View style={styles.subTabContainer}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -1596,6 +1964,13 @@ const CommunityScreen = () => {
           >
             <Ionicons name="chatbubbles" size={18} color={activeSubTab === 'posts' ? '#eab308' : '#6b7280'} />
             <Text style={[styles.subTabButtonText, activeSubTab === 'posts' && styles.subTabButtonTextActive]}>Posts</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.subTabButton, activeSubTab === 'damage' && styles.subTabButtonActive]}
+            onPress={() => setActiveSubTab('damage')}
+          >
+            <Ionicons name="construct" size={18} color={activeSubTab === 'damage' ? '#eab308' : '#6b7280'} />
+            <Text style={[styles.subTabButtonText, activeSubTab === 'damage' && styles.subTabButtonTextActive]}>Damage Report</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.subTabButton, activeSubTab === 'polls' && styles.subTabButtonActive]}
@@ -1619,220 +1994,109 @@ const CommunityScreen = () => {
             <Text style={[styles.subTabButtonText, activeSubTab === 'pets' && styles.subTabButtonTextActive]}>Pet Registration</Text>
           </TouchableOpacity>
         </ScrollView>
-      </Animated.View>
-    </>
+      </View>
+    ),
+    [activeSubTab]
   );
 
-  // List header for posts tab only (filter row) - keeps header/nav out of list to avoid flash
-  const renderPostsListHeader = () => (
-    <Animated.View style={[styles.categoryContainer, { opacity: fadeAnim }]}>
-      <View style={styles.filterRow}>
-        <View style={styles.filterLabelContainer}>
-          <Ionicons name="filter" size={16} color="#6b7280" style={styles.filterIcon} />
-          <Text style={styles.filterLabel}>Filter:</Text>
-        </View>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.categoryContent}
-          style={styles.categoryScrollView}
-        >
-          <TouchableOpacity
-            style={[styles.categoryButton, !selectedCategory && styles.categoryButtonActive]}
-            onPress={() => setSelectedCategory(null)}
-          >
-            <Text style={[styles.categoryButtonText, !selectedCategory && styles.categoryButtonTextActive]}>All</Text>
-          </TouchableOpacity>
-          {categories.map((category) => (
-            <TouchableOpacity
-              key={category}
-              style={[styles.categoryButton, selectedCategory === category && styles.categoryButtonActive]}
-              onPress={() => setSelectedCategory(category)}
-            >
-              <Text style={[styles.categoryButtonText, selectedCategory === category && styles.categoryButtonTextActive]}>{category}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-        {showDesktopNav && (
-          <View style={styles.actionButtonsContainer}>
-            <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
-              <TouchableOpacity
-                style={styles.newPostButton}
-                onPress={() => {
-                  animateButtonPress();
-                  setShowNewPostModal(true);
-                  animateIn('post');
-                }}
-              >
-                <Ionicons name="add" size={18} color="#ffffff" />
-                <Text style={styles.newPostButtonText}>New Post</Text>
-              </TouchableOpacity>
-            </Animated.View>
-          </View>
-        )}
-      </View>
-    </Animated.View>
+  const communityHeaderBlock = useMemo(
+    () => (
+      <>
+        <CommunityForumHeader
+          screenWidth={screenWidth}
+          showMobileNav={showMobileNav}
+          isBoardMember={!!isBoardMember}
+          onOpenMenu={openCommunityMenu}
+          onOpenMessaging={openMessagingOverlay}
+        />
+        {showDesktopNav ? <DesktopTabBarSlot /> : null}
+        {communitySubTabsRow}
+      </>
+    ),
+    [
+      screenWidth,
+      showMobileNav,
+      showDesktopNav,
+      isBoardMember,
+      openCommunityMenu,
+      openMessagingOverlay,
+      communitySubTabsRow,
+    ]
   );
+
+  const postsFilterRow = useMemo(
+    () => (
+      <View style={styles.categoryContainer}>
+        <View style={styles.filterRow}>
+          <View style={styles.filterLabelContainer}>
+            <Ionicons name="filter" size={16} color="#6b7280" style={styles.filterIcon} />
+            <Text style={styles.filterLabel}>Filter:</Text>
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.categoryContent}
+            style={styles.categoryScrollView}
+          >
+            <TouchableOpacity
+              style={[styles.categoryButton, !selectedCategory && styles.categoryButtonActive]}
+              onPress={() => setSelectedCategory(null)}
+            >
+              <Text style={[styles.categoryButtonText, !selectedCategory && styles.categoryButtonTextActive]}>All</Text>
+            </TouchableOpacity>
+            {categories.map((category) => (
+              <TouchableOpacity
+                key={category}
+                style={[styles.categoryButton, selectedCategory === category && styles.categoryButtonActive]}
+                onPress={() => setSelectedCategory(category)}
+              >
+                <Text style={[styles.categoryButtonText, selectedCategory === category && styles.categoryButtonTextActive]}>{category}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+          {showDesktopNav && (
+            <View style={styles.actionButtonsContainer}>
+              <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
+                <TouchableOpacity
+                  style={styles.newPostButton}
+                  onPress={() => {
+                    animateButtonPress();
+                    setShowNewPostModal(true);
+                    animateIn('post');
+                  }}
+                >
+                  <Ionicons name="add" size={18} color="#ffffff" />
+                  <Text style={styles.newPostButtonText}>New Post</Text>
+                </TouchableOpacity>
+              </Animated.View>
+            </View>
+          )}
+        </View>
+      </View>
+    ),
+    [selectedCategory, categories, showDesktopNav, buttonScale]
+  );
+
+  const postsListHeaderElement = useMemo(
+    () => (
+      <>
+        {communityHeaderBlock}
+        {postsFilterRow}
+      </>
+    ),
+    [communityHeaderBlock, postsFilterRow]
+  );
+
+  // Header + nav + sub-tabs for the posts tab (scrolls with content like HOA)
+  const renderFixedTopContent = () => communityHeaderBlock;
+
+  const renderPostsListHeader = () => postsFilterRow;
+
+  const renderPostsFullHeader = () => postsListHeaderElement;
 
   const renderTopContent = () => (
     <>
-      {/* Header */}
-      <Animated.View
-        style={[
-          {
-            opacity: fadeAnim,
-          },
-          styles.headerContainerIOS,
-          { width: screenWidth }
-        ]}
-      >
-        <ImageBackground
-          source={Platform.OS === 'ios' ? require('../../assets/hoa-1k.jpg') : require('../../assets/hoa-2k.jpg')}
-          style={[styles.header, !isBoardMember && styles.headerNonMember]}
-          imageStyle={[styles.headerImage, { width: screenWidth }]}
-          resizeMode="stretch"
-        >
-          <View style={styles.headerOverlay} />
-          <View style={styles.headerTop}>
-            {/* Hamburger Menu - Only when mobile nav is shown */}
-            {showMobileNav && (
-              <TouchableOpacity style={styles.menuButton} onPress={() => setIsMenuOpen(true)}>
-                <Ionicons name="menu" size={24} color="#ffffff" />
-              </TouchableOpacity>
-            )}
-
-            <View style={styles.headerLeft}>
-              <View style={styles.titleContainer}>
-                <Text style={styles.headerTitle}>Community Forum</Text>
-              </View>
-              <Text style={styles.headerSubtitle}>Connect with your neighbors and stay informed</Text>
-              <View style={styles.indicatorsContainer}>
-                <DeveloperIndicator />
-                <BoardMemberIndicator />
-              </View>
-            </View>
-
-            {/* Spacer for non-board members to center the text */}
-            {!isBoardMember && <View style={styles.headerSpacer} />}
-
-            {/* Messaging Button - Board Members Only */}
-            {isBoardMember && (
-              <View style={styles.headerRight}>
-                <MessagingButton onPress={() => setShowOverlay(true)} />
-              </View>
-            )}
-          </View>
-        </ImageBackground>
-      </Animated.View>
-
-      {/* Custom Tab Bar - Only when screen is wide enough */}
-      {showDesktopNav && (
-        <Animated.View
-          style={{
-            opacity: fadeAnim,
-          }}
-        >
-          <CustomTabBar />
-        </Animated.View>
-      )}
-
-      {/* Sub-tab Selector (Posts/Notifications/Pets) */}
-      <Animated.View
-        style={[
-          styles.subTabContainer,
-          {
-            opacity: fadeAnim,
-          },
-        ]}
-      >
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.subTabContent}
-          style={styles.subTabScrollView}
-        >
-          <TouchableOpacity
-            style={[styles.subTabButton, activeSubTab === 'posts' && styles.subTabButtonActive]}
-            onPress={() => setActiveSubTab('posts')}
-          >
-            <Ionicons
-              name="chatbubbles"
-              size={18}
-              color={activeSubTab === 'posts' ? '#eab308' : '#6b7280'}
-            />
-            <Text
-              style={[
-                styles.subTabButtonText,
-                activeSubTab === 'posts' && styles.subTabButtonTextActive,
-              ]}
-            >
-              Posts
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.subTabButton, activeSubTab === 'polls' && styles.subTabButtonActive]}
-            onPress={() => setActiveSubTab('polls')}
-          >
-            <Ionicons
-              name="bar-chart"
-              size={18}
-              color={activeSubTab === 'polls' ? '#eab308' : '#6b7280'}
-            />
-            <Text
-              style={[
-                styles.subTabButtonText,
-                activeSubTab === 'polls' && styles.subTabButtonTextActive,
-              ]}
-            >
-              Polls
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.subTabButton,
-              activeSubTab === 'notifications' && styles.subTabButtonActive,
-            ]}
-            onPress={() => setActiveSubTab('notifications')}
-          >
-            <Ionicons
-              name="home"
-              size={18}
-              color={activeSubTab === 'notifications' ? '#eab308' : '#6b7280'}
-            />
-            <Text
-              style={[
-                styles.subTabButtonText,
-                activeSubTab === 'notifications' && styles.subTabButtonTextActive,
-              ]}
-            >
-              Moving/Leaving
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.subTabButton, activeSubTab === 'pets' && styles.subTabButtonActive]}
-            onPress={() => setActiveSubTab('pets')}
-          >
-            <Ionicons
-              name="paw"
-              size={18}
-              color={activeSubTab === 'pets' ? '#eab308' : '#6b7280'}
-            />
-            <Text
-              style={[
-                styles.subTabButtonText,
-                activeSubTab === 'pets' && styles.subTabButtonTextActive,
-              ]}
-            >
-              Pet Registration
-            </Text>
-          </TouchableOpacity>
-        </ScrollView>
-      </Animated.View>
-
-      {/* Category Filter / Type Filter with Action Buttons */}
+      {communityHeaderBlock}
       {activeSubTab === 'posts' ? (
         <Animated.View
           style={[
@@ -2012,6 +2276,28 @@ const CommunityScreen = () => {
             )}
           </View>
         </Animated.View>
+      ) : activeSubTab === 'damage' ? (
+        <Animated.View
+          style={[
+            styles.petsFilterContainer,
+            {
+              opacity: fadeAnim,
+            },
+          ]}
+        >
+          <View style={[styles.filterRow, styles.petsFilterRow]}>
+            {showDesktopNav && (
+              <View style={styles.actionButtonsContainer}>
+                <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
+                  <TouchableOpacity style={styles.addDamageButton} onPress={handleOpenDamageReportModal}>
+                    <Ionicons name="add" size={18} color="#ffffff" />
+                    <Text style={styles.addDamageButtonText}>Report Damage</Text>
+                  </TouchableOpacity>
+                </Animated.View>
+              </View>
+            )}
+          </View>
+        </Animated.View>
       ) : null}
     </>
   );
@@ -2034,11 +2320,17 @@ const CommunityScreen = () => {
 
   const renderPostsEmpty = () => (
     <View style={styles.contentWrapper}>
-      <View style={styles.emptyState}>
-        <Ionicons name="chatbubbles-outline" size={48} color="#9ca3af" />
-        <Text style={styles.emptyStateText}>No posts found</Text>
-        <Text style={styles.emptyStateSubtext}>Be the first to start a conversation!</Text>
-      </View>
+      {postsLoading ? (
+        <View style={styles.emptyState}>
+          <ActivityIndicator size="large" color="#cbd5e1" />
+        </View>
+      ) : (
+        <View style={styles.emptyState}>
+          <Ionicons name="chatbubbles-outline" size={48} color="#9ca3af" />
+          <Text style={styles.emptyStateText}>No posts found</Text>
+          <Text style={styles.emptyStateSubtext}>Be the first to start a conversation!</Text>
+        </View>
+      )}
     </View>
   );
 
@@ -2236,8 +2528,7 @@ const CommunityScreen = () => {
   );
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-      <View style={styles.container}>
+    <SafeAreaView style={styles.safeArea}>
       {/* Mobile Navigation - Only when screen is narrow */}
       {showMobileNav && (
         <MobileTabBar 
@@ -2246,17 +2537,14 @@ const CommunityScreen = () => {
         />
       )}
       
-      {/* Posts List - header/nav outside list to prevent flash when data loads */}
       {activeSubTab === 'posts' ? (
-        <>
-          {renderFixedTopContent()}
-          <Animated.FlatList
-            ref={listRef}
-            data={postsContent}
-            keyExtractor={(item: any) => item._id}
-            renderItem={renderPostItem}
-            ListHeaderComponent={renderPostsListHeader}
-            ListEmptyComponent={renderPostsEmpty}
+        <FlatList
+          ref={listRef}
+          data={postsContent}
+          keyExtractor={(item: any) => item._id}
+          renderItem={renderPostItem}
+          ListHeaderComponent={postsListHeaderElement}
+          ListEmptyComponent={renderPostsEmpty}
           ListFooterComponent={
             canLoadMorePosts ? (
               <View style={styles.listFooter}>
@@ -2264,51 +2552,24 @@ const CommunityScreen = () => {
                 <Text style={styles.listFooterText}>Loading more posts...</Text>
               </View>
             ) : (
-              <View style={styles.footerSpacer} />
+              <View style={styles.spacer} />
             )
           }
-          style={[styles.postsContainer, Platform.OS === 'web' && styles.webScrollContainer]}
-          contentContainerStyle={[
-            styles.scrollContent,
-            Platform.OS === 'web' && { paddingBottom: 100 },
-          ]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator
+          style={[styles.container, Platform.OS === 'web' && styles.webScrollContainer]}
+          contentContainerStyle={[styles.scrollContent, Platform.OS === 'web' && styles.webScrollContent]}
+          {...communityScrollProps}
           onEndReached={handleLoadMorePosts}
           onEndReachedThreshold={0.4}
           initialNumToRender={5}
           maxToRenderPerBatch={5}
           windowSize={5}
-          removeClippedSubviews={false}
-          nestedScrollEnabled={true}
-          />
-        </>
+        />
       ) : (
         <ScrollView
-          style={[styles.postsContainer, Platform.OS === 'web' && styles.webScrollContainer]}
+          ref={scrollViewRef}
+          style={[styles.container, Platform.OS === 'web' && styles.webScrollContainer]}
           contentContainerStyle={[styles.scrollContent, Platform.OS === 'web' && styles.webScrollContent]}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-          showsVerticalScrollIndicator={true}
-          bounces={true}
-          scrollEnabled={true}
-          alwaysBounceVertical={false}
-          nestedScrollEnabled={true}
-          removeClippedSubviews={false}
-          scrollEventThrottle={16}
-          decelerationRate="normal"
-          directionalLockEnabled={true}
-          canCancelContentTouches={true}
-          {...(Platform.OS === 'web' && {
-            onScrollBeginDrag: () => {
-              document.body.style.cursor = 'grabbing';
-              document.body.style.userSelect = 'none';
-            },
-            onScrollEndDrag: () => {
-              document.body.style.cursor = 'grab';
-              document.body.style.userSelect = 'auto';
-            },
-          })}
+          {...communityScrollProps}
         >
           {renderTopContent()}
         
@@ -2505,10 +2766,7 @@ const CommunityScreen = () => {
                         {/* House Image */}
                         {notification.houseImage && (
                           <TouchableOpacity 
-                            onPress={() => {
-                              setSelectedImageStorageId(notification.houseImage);
-                              setShowImageModal(true);
-                            }}
+                            onPress={() => handlePostImagePress(notification.houseImage)}
                             activeOpacity={0.9}
                           >
                             <View style={styles.houseImageContainer}>
@@ -2657,6 +2915,116 @@ const CommunityScreen = () => {
                 </Text>
               </View>
             )
+          ) : activeSubTab === 'damage' ? (
+            myDamageReports.length > 0 ? (
+              <View style={[
+                styles.damageCardsContainer,
+                showMobileNav && styles.damageCardsContainerMobile
+              ]}>
+                {myDamageReports.map((report: any) => (
+                  <Animated.View
+                    key={report._id}
+                    style={[
+                      styles.damageReportCard,
+                      showMobileNav && styles.damageReportCardMobile,
+                      {
+                        opacity: contentAnim,
+                        transform: [{
+                          translateY: contentAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [50, 0],
+                          })
+                        }]
+                      }
+                    ]}
+                  >
+                    <View style={styles.damageReportCardHeader}>
+                      <View style={styles.damageReportCategoryBadge}>
+                        <Ionicons name="construct-outline" size={14} color="#f97316" />
+                        <Text style={styles.damageReportCategoryText}>{report.category}</Text>
+                      </View>
+                      <View style={styles.damageReportCardHeaderRight}>
+                        {report.status !== 'Resolved' ? (
+                          <TouchableOpacity
+                            onPress={() => handleEditDamageReport(report)}
+                            style={styles.damageReportEditButton}
+                            accessibilityLabel="Edit damage report"
+                          >
+                            <Ionicons name="create-outline" size={18} color="#2563eb" />
+                          </TouchableOpacity>
+                        ) : null}
+                        <TouchableOpacity
+                          onPress={() => handleDeleteDamageReport(report)}
+                          style={styles.damageReportEditButton}
+                          disabled={deletingDamageReportId === report._id}
+                          accessibilityLabel="Delete damage report"
+                        >
+                          {deletingDamageReportId === report._id ? (
+                            <ActivityIndicator size="small" color="#dc2626" />
+                          ) : (
+                            <Ionicons name="trash-outline" size={18} color="#dc2626" />
+                          )}
+                        </TouchableOpacity>
+                        <View
+                          style={[
+                            styles.damageReportStatusPill,
+                            { backgroundColor: `${getDamageStatusColor(report.status)}18` },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.damageReportStatusText,
+                              { color: getDamageStatusColor(report.status) },
+                            ]}
+                          >
+                            {report.status}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+
+                    <Text style={styles.damageReportCardDescription}>{report.description}</Text>
+                    <Text style={styles.damageReportCardDate}>
+                      {formatDate(new Date(report.createdAt).toISOString())}
+                    </Text>
+
+                    {report.photos && report.photos.length > 0 ? (
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.damageReportPhotosRow}>
+                        {report.photos.map((photoId: string, index: number) => (
+                          <TouchableOpacity
+                            key={`${report._id}-${index}`}
+                            style={styles.damageReportPhotoThumb}
+                            onPress={() => handlePostImagePress(photoId)}
+                          >
+                            <PostImage
+                              storageId={photoId}
+                              onPress={() => handlePostImagePress(photoId)}
+                              wrapperStyle={styles.damageReportPhotoWrapper}
+                              imageStyle={styles.damageReportPhotoImage}
+                            />
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    ) : null}
+
+                    {report.adminNotes ? (
+                      <View style={styles.damageReportAdminNotes}>
+                        <Text style={styles.damageReportAdminNotesLabel}>Board notes</Text>
+                        <Text style={styles.damageReportAdminNotesText}>{report.adminNotes}</Text>
+                      </View>
+                    ) : null}
+                  </Animated.View>
+                ))}
+              </View>
+            ) : (
+              <View style={styles.emptyState}>
+                <Ionicons name="construct-outline" size={64} color="#9ca3af" />
+                <Text style={styles.emptyStateText}>No damage reports yet</Text>
+                <Text style={styles.emptyStateSubtext}>
+                  Report park, fence, sign, or other community damage
+                </Text>
+              </View>
+            )
           ) : null}
         </View>
         
@@ -2665,36 +3033,85 @@ const CommunityScreen = () => {
       </ScrollView>
       )}
 
-      {/* Floating Action Button for Mobile */}
-      {showMobileNav && (
-        ((activeSubTab === 'polls' && isBoardMember) || 
-         (activeSubTab !== 'polls')) && (
-          <View pointerEvents="box-none" style={{ position: 'absolute', bottom: 150, right: 20, zIndex: 1000, elevation: 10 }}>
-            <Pressable
-              style={({ pressed }) => [
-                styles.floatingActionButton,
-                pressed && { opacity: 0.8 }
-              ]}
-              onPress={() => {
-                animateButtonPress();
-                if (activeSubTab === 'posts') {
-                  setShowNewPostModal(true);
-                  animateIn('post');
-                } else if (activeSubTab === 'polls' && isBoardMember) {
-                  setShowPollModal(true);
-                } else if (activeSubTab === 'notifications') {
-                  handleAddNotification();
-                } else if (activeSubTab === 'pets') {
-                  handleAddPet();
-                }
-              }}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Ionicons name="add" size={28} color="#ffffff" />
-            </Pressable>
-          </View>
-        )
+      {/* Floating Action Button for allowed Community subtabs (hidden when desktop add button is shown) */}
+      {showFloatingAddButton && (
+        <View pointerEvents="box-none" style={styles.floatingActionButtonContainer}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.floatingActionButton,
+              pressed && { opacity: 0.8 }
+            ]}
+            onPress={() => {
+              animateButtonPress();
+              if (activeSubTab === 'posts') {
+                setShowNewPostModal(true);
+                animateIn('post');
+              } else if (activeSubTab === 'polls' && isBoardMember) {
+                setShowPollModal(true);
+              } else if (activeSubTab === 'notifications') {
+                handleAddNotification();
+              } else if (activeSubTab === 'pets') {
+                handleAddPet();
+              } else if (activeSubTab === 'damage') {
+                handleOpenDamageReportModal();
+              }
+            }}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons name="add" size={28} color="#ffffff" />
+          </Pressable>
+        </View>
       )}
+
+      <ScrollToTopButton visible={showScrollToTop} onPress={scrollToTop} />
+
+      <Modal
+        visible={showDamageUpdateNoticeModal}
+        transparent
+        animationType="fade"
+      >
+        <View style={styles.damageUpdateModalOverlay}>
+          <View style={styles.damageUpdateModalContent}>
+            <View style={styles.damageUpdatePreview}>
+              <View style={styles.damageUpdatePreviewHeader}>
+                <Ionicons name="construct" size={18} color="#b45309" />
+                <Text style={styles.damageUpdatePreviewTitle}>Report Damage</Text>
+              </View>
+              <View style={styles.damageUpdatePreviewChipRow}>
+                <View style={[styles.damageUpdatePreviewChip, styles.damageUpdatePreviewChipActive]}>
+                  <Text style={styles.damageUpdatePreviewChipTextActive}>Landscaping</Text>
+                </View>
+                <View style={styles.damageUpdatePreviewChip}>
+                  <Text style={styles.damageUpdatePreviewChipText}>General</Text>
+                </View>
+              </View>
+              <View style={styles.damageUpdatePreviewInput} />
+              <View style={styles.damageUpdatePreviewButton}>
+                <Text style={styles.damageUpdatePreviewButtonText}>Submit Report</Text>
+              </View>
+            </View>
+            <Text style={styles.damageUpdateModalTitle}>New Damage Reports</Text>
+            <Text style={styles.damageUpdateModalMessage}>
+              Open the Damage tab to report issues, add photos, and track status.
+            </Text>
+            <TouchableOpacity
+              style={styles.damageUpdateModalPrimaryButton}
+              onPress={() => {
+                setActiveSubTab('damage');
+                handleDismissDamageUpdateNotice();
+              }}
+            >
+              <Text style={styles.damageUpdateModalPrimaryButtonText}>Open Damage Tab</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.damageUpdateModalSecondaryButton}
+              onPress={handleDismissDamageUpdateNotice}
+            >
+              <Text style={styles.damageUpdateModalSecondaryButtonText}>Got it</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* New Post Modal */}
       <Modal
@@ -3208,20 +3625,36 @@ const CommunityScreen = () => {
       <Modal
         visible={showImageModal}
         transparent={true}
-        animationType="fade"
-        onRequestClose={() => setShowImageModal(false)}
+        animationType="none"
+        onRequestClose={closeImageModal}
       >
-        <View style={styles.imageModalOverlay}>
-          <TouchableOpacity 
-            style={styles.imageModalClose}
-            onPress={() => setShowImageModal(false)}
+        <Animated.View style={[styles.modalOverlay, { opacity: overlayOpacity }]}>
+          <TouchableOpacity
+            style={styles.imageModalBackdropTap}
+            activeOpacity={1}
+            onPress={closeImageModal}
+          />
+          <Animated.View
+            style={[
+              styles.imageModalContent,
+              {
+                opacity: imageModalOpacity,
+                transform: [{ translateY: imageModalTranslateY }],
+              },
+            ]}
           >
-            <Ionicons name="close" size={32} color="#ffffff" />
-          </TouchableOpacity>
-          {selectedImageStorageId && (
-            <HouseImage storageId={selectedImageStorageId} isFullScreen={true} />
-          )}
-        </View>
+            <TouchableOpacity
+              style={styles.imageModalClose}
+              onPress={closeImageModal}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="close" size={20} color="#ffffff" />
+            </TouchableOpacity>
+            {selectedImageStorageId && (
+              <HouseImage storageId={selectedImageStorageId} isFullScreen={true} />
+            )}
+          </Animated.View>
+        </Animated.View>
       </Modal>
 
       {/* Add/Edit Pet Modal */}
@@ -3403,6 +3836,148 @@ const CommunityScreen = () => {
         </Animated.View>
       </Modal>
 
+      {/* Report Damage Modal */}
+      <Modal
+        visible={showDamageReportModal}
+        transparent={true}
+        animationType="none"
+        onRequestClose={handleCloseDamageReportModal}
+      >
+        <Animated.View style={[styles.modalOverlay, { opacity: overlayOpacity }]}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.modalWrapper}
+          >
+            <Animated.View
+              style={[
+                styles.damageReportModalContent,
+                {
+                  opacity: damageModalOpacity,
+                  transform: [{ translateY: damageModalTranslateY }],
+                },
+              ]}
+            >
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>
+                  {editingDamageReport ? 'Edit Damage Report' : 'Report Damage'}
+                </Text>
+                <TouchableOpacity onPress={handleCloseDamageReportModal}>
+                  <Ionicons name="close" size={24} color="#6b7280" />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView
+                style={styles.damageModalForm}
+                contentContainerStyle={styles.damageModalFormContent}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                <Text style={styles.damageModalLabel}>Category</Text>
+                <View style={styles.damageCategoryGrid}>
+                  {damageModalCategories.map((category) => (
+                    <TouchableOpacity
+                      key={category}
+                      style={[
+                        styles.damageCategoryOption,
+                        damageFormData.category === category && styles.damageCategoryOptionActive,
+                      ]}
+                      onPress={() => setDamageFormData((prev) => ({ ...prev, category }))}
+                    >
+                      <Text
+                        style={[
+                          styles.damageCategoryOptionText,
+                          damageFormData.category === category && styles.damageCategoryOptionTextActive,
+                        ]}
+                      >
+                        {category}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <Text style={styles.damageModalLabel}>Description *</Text>
+                <TextInput
+                  style={[styles.textInput, styles.damageDescriptionInput]}
+                  placeholder="Describe the damage and where it is located..."
+                  value={damageFormData.description}
+                  onChangeText={(text) => setDamageFormData((prev) => ({ ...prev, description: text }))}
+                  multiline
+                  textAlignVertical="top"
+                />
+
+                <Text style={styles.damageModalLabel}>Photos (Optional, up to 5)</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.damageUploadPreviewRow}>
+                  {damageExistingPhotoIds.map((photoId, index) => (
+                    <View key={`existing-${photoId}-${index}`} style={styles.damageUploadPreview}>
+                      <PostImage
+                        storageId={photoId}
+                        onPress={() => {}}
+                        wrapperStyle={styles.damageUploadPreviewImageWrapper}
+                        imageStyle={styles.damageUploadPreviewImage}
+                      />
+                      <TouchableOpacity
+                        style={styles.damageUploadRemoveButton}
+                        onPress={() =>
+                          setDamageExistingPhotoIds((prev) =>
+                            prev.filter((_, photoIndex) => photoIndex !== index)
+                          )
+                        }
+                      >
+                        <Ionicons name="close-circle" size={22} color="#ef4444" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  {damagePhotoUris.map((uri, index) => (
+                    <View key={`${uri}-${index}`} style={styles.damageUploadPreview}>
+                      <Image source={{ uri }} style={styles.damageUploadPreviewImage} />
+                      <TouchableOpacity
+                        style={styles.damageUploadRemoveButton}
+                        onPress={() =>
+                          setDamagePhotoUris((prev) => prev.filter((_, photoIndex) => photoIndex !== index))
+                        }
+                      >
+                        <Ionicons name="close-circle" size={22} color="#ef4444" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  {damageExistingPhotoIds.length + damagePhotoUris.length < 5 ? (
+                    <TouchableOpacity style={styles.damageUploadAddButton} onPress={pickDamagePhotos}>
+                      <Ionicons name="camera" size={24} color="#6b7280" />
+                      <Text style={styles.damageUploadAddText}>Add Photo</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </ScrollView>
+              </ScrollView>
+
+              <View style={styles.damageModalFooter}>
+                <TouchableOpacity
+                  style={[
+                    styles.submitButton,
+                    styles.damageModalSubmitButton,
+                    (isSubmittingDamageReport || uploadingDamagePhotos) && styles.submitButtonDisabled,
+                  ]}
+                  onPress={handleSubmitDamageReport}
+                  disabled={isSubmittingDamageReport || uploadingDamagePhotos}
+                >
+                  {isSubmittingDamageReport || uploadingDamagePhotos ? (
+                    <View style={styles.buttonLoadingContainer}>
+                      <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 8 }} />
+                      <Text style={styles.submitButtonText}>
+                        {uploadingDamagePhotos ? 'Uploading photos...' : editingDamageReport ? 'Saving...' : 'Submitting...'}
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text style={styles.submitButtonText}>
+                      {editingDamageReport ? 'Save Changes' : 'Submit Report'}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </Animated.View>
+          </KeyboardAvoidingView>
+        </Animated.View>
+      </Modal>
+
       {/* Poll Modal */}
       <Modal
         key={`poll-modal-${showPollModal}`}
@@ -3539,7 +4114,6 @@ const CommunityScreen = () => {
           </Animated.View>
         </Animated.View>
       </Modal>
-      </View>
       
       {/* Custom Alert */}
       <CustomAlert
@@ -3679,9 +4253,6 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
   floatingActionButton: {
-    position: 'absolute',
-    bottom: -150,
-    right: 20,
     width: 56,
     height: 56,
     borderRadius: 28,
@@ -3693,7 +4264,13 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
-    zIndex: 1000,
+  },
+  floatingActionButtonContainer: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    zIndex: 2000,
+    elevation: 12,
   },
   categoryContainer: {
     backgroundColor: '#f9fafb',
@@ -3784,7 +4361,7 @@ const styles = StyleSheet.create({
     } : {}),
   } as any,
   spacer: {
-    height: Platform.OS === 'web' ? 120 : 80,
+    height: Platform.OS === 'web' ? 200 : 100,
   },
   emptyState: {
     alignItems: 'center',
@@ -3979,9 +4556,6 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 12,
     color: '#6b7280',
-  },
-  footerSpacer: {
-    height: 40,
   },
   commentItem: {
     marginBottom: 12,
@@ -4465,40 +5039,36 @@ const styles = StyleSheet.create({
   // Sub-tab styles
   subTabContainer: {
     backgroundColor: '#ffffff',
-    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
     zIndex: 10,
     elevation: 5,
-    minHeight: 48,
   },
   subTabRow: {
     flexDirection: 'row',
-    paddingHorizontal: 15,
-    gap: 12,
+    paddingHorizontal: 8,
   },
   subTabScrollView: {
     // Don't use flex: 1 - it causes the ScrollView to collapse to 0 height on iOS
     // when the parent derives height from content (circular dependency)
   },
   subTabContent: {
-    paddingHorizontal: 15,
-    gap: 12,
+    paddingHorizontal: 8,
   },
   subTabButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-    backgroundColor: '#f3f4f6',
-    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 6,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
   },
   subTabButtonActive: {
-    backgroundColor: '#eab308' + '20',
+    borderBottomColor: '#eab308',
   },
   subTabButtonText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#6b7280',
     fontWeight: '500',
   },
@@ -4705,33 +5275,42 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 4,
   },
-  imageModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+  imageModalBackdropTap: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  imageModalContent: {
+    width: '94%',
+    maxWidth: 1100,
+    height: '88%',
     justifyContent: 'center',
     alignItems: 'center',
   },
   imageModalClose: {
     position: 'absolute',
-    top: 50,
-    right: 20,
+    top: 12,
+    right: 12,
     zIndex: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   fullImage: {
-    width: '90%',
-    height: '80%',
+    width: '100%',
+    height: '100%',
     alignSelf: 'center',
-    marginTop: 100,
+    borderRadius: 16,
   },
   fullImageLoading: {
-    width: '90%',
-    height: '80%',
+    width: '100%',
+    height: '100%',
     backgroundColor: '#1f2937',
     justifyContent: 'center',
     alignItems: 'center',
     alignSelf: 'center',
-    marginTop: 100,
-    borderRadius: 12,
+    borderRadius: 16,
   },
   // Notification modal styles (shared with post modal, but adding missing ones)
   modalWrapper: {
@@ -4918,6 +5497,171 @@ const styles = StyleSheet.create({
   addPetButtonText: {
     color: '#ffffff',
     fontSize: 14,
+    fontWeight: '600',
+  },
+  addDamageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f97316',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+  },
+  addDamageButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  damageCardsContainer: {
+    flexDirection: 'column',
+    padding: 6,
+    gap: 12,
+  },
+  damageCardsContainerMobile: {
+    padding: 15,
+  },
+  damageReportCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  damageReportCardMobile: {
+    width: '100%',
+  },
+  damageReportCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+    gap: 8,
+  },
+  damageReportCardHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  damageReportEditButton: {
+    padding: 4,
+  },
+  damageReportCategoryBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#fff7ed',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  damageReportCategoryText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#c2410c',
+  },
+  damageReportStatusPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  damageReportStatusText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  damageReportCardDescription: {
+    fontSize: 14,
+    color: '#374151',
+    lineHeight: 20,
+    marginBottom: 8,
+  },
+  damageReportCardDate: {
+    fontSize: 12,
+    color: '#9ca3af',
+    marginBottom: 10,
+  },
+  damageReportPhotosRow: {
+    marginBottom: 10,
+  },
+  damageReportPhotoThumb: {
+    marginRight: 8,
+  },
+  damageReportPhotoWrapper: {
+    width: 88,
+    height: 88,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#f3f4f6',
+  },
+  damageReportPhotoImage: {
+    width: 88,
+    height: 88,
+  },
+  damageReportAdminNotes: {
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  damageReportAdminNotesLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+    marginBottom: 4,
+  },
+  damageReportAdminNotesText: {
+    fontSize: 13,
+    color: '#334155',
+    lineHeight: 18,
+  },
+  damageUploadPreviewRow: {
+    marginBottom: 4,
+  },
+  damageUploadPreview: {
+    width: 72,
+    height: 72,
+    borderRadius: 8,
+    marginRight: 8,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  damageUploadPreviewImageWrapper: {
+    width: '100%',
+    height: '100%',
+  },
+  damageUploadPreviewImage: {
+    width: '100%',
+    height: '100%',
+  },
+  damageUploadRemoveButton: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    backgroundColor: '#ffffff',
+    borderRadius: 999,
+  },
+  damageUploadAddButton: {
+    width: 72,
+    height: 72,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f9fafb',
+  },
+  damageUploadAddText: {
+    fontSize: 11,
+    color: '#6b7280',
+    marginTop: 4,
     fontWeight: '600',
   },
   petsCardsContainer: {
@@ -5116,6 +5860,74 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     elevation: 10,
   },
+  damageReportModalContent: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    width: '95%',
+    maxWidth: 680,
+    maxHeight: Platform.OS === 'web' ? '96%' : '94%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 20,
+    elevation: 10,
+    overflow: 'hidden',
+  },
+  damageModalForm: {
+    maxHeight: Platform.OS === 'web' ? 700 : 580,
+    paddingHorizontal: 20,
+    paddingTop: 4,
+  },
+  damageModalFormContent: {
+    paddingBottom: 8,
+  },
+  damageModalLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  damageCategoryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  damageCategoryOption: {
+    width: '48%',
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#f3f4f6',
+    alignItems: 'center',
+  },
+  damageCategoryOptionActive: {
+    backgroundColor: '#eab308',
+  },
+  damageCategoryOptionText: {
+    fontSize: 13,
+    color: '#6b7280',
+    fontWeight: '600',
+  },
+  damageCategoryOptionTextActive: {
+    color: '#ffffff',
+  },
+  damageDescriptionInput: {
+    height: 160,
+    textAlignVertical: 'top',
+    marginBottom: 12,
+  },
+  damageModalFooter: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
+  damageModalSubmitButton: {
+    marginTop: 0,
+  },
   // Poll modal styles (matching AdminScreen)
   modalForm: {
     maxHeight: 400,
@@ -5128,6 +5940,117 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'flex-end',
     gap: 12,
+  },
+  damageUpdateModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  damageUpdateModalContent: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 16,
+  },
+  damageUpdatePreview: {
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  damageUpdatePreviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  damageUpdatePreviewTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#92400e',
+  },
+  damageUpdatePreviewChipRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 10,
+  },
+  damageUpdatePreviewChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#f3f4f6',
+  },
+  damageUpdatePreviewChipActive: {
+    backgroundColor: '#eab308',
+  },
+  damageUpdatePreviewChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6b7280',
+  },
+  damageUpdatePreviewChipTextActive: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  damageUpdatePreviewInput: {
+    height: 72,
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    marginBottom: 10,
+  },
+  damageUpdatePreviewButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#eab308',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  damageUpdatePreviewButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  damageUpdateModalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1f2937',
+    marginBottom: 6,
+  },
+  damageUpdateModalMessage: {
+    fontSize: 14,
+    color: '#4b5563',
+    lineHeight: 20,
+    marginBottom: 14,
+  },
+  damageUpdateModalPrimaryButton: {
+    backgroundColor: '#eab308',
+    borderRadius: 10,
+    paddingVertical: 11,
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  damageUpdateModalPrimaryButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  damageUpdateModalSecondaryButton: {
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  damageUpdateModalSecondaryButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6b7280',
   },
 });
 

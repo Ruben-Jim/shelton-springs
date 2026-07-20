@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,7 +6,6 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
-  Linking,
   ImageBackground,
   Platform,
   Image,
@@ -14,6 +13,8 @@ import {
   Dimensions,
   ActivityIndicator,
   Modal,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -25,14 +26,47 @@ import { useAuth } from '../context/AuthContext';
 import { useCachedHoaInfo, useCachedResidents } from '../context/QueryCacheContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
-import CustomTabBar from '../components/CustomTabBar';
+import { DesktopTabBarSlot, useDesktopTabBarScrollSync } from '../components/DesktopTabBarLayer';
 import MobileTabBar from '../components/MobileTabBar';
-import { webCompatibleAlert } from '../utils/webCompatibleAlert';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
 import ProfileImage from '../components/ProfileImage';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
+import HomeQuickLinks, { HomeQuickLink } from '../components/home/HomeQuickLinks';
+import HomeAttentionStrip, { HomeAttentionItem } from '../components/home/HomeAttentionStrip';
+import ScrollToTopButton from '../components/ScrollToTopButton';
+import { useScrollToTop } from '../hooks/useScrollToTop';
+
+const RAINBOW_COLORS = [
+  '#ef4444', // Red
+  '#f97316', // Orange
+  '#eab308', // Yellow
+  '#22c55e', // Green
+  '#3b82f6', // Blue
+  '#6366f1', // Indigo
+  '#8b5cf6', // Violet
+  '#ec4899', // Pink
+] as const;
+
+const HOME_UI_UPDATE_NOTICE_VERSION = '2026-07-home-public-ui-v1';
+
+function buildRainbowSectionColors(options: {
+  hasActivePoll: boolean;
+  hasNeighborUpdates: boolean;
+}) {
+  let index = 0;
+  const next = () => RAINBOW_COLORS[index++ % RAINBOW_COLORS.length];
+
+  return {
+    dashboard: next(),
+    events: next(),
+    posts: next(),
+    poll: options.hasActivePoll ? next() : undefined,
+    neighbors: options.hasNeighborUpdates ? next() : undefined,
+    office: next(),
+  };
+}
 
 const HomeScreen = () => {
   const { user } = useAuth();
@@ -40,6 +74,8 @@ const HomeScreen = () => {
   const isFocused = useIsFocused();
   const { setShowOverlay } = useMessaging();
   const isBoardMember = user?.isBoardMember && user?.isActive;
+  const isDev = user?.isDev ?? false;
+  const showFeesAccess = isBoardMember || !user?.isRenter;
   const hoaInfo = useCachedHoaInfo();
   const residents = useCachedResidents();
   // Use paginated queries with small initial limits for home screen (conditional based on screen focus)
@@ -57,6 +93,18 @@ const HomeScreen = () => {
   const userVotes = useQuery(
     api.polls.getAllUserVotes,
     isFocused && user ? { userId: user._id } : "skip"
+  );
+  const residentNotifications = useQuery(
+    api.residentNotifications.getAllActive,
+    isFocused ? {} : "skip"
+  ) ?? [];
+  const myDamageReports = useQuery(
+    api.damageReports.getByResident,
+    isFocused && user?._id ? { residentId: user._id } : "skip"
+  ) ?? [];
+  const hasPaidAnnualFee = useQuery(
+    api.fees.hasPaidAnnualFee,
+    isFocused && user?._id && showFeesAccess ? { userId: user._id } : "skip"
   );
   const voteOnPoll = useMutation(api.polls.vote);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -83,9 +131,20 @@ const HomeScreen = () => {
 
   // Pet registration prompt modal (board requires residents to register pets)
   const [showPetRegistrationModal, setShowPetRegistrationModal] = useState(false);
+  const [petRegistrationConfirmed, setPetRegistrationConfirmed] = useState(true);
+  const [showUiUpdateModal, setShowUiUpdateModal] = useState(false);
   
   // ScrollView ref for better control
   const scrollViewRef = useRef<ScrollView>(null);
+  const { showScrollToTop, scrollToTop, handleScroll: baseHandleScroll } = useScrollToTop(scrollViewRef);
+  const syncDesktopTabBar = useDesktopTabBarScrollSync();
+  const handleScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      baseHandleScroll(event);
+      syncDesktopTabBar();
+    },
+    [baseHandleScroll, syncDesktopTabBar]
+  );
 
   // Animation functions
 
@@ -175,7 +234,9 @@ const HomeScreen = () => {
       if (!user?._id || !isFocused) return;
       try {
         const confirmed = await AsyncStorage.getItem(`pet_registration_confirmed_${user._id}`);
-        if (confirmed !== 'true') {
+        const isConfirmed = confirmed === 'true';
+        setPetRegistrationConfirmed(isConfirmed);
+        if (!isConfirmed) {
           setShowPetRegistrationModal(true);
         }
       } catch (error) {
@@ -185,12 +246,38 @@ const HomeScreen = () => {
     checkPetRegistrationPrompt();
   }, [user?._id, isFocused]);
 
-  const handleContact = (type: 'phone' | 'email') => {
-    if (type === 'phone') {
-      if (hoaInfo?.phone) Linking.openURL(`tel:${hoaInfo.phone}`);
-    } else {
-      if (hoaInfo?.email) Linking.openURL(`mailto:${hoaInfo.email}`);
+  // One-time "What's New" announcement for major public Home UI updates
+  useEffect(() => {
+    if (!isFocused) return;
+
+    let cancelled = false;
+    const storageKey = `home_ui_notice_seen_${HOME_UI_UPDATE_NOTICE_VERSION}_${user?._id ?? 'guest'}`;
+
+    const maybeShowUiUpdateNotice = async () => {
+      try {
+        const seen = await AsyncStorage.getItem(storageKey);
+        if (seen === 'true' || cancelled) return;
+        setShowUiUpdateModal(true);
+      } catch (error) {
+        // Fallback silently if local storage is unavailable.
+      }
+    };
+
+    maybeShowUiUpdateNotice();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isFocused, user?._id]);
+
+  const handleDismissUiUpdateModal = async () => {
+    const storageKey = `home_ui_notice_seen_${HOME_UI_UPDATE_NOTICE_VERSION}_${user?._id ?? 'guest'}`;
+    try {
+      await AsyncStorage.setItem(storageKey, 'true');
+    } catch (error) {
+      // Best effort only.
     }
+    setShowUiUpdateModal(false);
   };
 
   const handlePetRegistrationNotYet = () => {
@@ -206,22 +293,167 @@ const HomeScreen = () => {
         console.error('Error saving pet registration confirmation:', error);
       }
     }
+    setPetRegistrationConfirmed(true);
     setShowPetRegistrationModal(false);
   };
 
-  const handleEmergency = () => {
-    webCompatibleAlert({
-      title: 'Emergency Contact',
-      message: `Call: ${hoaInfo?.emergencyContact ?? ''}`,
-      buttons: [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Call Now', 
-          onPress: () => hoaInfo?.emergencyContact && Linking.openURL(`tel:${hoaInfo.emergencyContact}`) 
-        }
-      ]
-    });
+  const navigateCommunity = (activeSubTab?: 'posts' | 'polls' | 'notifications' | 'pets' | 'damage') => {
+    (navigation as any).navigate('Community', activeSubTab ? { activeSubTab } : undefined);
   };
+
+  const navigateBoard = (activeSubTab?: 'board' | 'covenants' | 'documents') => {
+    (navigation as any).navigate('Board', activeSubTab ? { activeSubTab } : undefined);
+  };
+
+  const filteredPosts = useMemo(
+    () => (communityPosts?.filter((post: any) => post.category !== 'Complaint') ?? []),
+    [communityPosts]
+  );
+
+  const activePoll = useMemo(
+    () => polls.find((poll: any) => poll.isActive) ?? polls[0] ?? null,
+    [polls]
+  );
+
+  const eventLines = useMemo(
+    () => (hoaInfo?.eventText || '').split(/\r?\n/).filter((line: string) => line.trim().length > 0),
+    [hoaInfo?.eventText]
+  );
+
+  const quickLinks = useMemo((): HomeQuickLink[] => {
+    const linkDefs = [
+      {
+        id: 'hoa',
+        label: 'HOA Board',
+        icon: 'business',
+        onPress: () => navigateBoard('board'),
+      },
+      {
+        id: 'community',
+        label: 'Community',
+        icon: 'chatbubbles',
+        onPress: () => navigateCommunity('posts'),
+      },
+      {
+        id: 'covenants',
+        label: 'Rules & Docs',
+        icon: 'document-text',
+        onPress: () => navigateBoard('covenants'),
+      },
+      {
+        id: 'damage',
+        label: 'Report Damage',
+        icon: 'construct-outline',
+        onPress: () => navigateCommunity('damage'),
+      },
+    ];
+
+    if (showFeesAccess) {
+      linkDefs.push({
+        id: 'fees',
+        label: 'Fees',
+        icon: 'card',
+        onPress: () => navigation.navigate('Fees' as never),
+      });
+    }
+
+    if (isBoardMember || isDev) {
+      linkDefs.push({
+        id: 'admin',
+        label: 'Admin',
+        icon: 'settings',
+        onPress: () => navigation.navigate('Admin' as never),
+      });
+    }
+
+    return linkDefs.map((link, index) => ({
+      ...link,
+      color: RAINBOW_COLORS[index % RAINBOW_COLORS.length],
+    }));
+  }, [navigation, showFeesAccess, isBoardMember, isDev]);
+
+  const sectionRainbowColors = useMemo(
+    () =>
+      buildRainbowSectionColors({
+        hasActivePoll: !!activePoll,
+        hasNeighborUpdates: (residentNotifications ?? []).length > 0,
+      }),
+    [activePoll, residentNotifications]
+  );
+
+  const attentionItems = useMemo((): HomeAttentionItem[] => {
+    const items: HomeAttentionItem[] = [];
+
+    if (activePoll?.isActive) {
+      const hasVoted = (selectedPollVotes[activePoll._id]?.length ?? 0) > 0;
+      if (!hasVoted) {
+        const pollTitle =
+          activePoll.title.length > 26 ? `${activePoll.title.slice(0, 26).trim()}…` : activePoll.title;
+        items.push({
+          id: 'poll',
+          label: `Vote · ${pollTitle}`,
+          icon: 'bar-chart',
+          color: '#f97316',
+          onPress: () => navigateCommunity('polls'),
+        });
+      }
+    }
+
+    if (showFeesAccess && hasPaidAnnualFee === false) {
+      items.push({
+        id: 'dues',
+        label: 'Unpaid annual dues',
+        icon: 'card',
+        color: '#ec4899',
+        onPress: () => navigation.navigate('Fees' as never),
+      });
+    }
+
+    if (user?._id && !petRegistrationConfirmed) {
+      items.push({
+        id: 'pet',
+        label: 'Register your pet',
+        icon: 'paw',
+        color: '#eab308',
+        onPress: () => navigateCommunity('pets'),
+      });
+    }
+
+    const openDamageReport = myDamageReports.find(
+      (report: any) => report.status === 'Pending' || report.status === 'In Progress'
+    );
+    if (openDamageReport) {
+      items.push({
+        id: 'damage-status',
+        label: `Damage · ${openDamageReport.status}`,
+        icon: 'construct-outline',
+        color: '#6366f1',
+        onPress: () => navigateCommunity('damage'),
+      });
+    }
+
+    if (residentNotifications.length > 0) {
+      items.push({
+        id: 'moving',
+        label: `${residentNotifications.length} neighbor update${residentNotifications.length === 1 ? '' : 's'}`,
+        icon: 'home',
+        color: '#3b82f6',
+        onPress: () => navigateCommunity('notifications'),
+      });
+    }
+
+    return items;
+  }, [
+    activePoll,
+    selectedPollVotes,
+    showFeesAccess,
+    hasPaidAnnualFee,
+    user?._id,
+    petRegistrationConfirmed,
+    myDamageReports,
+    residentNotifications.length,
+    navigation,
+  ]);
 
   const handleVoteOnPoll = async (pollId: string, optionIndex: number) => {
     if (!user) {
@@ -326,6 +558,7 @@ const HomeScreen = () => {
           nestedScrollEnabled={true}
           removeClippedSubviews={false}
           scrollEventThrottle={16}
+          onScroll={handleScroll}
           // Enhanced desktop scrolling
           decelerationRate="normal"
           directionalLockEnabled={true}
@@ -343,9 +576,6 @@ const HomeScreen = () => {
                 document.body.style.cursor = 'grab';
                 document.body.style.userSelect = 'auto';
               }
-            },
-            onScroll: () => {
-              // Ensure scrolling is working
             },
           })}
         >
@@ -416,55 +646,66 @@ const HomeScreen = () => {
         <Animated.View style={{
           opacity: fadeAnim,
         }}>
-          <CustomTabBar />
+          <DesktopTabBarSlot />
         </Animated.View>
       )}
 
-      {/* Quick Actions */}
-      {/* <Animated.View style={[
-        styles.quickActions,
+      <Animated.View
+        style={[
+          styles.dashboardPanel,
+          !showMobileNav && styles.dashboardPanelDesktop,
+          {
+            opacity: quickActionsAnim,
+            transform: [{
+              translateY: quickActionsAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [30, 0],
+              }),
+            }],
+          },
+        ]}
+      >
+        <HomeAttentionStrip items={attentionItems} embedded />
+        <HomeQuickLinks
+          links={quickLinks}
+          embedded
+          showDivider={attentionItems.length > 0}
+        />
+      </Animated.View>
+
+      {/* Upcoming Events */}
+      <Animated.View style={[
+        styles.section,
+        !showMobileNav && styles.sectionDesktop,
         {
-          opacity: quickActionsAnim,
+          opacity: officeAnim,
           transform: [{
-            translateY: quickActionsAnim.interpolate({
+            translateY: officeAnim.interpolate({
               inputRange: [0, 1],
               outputRange: [50, 0],
             })
           }]
         }
       ]}>
-        <View style={styles.quickActions}>
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => handleContact('phone')}
-          >
-            <Ionicons name="call" size={24} color="#64748b" />
-            <Text style={styles.actionText}>Call Office</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => handleContact('email')}
-          >
-            <Ionicons name="mail" size={24} color="#64748b" />
-            <Text style={styles.actionText}>Email</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={handleEmergency}
-          >
-            <Ionicons name="warning" size={24} color="#64748b" />
-            <Text style={styles.actionText}>Emergency</Text>
-          </TouchableOpacity>
+        <View style={styles.officeHeader}>
+          <Ionicons name="calendar" size={24} color="#64748b" />
+          <Text style={[styles.sectionTitle, { marginLeft: 8, marginBottom: 0 }]}>Upcoming Events</Text>
         </View>
-      </Animated.View> */}
+        <View style={styles.infoCard}>
+          {eventLines.length > 0 ? (
+            eventLines.map((line: string, idx: number) => (
+              <Text key={idx} style={styles.eventText}>{line}</Text>
+            ))
+          ) : (
+            <Text style={styles.eventText}>No upcoming events posted.</Text>
+          )}
+        </View>
+      </Animated.View>
 
       {/* Recent Community Posts */}
-      {(communityPosts?.filter((post: any) => post.category !== 'Complaint') || []).length > 0 && (
       <Animated.View style={[
         styles.section,
-        { borderLeftColor: '#ef4444' }, // Orange
+        !showMobileNav && styles.sectionDesktop,
         {
           opacity: postsAnim,
           transform: [{
@@ -479,78 +720,67 @@ const HomeScreen = () => {
           <Ionicons name="people" size={24} color="#64748b" />
           <Text style={[styles.sectionTitle, { marginLeft: 8, marginBottom: 0 }]}>Recent Community Posts</Text>
         </View>
-        {(communityPosts?.filter((post: any) => post.category !== 'Complaint') || []).slice(0, 2).map((post: any, index: number) => {
-          return (
+        {filteredPosts.length > 0 ? (
+          filteredPosts.slice(0, 3).map((post: any, index: number) => (
             <TouchableOpacity
               key={post._id}
               activeOpacity={0.8}
               onPress={() => {
-                (navigation as any).navigate('Community', {
-                  activeSubTab: 'posts',
-                  selectedPostId: post._id
-                });
+                navigateCommunity('posts');
               }}
             >
-              <Animated.View
-                style={[
-                  styles.postCard,
-                  {
-                    opacity: postsAnim,
-                    transform: [{
-                      translateY: postsAnim.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [30 + (index * 20), 0],
-                      })
-                    }]
-                  }
-                ]}
-              >
-              <View style={styles.postHeader}>
-                <View style={styles.postAuthorInfo}>
-                  <ProfileImage 
-                    source={
-                      post.authorProfileImage || 
-                      (residents?.find((r: any) => `${r.firstName} ${r.lastName}` === post.author)?.profileImage) || 
-                      null
-                    } 
-                    size={40} 
-                    style={{ marginRight: 8 }} 
-                  />
-                  <Text style={styles.postAuthor}>{post.author}</Text>
+              <View style={styles.compactPostCard}>
+                <View style={styles.postHeader}>
+                  <View style={styles.postAuthorInfo}>
+                    <ProfileImage
+                      source={
+                        post.authorProfileImage ||
+                        (residents?.find((r: any) => `${r.firstName} ${r.lastName}` === post.author)?.profileImage) ||
+                        null
+                      }
+                      size={36}
+                      style={{ marginRight: 8 }}
+                    />
+                    <View style={styles.compactPostMeta}>
+                      <Text style={styles.postAuthor} numberOfLines={1}>{post.author}</Text>
+                      <Text style={styles.postTime}>{formatDate(new Date(post.createdAt).toISOString())}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.postCategory} numberOfLines={1}>{post.category}</Text>
                 </View>
-                <Text style={styles.postCategory}>{post.category}</Text>
+                <Text style={styles.compactPostTitle} numberOfLines={1}>{post.title}</Text>
+                <Text style={styles.compactPostContent} numberOfLines={2}>{post.content}</Text>
               </View>
-              <Text style={styles.postTitle}>{post.title}</Text>
-              <Text style={styles.postContent}>
-                {post.content}
-              </Text>
-              
-              <View style={styles.postFooter}>
-                <Text style={styles.postTime}>{formatDate(new Date(post.createdAt).toISOString())}</Text>
-              </View>
-              </Animated.View>
             </TouchableOpacity>
-          );
-        })}
-        
-        {/* View More Button */}
-        <TouchableOpacity
-          style={styles.viewMoreButton}
-          onPress={() => {
-            navigation.navigate('Community' as never);
-          }}
-        >
-          <Text style={styles.viewMoreButtonText}>View More</Text>
-          <Ionicons name="arrow-forward" size={14} color="#ef4444" />
-        </TouchableOpacity>
-      </Animated.View>
-      )}
+          ))
+        ) : (
+          <View style={styles.emptySectionState}>
+            <Ionicons name="chatbubbles-outline" size={28} color="#9ca3af" />
+            <Text style={styles.emptySectionText}>No community posts yet</Text>
+            <TouchableOpacity style={styles.emptySectionButton} onPress={() => navigateCommunity('posts')}>
+              <Text style={styles.emptySectionButtonText}>Browse community</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
-      {/* Recent Polls */}
-      {polls && polls.length > 0 && (
+        {filteredPosts.length > 0 ? (
+          <TouchableOpacity
+            style={styles.viewMoreButton}
+            onPress={() => navigateCommunity('posts')}
+          >
+            <Text style={[styles.viewMoreButtonText, { color: sectionRainbowColors.posts }]}>
+              View all posts
+            </Text>
+            <Ionicons name="arrow-forward" size={14} color={sectionRainbowColors.posts} />
+          </TouchableOpacity>
+        ) : null}
+      </Animated.View>
+
+      {/* Active Poll */}
+      {activePoll ? (
         <Animated.View style={[
           styles.section,
-          { borderLeftColor: '#f97316' }, // Yellow
+          !showMobileNav && styles.sectionDesktop,
           {
             opacity: postsAnim,
             transform: [{
@@ -563,9 +793,13 @@ const HomeScreen = () => {
         ]}>
           <View style={styles.communityHeader}>
             <Ionicons name="bar-chart" size={24} color="#64748b" />
-            <Text style={[styles.sectionTitle, { marginLeft: 8, marginBottom: 0 }]}>Recent Polls</Text>
+            <Text style={[styles.sectionTitle, { marginLeft: 8, marginBottom: 0 }]}>
+              {activePoll.isActive ? 'Active Poll' : 'Recent Poll'}
+            </Text>
           </View>
-          {polls.slice(0, 1).map((poll: any, index: number) => (
+          {(() => {
+            const poll = activePoll;
+            return (
             <Animated.View 
               key={poll._id} 
               style={[
@@ -575,7 +809,7 @@ const HomeScreen = () => {
                   transform: [{
                     translateY: postsAnim.interpolate({
                       inputRange: [0, 1],
-                      outputRange: [30 + (index * 20), 0],
+                      outputRange: [30, 0],
                     })
                   }]
                 }
@@ -667,28 +901,70 @@ const HomeScreen = () => {
                 )}
               </View>
             </Animated.View>
-          ))}
+            );
+          })()}
                 
-          {/* View Poll Button */}
-                <TouchableOpacity 
+          <TouchableOpacity 
             style={[
               styles.viewMoreButton,
               (isMobileDevice || screenWidth < 1024) && styles.viewMoreButtonMobile
             ]}
-                  onPress={() => {
-              (navigation.navigate as any)('Community', { activeSubTab: 'polls' });
-                  }}
-                >
-            <Text style={styles.viewMoreButtonText}>View Poll</Text>
-            <Ionicons name="arrow-forward" size={14} color="#ef4444" />
-                </TouchableOpacity>
+            onPress={() => navigateCommunity('polls')}
+          >
+            <Text style={[styles.viewMoreButtonText, { color: sectionRainbowColors.poll }]}>
+              View all polls
+            </Text>
+            <Ionicons name="arrow-forward" size={14} color={sectionRainbowColors.poll} />
+          </TouchableOpacity>
         </Animated.View>
-      )}
+      ) : null}
+
+      {residentNotifications.length > 0 ? (
+        <Animated.View style={[
+          styles.section,
+          !showMobileNav && styles.sectionDesktop,
+          {
+            opacity: officeAnim,
+            transform: [{
+              translateY: officeAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [50, 0],
+              })
+            }]
+          }
+        ]}>
+          <View style={styles.communityHeader}>
+            <Ionicons name="home" size={24} color="#64748b" />
+            <Text style={[styles.sectionTitle, { marginLeft: 8, marginBottom: 0 }]}>Neighbor Updates</Text>
+          </View>
+          {residentNotifications.slice(0, 2).map((notification: any) => (
+            <TouchableOpacity
+              key={notification._id}
+              style={styles.neighborUpdateCard}
+              activeOpacity={0.85}
+              onPress={() => navigateCommunity('notifications')}
+            >
+              <Text style={styles.neighborUpdateTitle}>
+                {notification.type === 'Selling' ? 'Home for sale' : 'Moving out'} · {notification.residentName}
+              </Text>
+              <Text style={styles.neighborUpdateAddress} numberOfLines={1}>
+                {notification.residentAddress}
+              </Text>
+            </TouchableOpacity>
+          ))}
+          <TouchableOpacity style={styles.viewMoreButton} onPress={() => navigateCommunity('notifications')}>
+            <Text style={[styles.viewMoreButtonText, { color: sectionRainbowColors.neighbors }]}>
+              View all updates
+            </Text>
+            <Ionicons name="arrow-forward" size={14} color={sectionRainbowColors.neighbors} />
+          </TouchableOpacity>
+        </Animated.View>
+      ) : null}
 
       {/* Office Information */}
       <Animated.View style={[
         styles.section,
-        { borderLeftColor: '#eab308' }, // Green
+        !showMobileNav && styles.sectionDesktop,
         {
           opacity: officeAnim,
           transform: [{
@@ -723,72 +999,10 @@ const HomeScreen = () => {
         </View>
       </Animated.View>
       
-      {/* Additional sections for more content - Community Guidelines */}
-      <Animated.View style={[
-        styles.section,
-        { borderLeftColor: '#22c55e' }, // Blue
-        {
-          opacity: officeAnim,
-          transform: [{
-            translateY: officeAnim.interpolate({
-              inputRange: [0, 1],
-              outputRange: [50, 0],
-            })
-          }]
-        }
-      ]}>
-        <View style={styles.officeHeader}>
-          <Ionicons name="information-circle" size={24} color="#64748b" />
-          <Text style={[styles.sectionTitle, { marginLeft: 8, marginBottom: 0 }]}>Community Guidelines</Text>
-        </View>
-        <View style={styles.infoCard}>
-          <Text style={styles.guidelineText}>
-            • Please keep noise levels down during quiet hours (10 PM - 7 AM)
-          </Text>
-          <Text style={styles.guidelineText}>
-            • Maintain your property and common areas clean
-          </Text>
-          <Text style={styles.guidelineText}>
-            • Follow parking regulations and assigned spaces
-          </Text>
-          <Text style={styles.guidelineText}>
-            • Report maintenance issues promptly
-          </Text>
-        </View>
-      </Animated.View>
-      
-      {/* Upcoming Events */}
-      <Animated.View style={[
-        styles.section,
-        { borderLeftColor: '#3b82f6' }, // Indigo
-        {
-          opacity: officeAnim,
-          transform: [{
-            translateY: officeAnim.interpolate({
-              inputRange: [0, 1],
-              outputRange: [50, 0],
-            })
-          }]
-        }
-      ]}>
-        <View style={styles.officeHeader}>
-          <Ionicons name="calendar" size={24} color="#64748b" />
-          <Text style={[styles.sectionTitle, { marginLeft: 8, marginBottom: 0 }]}>Upcoming Events</Text>
-        </View>
-        <View style={styles.infoCard}>
-          {(hoaInfo?.eventText || '').split(/\r?\n/).filter((line: string) => line.trim().length > 0).length > 0 ? (
-            (hoaInfo?.eventText || '').split(/\r?\n/).map((line: string, idx: number) => (
-              <Text key={idx} style={styles.eventText}>{line}</Text>
-            ))
-          ) : (
-            <Text style={styles.eventText}>No upcoming events posted.</Text>
-          )}
-        </View>
-      </Animated.View>
-      
       {/* Final spacer for extra scroll space */}
       <View style={styles.spacer} />
       </ScrollView>
+      <ScrollToTopButton visible={showScrollToTop} onPress={scrollToTop} />
       </View>
 
       
@@ -802,6 +1016,33 @@ const HomeScreen = () => {
         onClose={hideAlert}
         
       />
+
+      {/* Pet Registration Prompt Modal */}
+      <Modal
+        visible={showUiUpdateModal}
+        transparent
+        animationType="fade"
+      >
+        <View style={styles.uiUpdateModalOverlay}>
+          <View style={styles.uiUpdateModalContent}>
+            <Image
+              source={require('../../assets/HOME_UI_UPDATE_NOTICE_VERSION.png')}
+              style={styles.uiUpdateModalImage}
+              resizeMode="contain"
+            />
+            <Text style={styles.uiUpdateModalTitle}>What's New</Text>
+            <Text style={styles.uiUpdateModalMessage}>
+              New HOA tab/content and improved damage report flow are now live.
+            </Text>
+            <TouchableOpacity
+              style={styles.uiUpdateModalButton}
+              onPress={handleDismissUiUpdateModal}
+            >
+              <Text style={styles.uiUpdateModalButtonText}>Got it</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Pet Registration Prompt Modal */}
       <Modal
@@ -1022,7 +1263,8 @@ const styles = StyleSheet.create({
     color: '#64748b',
   },
   section: {
-    margin: 15,
+    marginHorizontal: 15,
+    marginBottom: 12,
     backgroundColor: '#ffffff',
     borderRadius: 16,
     shadowColor: '#000',
@@ -1033,7 +1275,40 @@ const styles = StyleSheet.create({
     padding: 20,
     borderWidth: 1,
     borderColor: '#f1f5f9',
-    borderLeftWidth: 4,
+    borderLeftWidth: 0,
+  },
+  sectionDesktop: {
+    width: '100%',
+    maxWidth: 1120,
+    alignSelf: 'center',
+    marginHorizontal: 0,
+    marginBottom: 16,
+  },
+  dashboardPanel: {
+    marginHorizontal: 15,
+    marginTop: 12,
+    marginBottom: 12,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 14,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+    borderLeftWidth: 0,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  dashboardPanelDesktop: {
+    width: '100%',
+    maxWidth: 1120,
+    alignSelf: 'center',
+    marginHorizontal: 0,
+    marginTop: 16,
+    marginBottom: 16,
   },
   sectionTitle: {
     fontSize: 18,
@@ -1096,11 +1371,74 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
   },
+  compactPostCard: {
+    backgroundColor: '#f8fafc',
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  compactPostMeta: {
+    flex: 1,
+    minWidth: 0,
+  },
+  compactPostTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1f2937',
+    marginBottom: 4,
+  },
+  compactPostContent: {
+    fontSize: 13,
+    color: '#6b7280',
+    lineHeight: 18,
+  },
+  emptySectionState: {
+    alignItems: 'center',
+    paddingVertical: 20,
+    gap: 8,
+  },
+  emptySectionText: {
+    fontSize: 14,
+    color: '#6b7280',
+  },
+  emptySectionButton: {
+    marginTop: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#fef2f2',
+  },
+  emptySectionButtonText: {
+    color: '#ef4444',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  neighborUpdateCard: {
+    backgroundColor: '#eff6ff',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  neighborUpdateTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1e3a8a',
+    marginBottom: 4,
+  },
+  neighborUpdateAddress: {
+    fontSize: 13,
+    color: '#475569',
+  },
   postHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: 8,
+    gap: 8,
   },
   postAuthorInfo: {
     flexDirection: 'row',
@@ -1122,12 +1460,16 @@ const styles = StyleSheet.create({
     color: '#374151',
   },
   postCategory: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#6b7280',
     backgroundColor: '#f3f4f6',
     paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 12,
+    paddingVertical: 3,
+    borderRadius: 999,
+    overflow: 'hidden',
+    flexShrink: 0,
+    maxWidth: 88,
+    textAlign: 'center',
   },
   postTitle: {
     fontSize: 16,
@@ -1206,7 +1548,6 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   viewMoreButtonText: {
-    color: '#ef4444',
     fontSize: 14,
     fontWeight: '600',
   },
@@ -1303,9 +1644,11 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   infoCard: {
-    backgroundColor: '#ffffff',
-    padding: 20,
-    borderRadius: 8,
+    backgroundColor: '#f8fafc',
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
   infoRow: {
     flexDirection: 'row',
@@ -1382,6 +1725,49 @@ const styles = StyleSheet.create({
   petModalButtonText: {
     fontSize: 16,
     fontWeight: '600',
+    color: '#ffffff',
+  },
+  uiUpdateModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  uiUpdateModalContent: {
+    width: '100%',
+    maxWidth: 560,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 16,
+  },
+  uiUpdateModalImage: {
+    width: '100%',
+    height: 280,
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  uiUpdateModalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1f2937',
+    marginBottom: 6,
+  },
+  uiUpdateModalMessage: {
+    fontSize: 14,
+    color: '#4b5563',
+    lineHeight: 20,
+    marginBottom: 14,
+  },
+  uiUpdateModalButton: {
+    backgroundColor: '#2563eb',
+    borderRadius: 10,
+    paddingVertical: 11,
+    alignItems: 'center',
+  },
+  uiUpdateModalButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
     color: '#ffffff',
   },
 });
