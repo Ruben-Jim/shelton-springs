@@ -2,7 +2,7 @@
   "expo": {
     "name": "Shelton Springs",
     "slug": "shelton-springs",
-    "version": "2.9.8",
+    "version": "2.9.11",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "sheltonsprings",
@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/icon.png",
-      "backgroundColor": "#ffffff",
+      "backgroundColor": "#0B1A12",
       "resizeMode": "contain"
     },
     "ios": {
@@ -18,8 +18,8 @@
       "bundleIdentifier": "com.rubenjim.sheltonsprings",
       "buildNumber": "1",
       "splash": {
-        "backgroundColor": "#ffffff",
-        "resizeMode": "cover"
+        "backgroundColor": "#0B1A12",
+        "resizeMode": "contain"
       },
       "infoPlist": {
         "NSCameraUsageDescription": "This app needs camera access to take profile photos and post images (post, pets, sell/moving screens) ",
@@ -41,8 +41,11 @@
         "android.permission.RECEIVE_BOOT_COMPLETED",
         "android.permission.VIBRATE",
         "android.permission.WAKE_LOCK",
-        "android.permission.CAMERA",
-        "android.permission.READ_MEDIA_IMAGES"
+        "android.permission.CAMERA"
+      ],
+      "blockedPermissions": [
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO"
       ],
       "softwareKeyboardLayoutMode": "pan"
     },

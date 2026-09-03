@@ -3,6 +3,7 @@ export type AdminTabId =
   | 'SheltonHOA'
   | 'residents'
   | 'board'
+  | 'communications'
   | 'covenants'
   | 'Community'
   | 'fees';

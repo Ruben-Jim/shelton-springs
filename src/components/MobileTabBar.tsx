@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -14,10 +14,12 @@ import {
   Alert,
   KeyboardAvoidingView,
   ActivityIndicator,
+  AppState,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
@@ -27,6 +29,10 @@ import { useCustomAlert } from '../hooks/useCustomAlert';
 import { confirmAlert } from '../utils/webCompatibleAlert';
 import ProfileImage from './ProfileImage';
 import { getUploadReadyImage } from '../utils/imageUpload';
+import { ensurePhotoLibraryAccess } from '../utils/ensurePhotoLibraryAccess';
+import { promptForNotificationAccess, openNotificationSettings } from '../utils/ensureNotificationAccess';
+import enhancedUnifiedNotificationManager from '../services/EnhancedUnifiedNotificationManager';
+import ProfileSettingsSheet from './profile/ProfileSettingsSheet';
 
 interface TabItem {
   name: string;
@@ -43,6 +49,7 @@ interface MobileTabBarProps {
 const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTabBarProps) => {
   const navigation = useNavigation();
   const route = useRoute();
+  const insets = useSafeAreaInsets();
   const { user, signOut } = useAuth();
   const { alertState, showAlert, hideAlert } = useCustomAlert();
   const [internalMenuOpen, setInternalMenuOpen] = useState(false);
@@ -50,6 +57,8 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
   const [profileImage, setProfileImage] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [requestingNotifications, setRequestingNotifications] = useState(false);
   
   // Get user's profile image from residents table - use cached to prevent duplicates
   const residents = useCachedResidents();
@@ -61,6 +70,7 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
   const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
   const deleteStorageFile = useMutation(api.storage.deleteStorageFile);
   const deleteResident = useMutation(api.residents.remove);
+  const updatePushToken = useMutation(api.residents.updatePushToken);
   
   // Account deletion state
   const [deleting, setDeleting] = useState(false);
@@ -71,6 +81,38 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
   const overlayOpacity = useRef(new Animated.Value(0)).current;
   const profileModalOpacity = useRef(new Animated.Value(0)).current;
   const profileModalTranslateY = useRef(new Animated.Value(300)).current;
+
+  const syncNotificationStatus = useCallback(async (shouldSyncToken = false) => {
+    if (Platform.OS === 'web') return;
+    try {
+      await enhancedUnifiedNotificationManager.initialize();
+      const status = await enhancedUnifiedNotificationManager.refreshPermissionStatus();
+      const granted = status === 'granted';
+      setNotificationsEnabled(granted);
+      if (shouldSyncToken && granted && user?._id) {
+        const token = enhancedUnifiedNotificationManager.getPushToken();
+        if (token && token !== currentUser?.expoPushToken) {
+          await updatePushToken({
+            userId: user._id as any,
+            expoPushToken: token,
+          });
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to refresh notification status:', error);
+    }
+  }, [user?._id, updatePushToken, currentUser?.expoPushToken]);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    syncNotificationStatus(false);
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        syncNotificationStatus(true);
+      }
+    });
+    return () => subscription.remove();
+  }, [syncNotificationStatus]);
 
   const isBoardMember = user?.isBoardMember && user?.isActive;
   const isRenter = user?.isRenter;
@@ -181,11 +223,10 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
 
   const pickImage = async () => {
     try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Required', 'Permission to access camera roll is required!');
-        return;
-      }
+      const allowed = await ensurePhotoLibraryAccess(
+        'Permission to access camera roll is required!'
+      );
+      if (!allowed) return;
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: 'images' as any,
@@ -471,6 +512,71 @@ const handleDeleteAccount = () => {
     }
   };
 
+  const offerNotificationSettings = () => {
+    Alert.alert(
+      'Enable Notifications',
+      'Notifications are turned off for Shelton Springs. Open Settings and turn Notifications on for this app.',
+      [
+        { text: 'Not Now', style: 'cancel' },
+        { text: 'Open Settings', onPress: () => { openNotificationSettings(); } },
+      ]
+    );
+  };
+
+  const handleEnableNotifications = async () => {
+    if (Platform.OS === 'web' || requestingNotifications) return;
+
+    try {
+      setRequestingNotifications(true);
+      const result = await promptForNotificationAccess();
+
+      if (result.granted) {
+        const token = result.token ?? enhancedUnifiedNotificationManager.getPushToken();
+        if (token && user?._id) {
+          try {
+            await updatePushToken({
+              userId: user._id as any,
+              expoPushToken: token,
+            });
+          } catch (error) {
+            console.warn('Failed to save push token:', error);
+          }
+        }
+        setNotificationsEnabled(true);
+        showAlert({
+          title: 'Notifications Enabled',
+          message: 'You will receive community alerts and important updates on this device.',
+          type: 'success',
+        });
+        setTimeout(() => hideAlert(), 2500);
+        return;
+      }
+
+      setNotificationsEnabled(false);
+      if (result.needsSettings) {
+        if (showProfileModal) {
+          animateProfileModalOut(() => {
+            setShowProfileModal(false);
+            setProfileImage(null);
+            setTimeout(offerNotificationSettings, 300);
+          });
+        } else {
+          offerNotificationSettings();
+        }
+      }
+    } catch (error) {
+      console.error('Failed to enable notifications:', error);
+      showAlert({
+        title: 'Error',
+        message: 'Could not update notification settings. Please try again.',
+        type: 'error',
+      });
+      setTimeout(() => hideAlert(), 3000);
+    } finally {
+      setRequestingNotifications(false);
+    }
+  };
+
   return (
     <>
       {/* Mobile Navigation Modal */}
@@ -488,7 +594,7 @@ const handleDeleteAccount = () => {
           />
           <Animated.View style={[styles.sideMenu, { transform: [{ translateX: slideAnim }] }]}>
             {/* Menu Header */}
-            <View style={styles.menuHeader}>
+            <View style={[styles.menuHeader, { paddingTop: Math.max(insets.top, 16) + 20 }]}>
               <View style={styles.menuHeaderLeft}>
                 <Image 
                   source={require('../../assets/favicon.jpg')} 
@@ -548,9 +654,15 @@ const handleDeleteAccount = () => {
               })}
             </ScrollView>
 
-            {/* User Info */}
+            {/* User Info — pad for Android 3-button / gesture nav when edge-to-edge */}
             {user && (
-              <View style={styles.userSection} pointerEvents="box-none">
+              <View
+                style={[
+                  styles.userSection,
+                  { paddingBottom: Math.max(insets.bottom, 16) + 12 },
+                ]}
+                pointerEvents="box-none"
+              >
                 <View style={styles.userInfo} pointerEvents="box-none">
                   <ProfileImage 
                     source={currentUser?.profileImage} 
@@ -613,8 +725,11 @@ const handleDeleteAccount = () => {
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             style={styles.profileModalKeyboardView}
           >
-            <View 
-              style={styles.profileModalOverlay}
+            <View
+              style={[
+                styles.profileModalOverlay,
+                Platform.OS !== 'web' && styles.profileModalOverlayMobile,
+              ]}
               pointerEvents="auto"
             >
               <TouchableOpacity
@@ -630,140 +745,34 @@ const handleDeleteAccount = () => {
                 }}
                 disabled={uploading || removing}
               />
-              <Animated.View
-                style={[
-                  styles.profileModalContent,
-                  {
-                    opacity: profileModalOpacity,
-                    transform: [{ translateY: profileModalTranslateY }],
+              <ProfileSettingsSheet
+                onClose={() => {
+                  if (!uploading && !removing) {
+                    animateProfileModalOut(() => {
+                      setShowProfileModal(false);
+                      setProfileImage(null);
+                    });
                   }
-                ]}
-                pointerEvents="box-none"
-              >
-              <View style={styles.profileModalHeader}>
-                <Text style={styles.profileModalTitle}>Profile Settings</Text>
-                <TouchableOpacity
-                  onPress={() => {
-                    if (!uploading && !removing) {
-                      animateProfileModalOut(() => {
-                        setShowProfileModal(false);
-                        setProfileImage(null);
-                      });
-                    }
-                  }}
-                  disabled={uploading || removing}
-                >
-                  <Ionicons name="close" size={24} color="#374151" />
-                </TouchableOpacity>
-              </View>
-
-              <ScrollView 
-                style={styles.profileModalBody} 
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={styles.profileModalBodyContent}
-                bounces={true}
-              >
-                {/* Large Profile Image Display */}
-                <View style={styles.profileImageDisplayContainer}>
-                  <ProfileImage 
-                    source={profileImage ? profileImage : currentUser?.profileImage} 
-                    size={120}
-                    style={styles.largeProfileImage}
-                    initials={currentUser ? `${currentUser.firstName?.[0] || ''}${currentUser.lastName?.[0] || ''}` : undefined}
-                  />
-                </View>
-
-                {/* Image Editing Controls */}
-                {displayImage && !profileImage ? (
-                  // If there's an existing profile image, only show remove button (cannot add new image)
-                  <View style={styles.imagePickerContainer}>
-                    <TouchableOpacity
-                      style={[styles.removeButton, (removing || uploading) && styles.removeButtonDisabled]}
-                      onPress={handleRemoveProfileImage}
-                      disabled={removing || uploading}
-                    >
-                      {(removing || uploading) ? (
-                        <ActivityIndicator size="small" color="#ffffff" />
-                      ) : (
-                        <>
-                          <Ionicons name="trash-outline" size={20} color="#ffffff" />
-                          <Text style={styles.removeButtonText}>Remove Profile Image</Text>
-                        </>
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                ) : !displayImage && !profileImage ? (
-                  // If no profile image exists, show add buttons (can add new image)
-                  <View style={styles.imagePickerContainer}>
-                    <TouchableOpacity
-                      style={styles.imagePickerButton}
-                      onPress={pickImage}
-                      disabled={removing || uploading}
-                    >
-                      <Ionicons name="image" size={32} color="#6b7280" />
-                      <Text style={styles.imagePickerText}>Choose from Gallery</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={styles.cameraButton}
-                      onPress={takePhoto}
-                      disabled={removing || uploading}
-                    >
-                      <Ionicons name="camera" size={32} color="#6b7280" />
-                      <Text style={styles.imagePickerText}>Take Photo</Text>
-                    </TouchableOpacity>
-                  </View>
-                ) : null}
-
-                {/* Show save and cancel buttons if there's a new image selected */}
-                {profileImage && (
-                  <View style={styles.imagePickerContainer}>
-                    <TouchableOpacity
-                      style={[styles.cancelButton, uploading && styles.cancelButtonDisabled]}
-                      onPress={() => setProfileImage(null)}
-                      disabled={uploading}
-                    >
-                      <Text style={styles.cancelButtonText}>Cancel</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.saveButton, uploading && styles.saveButtonDisabled]}
-                      onPress={handleSaveProfileImage}
-                      disabled={uploading}
-                    >
-                      {uploading ? (
-                        <ActivityIndicator size="small" color="#ffffff" />
-                      ) : (
-                        <Text style={styles.saveButtonText}>Save</Text>
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                )}
-
-                {/* Account Actions Section (always visible) */}
-                <View style={styles.accountActionsSection}>
-                  
-                  {/* Sign Out Button */}
-                  <TouchableOpacity
-                    style={styles.logoutButton}
-                    onPress={handleSignOut}
-                    disabled={uploading || removing || deleting}
-                  >
-                    <Ionicons name="log-out-outline" size={20} color="#ef4444" />
-                    <Text style={styles.logoutButtonText}>Sign Out</Text>
-                  </TouchableOpacity>
-
-                  {/* Delete Account Button */}
-                  <TouchableOpacity
-                    style={styles.deleteAccountButton}
-                    onPress={handleDeleteAccount}
-                    disabled={uploading || removing || deleting}
-                  >
-                    <Ionicons name="trash-outline" size={20} color="#dc2626" />
-                    <Text style={styles.deleteAccountButtonText}>Delete Account</Text>
-                  </TouchableOpacity>
-                </View>
-              </ScrollView>
-              </Animated.View>
+                }}
+                modalOpacity={profileModalOpacity}
+                modalTranslateY={profileModalTranslateY}
+                currentUser={currentUser}
+                profileImage={profileImage}
+                displayImage={displayImage}
+                uploading={uploading}
+                removing={removing}
+                deleting={deleting}
+                notificationsEnabled={notificationsEnabled}
+                requestingNotifications={requestingNotifications}
+                onPickImage={pickImage}
+                onTakePhoto={takePhoto}
+                onRemoveProfileImage={handleRemoveProfileImage}
+                onSaveProfileImage={handleSaveProfileImage}
+                onCancelProfileImage={() => setProfileImage(null)}
+                onEnableNotifications={handleEnableNotifications}
+                onSignOut={handleSignOut}
+                onDeleteAccount={handleDeleteAccount}
+              />
             </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -804,8 +813,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 20,
-    paddingTop: Platform.OS === 'ios' ? 60 : 40,
+    paddingHorizontal: 20,
+    paddingBottom: 20,
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
   },
@@ -878,7 +887,8 @@ const styles = StyleSheet.create({
     ),
   },
   userSection: {
-    padding: 20,
+    paddingHorizontal: 20,
+    paddingTop: 20,
     borderTopWidth: 1,
     borderTopColor: '#e5e7eb',
     backgroundColor: '#f8fafc',
@@ -928,6 +938,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  profileModalOverlayMobile: {
+    justifyContent: 'flex-end',
+    alignItems: 'stretch',
   },
   profileModalOverlayTouchable: {
     flex: 1,
@@ -1120,6 +1134,39 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#e5e7eb',
     gap: 12,
+  },
+  notificationsSection: {
+    marginTop: 8,
+    paddingTop: 20,
+    paddingBottom: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+    gap: 12,
+  },
+  notificationsHint: {
+    fontSize: 14,
+    color: '#6b7280',
+    lineHeight: 20,
+  },
+  notificationButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2563eb',
+    borderRadius: 12,
+    padding: 16,
+    gap: 8,
+  },
+  notificationButtonEnabled: {
+    backgroundColor: '#059669',
+  },
+  notificationButtonDisabled: {
+    opacity: 0.7,
+  },
+  notificationButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   accountActionsSectionTitle: {
     fontSize: 14,

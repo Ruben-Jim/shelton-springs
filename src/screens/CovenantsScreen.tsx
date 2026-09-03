@@ -26,6 +26,12 @@ import { DesktopTabBarSlot, useDesktopTabBarScrollSync } from '../components/Des
 import MobileTabBar from '../components/MobileTabBar';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
+import {
+  HERO_TAB_CONTAINER_STYLE,
+  HERO_TAB_SAFE_AREA_EDGES,
+  HERO_TAB_SAFE_AREA_STYLE,
+} from '../hooks/useHeroHeaderPadding';
+import TabHeroHeader from '../components/TabHeroHeader';
 
 function CovenantAttachmentButton({
   fileStorageId,
@@ -181,8 +187,8 @@ const CovenantsScreen = () => {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
+    <SafeAreaView style={HERO_TAB_SAFE_AREA_STYLE} edges={HERO_TAB_SAFE_AREA_EDGES}>
+      <View style={HERO_TAB_CONTAINER_STYLE}>
       {/* Mobile Navigation - Only when screen is narrow */}
       {showMobileNav && (
         <MobileTabBar 
@@ -224,51 +230,15 @@ const CovenantsScreen = () => {
           onScroll: syncDesktopTabBar,
         })}
       >
-        {/* Header with ImageBackground */}
-        <View style={[styles.headerContainerIOS, { width: screenWidth }]}>
-        <ImageBackground
-          source={require('../../assets/hoa-4k.jpg')}
-          style={[styles.header, !isBoardMember && styles.headerNonMember]}
-          imageStyle={[styles.headerImage, { width: screenWidth }]}
-            resizeMode="stretch"
-        >
-          <View style={styles.headerOverlay} />
-          <View style={styles.headerTop}>
-            {/* Hamburger Menu - Only when mobile nav is shown */}
-            {showMobileNav && (
-              <TouchableOpacity 
-                style={styles.menuButton}
-                onPress={() => setIsMenuOpen(true)}
-              >
-                <Ionicons name="menu" size={24} color="#ffffff" />
-              </TouchableOpacity>
-            )}
-            
-            <View style={styles.headerLeft}>
-              <View style={styles.titleContainer}>
-                <Text style={styles.headerTitle}>Covenants & Rules</Text>
-              </View>
-              <Text style={styles.headerSubtitle}>
-                Community guidelines and regulations
-              </Text>
-              <View style={styles.indicatorsContainer}>
-                <DeveloperIndicator />
-                <BoardMemberIndicator />
-              </View>
-            </View>
-
-            {/* Spacer for non-board members to center the text */}
-            {!isBoardMember && <View style={styles.headerSpacer} />}
-
-            {/* Messaging Button - Board Members Only */}
-            {isBoardMember && (
-              <View style={styles.headerRight}>
-                <MessagingButton onPress={() => setShowOverlay(true)} />
-              </View>
-            )}
-          </View>
-        </ImageBackground>
-        </View>
+        <TabHeroHeader
+          screenWidth={screenWidth}
+          showMobileNav={showMobileNav}
+          isBoardMember={!!isBoardMember}
+          onOpenMenu={() => setIsMenuOpen(true)}
+          onOpenMessaging={() => setShowOverlay(true)}
+          title="Covenants & Rules"
+          subtitle="Community guidelines and regulations"
+        />
 
         {/* Custom Tab Bar - Only when screen is wide enough */}
         {showDesktopNav && (

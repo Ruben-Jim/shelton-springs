@@ -3,7 +3,10 @@ import { Platform } from 'react-native';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
+import { useBrandSplash } from '../context/BrandSplashContext';
+import { usePostLoginPrompts } from '../context/PostLoginPromptsContext';
 import enhancedUnifiedNotificationManager from '../services/EnhancedUnifiedNotificationManager';
+import { askForNotificationPermissionIfNeeded } from '../utils/ensureNotificationAccess';
 
 /**
  * Hook to reactively get user notifications and trigger local push notifications
@@ -11,7 +14,10 @@ import enhancedUnifiedNotificationManager from '../services/EnhancedUnifiedNotif
  */
 export const useUserNotifications = () => {
   const { user } = useAuth();
+  const { visible: splashVisible } = useBrandSplash();
+  const { isPromptBlocked, setNotificationPromptHandled } = usePostLoginPrompts();
   const userId = user?._id ? String(user._id) : undefined;
+  const didAskThisSession = useRef(false);
 
   // Get unread notifications reactively
   const unreadNotifications = useQuery(
@@ -30,114 +36,59 @@ export const useUserNotifications = () => {
   const markAllNotificationsAsRead = useMutation(api.notifications.markAllNotificationsAsRead);
   const updatePushToken = useMutation(api.residents.updatePushToken);
 
-  // Sync Expo push token to server (mobile only) for server-side push notifications
+  // After splash, ask for notifications once per session — before other post-login modals.
   useEffect(() => {
-    if (!user?._id || Platform.OS === 'web') return;
-
-    const syncToken = async () => {
-      const token = enhancedUnifiedNotificationManager.getPushToken();
-      if (token) {
-        try {
-          await updatePushToken({
-            userId: user!._id,
-            expoPushToken: token,
-          });
-        } catch (error) {
-          console.warn('Failed to sync push token:', error);
-        }
-      }
-    };
-
-    // Sync immediately and retry after delay (token may not be ready yet)
-    syncToken();
-    const retryTimer = setTimeout(syncToken, 3000);
-    return () => clearTimeout(retryTimer);
-  }, [user, updatePushToken]);
-
-  // Track which notifications we've already shown to avoid duplicates
-  const shownNotificationIds = useRef<Set<string>>(new Set());
-  // On app restart, don't re-show existing unread; only show notifications that arrive while app is open
-  const hasCompletedInitialLoad = useRef(false);
-
-  // Watch for new notifications and trigger local push notifications
-  useEffect(() => {
-    if (!unreadNotifications || !userId) return;
-
-    const alreadyShown = shownNotificationIds.current;
-
-    // Initial load: mark all existing unread as "shown" without triggering local notifications
-    if (!hasCompletedInitialLoad.current) {
-      hasCompletedInitialLoad.current = true;
-      unreadNotifications.forEach((n) => alreadyShown.add(n._id));
+    if (!user?._id || Platform.OS === 'web') {
+      setNotificationPromptHandled(true);
       return;
     }
+    if (splashVisible || isPromptBlocked) return;
+    if (didAskThisSession.current) return;
 
-    // Subsequent updates: only show local for notifications that arrived after initial load
-    const newNotifications = unreadNotifications.filter(
-      (notification) => !alreadyShown.has(notification._id)
-    );
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      if (cancelled || isPromptBlocked) return;
+      didAskThisSession.current = true;
 
-    // Show local push notification for each new unread notification
-    newNotifications.forEach(async (notification) => {
-      // Mark as shown
-      shownNotificationIds.current.add(notification._id);
-
-      // Determine notification type and priority based on notification.type
-      let notificationType: 'Emergency' | 'Alert' | 'Info' = 'Info';
-      let priority: 'High' | 'Medium' | 'Low' = 'Medium';
-
-      switch (notification.type) {
-        case 'fine':
-        case 'fee':
-        case 'payment_pending':
-          notificationType = 'Alert';
-          priority = 'High';
-          break;
-        case 'board_update':
-          notificationType = 'Alert';
-          priority = 'Medium';
-          break;
-        case 'message':
-          notificationType = 'Alert';
-          priority = 'High';
-          break;
-        case 'poll':
-        case 'community_post':
-        case 'resident_notification':
-        case 'document':
-          notificationType = 'Info';
-          priority = 'Medium';
-          break;
-      }
-
-      // Trigger local push notification
       try {
-        await enhancedUnifiedNotificationManager.sendNotification({
-          title: notification.title,
-          body: notification.body,
-          priority,
-          type: notificationType,
-          category: notification.type,
-          data: {
-            ...notification.data,
-            notificationId: notification._id,
-            notificationType: notification.type,
-            timestamp: notification.createdAt,
-          },
-          sound: true,
-          vibrate: true,
-        });
+        const result = await askForNotificationPermissionIfNeeded();
+        if (cancelled) return;
+        const token = result.token ?? enhancedUnifiedNotificationManager.getPushToken();
+        if (token) {
+          await updatePushToken({
+            userId: user._id,
+            expoPushToken: token,
+          });
+        }
       } catch (error) {
-        console.error('Failed to send local notification:', error);
+        console.warn('Failed to request or sync push token:', error);
+      } finally {
+        if (!cancelled) {
+          setNotificationPromptHandled(true);
+        }
       }
-    });
-  }, [unreadNotifications, userId]);
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    user?._id,
+    splashVisible,
+    isPromptBlocked,
+    updatePushToken,
+    setNotificationPromptHandled,
+  ]);
+
+  // Unread notifications are delivered via server-scheduled Expo push.
+  // Do not mirror them with local scheduleNotificationAsync — that caused duplicates.
 
   // Clean up when user changes
   useEffect(() => {
-    shownNotificationIds.current.clear();
-    hasCompletedInitialLoad.current = false;
-  }, [userId]);
+    didAskThisSession.current = false;
+    setNotificationPromptHandled(false);
+  }, [userId, setNotificationPromptHandled]);
 
   return {
     unreadNotifications: unreadNotifications || [],

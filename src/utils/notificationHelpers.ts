@@ -135,6 +135,28 @@ export const triggerNotification = async (data: NotificationTriggerData): Promis
 };
 
 /**
+ * Persist notification records (and server Expo push on mobile) when available.
+ * Only show an immediate local/browser notification on web or when no server path exists.
+ */
+async function deliverNotification(
+  data: NotificationTriggerData,
+  persist?: () => Promise<void>
+): Promise<void> {
+  if (persist) {
+    try {
+      await persist();
+    } catch (error) {
+      console.error('Failed to create notification records:', error);
+    }
+    if (Platform.OS !== 'web') {
+      return;
+    }
+  }
+
+  await triggerNotification(data);
+}
+
+/**
  * Notification triggers for specific app events
  */
 
@@ -144,37 +166,33 @@ export const notifyNewCommunityPost = async (
   category: string,
   convex?: ConvexReactClient
 ): Promise<void> => {
-  // Send local notification for immediate feedback (post author)
-  await triggerNotification({
-    type: 'community_post',
-    title: 'New Community Post',
-    body: `${author} posted: ${title}`,
-    priority: 'Medium',
-    data: {
-      author,
-      title,
-      category,
+  await deliverNotification(
+    {
+      type: 'community_post',
+      title: 'New Community Post',
+      body: `${author} posted: ${title}`,
+      priority: 'Medium',
+      data: {
+        author,
+        title,
+        category,
+      },
     },
-  });
-
-  // Create notification records for all residents
-  if (convex) {
-    try {
-      await convex.mutation(api.notifications.createNotificationForAllResidents, {
-        type: 'community_post',
-        title: 'New Community Post',
-        body: `${author} posted: ${title}`,
-        data: {
-          author,
-          title,
-          category,
-        },
-      });
-    } catch (error) {
-      console.error('Failed to create notification records for residents:', error);
-      // Don't throw - notification records are non-critical
-    }
-  }
+    convex
+      ? async () => {
+          await convex.mutation(api.notifications.createNotificationForAllResidents, {
+            type: 'community_post',
+            title: 'New Community Post',
+            body: `${author} posted: ${title}`,
+            data: {
+              author,
+              title,
+              category,
+            },
+          });
+        }
+      : undefined
+  );
 };
 
 export const notifyNewComment = async (author: string, postTitle: string): Promise<void> => {
@@ -195,35 +213,31 @@ export const notifyNewPoll = async (
   createdBy: string,
   convex?: ConvexReactClient
 ): Promise<void> => {
-  // Send local notification for immediate feedback (poll creator)
-  await triggerNotification({
-    type: 'poll',
-    title: 'New Poll',
-    body: `${createdBy} created a poll: ${title}`,
-    priority: 'Medium',
-    data: {
-      title,
-      createdBy,
+  await deliverNotification(
+    {
+      type: 'poll',
+      title: 'New Poll',
+      body: `${createdBy} created a poll: ${title}`,
+      priority: 'Medium',
+      data: {
+        title,
+        createdBy,
+      },
     },
-  });
-
-  // Create notification records for all residents
-  if (convex) {
-    try {
-      await convex.mutation(api.notifications.createNotificationForAllResidents, {
-        type: 'poll',
-        title: 'New Poll',
-        body: `${createdBy} created a poll: ${title}`,
-        data: {
-          title,
-          createdBy,
-        },
-      });
-    } catch (error) {
-      console.error('Failed to create notification records for residents:', error);
-      // Don't throw - notification records are non-critical
-    }
-  }
+    convex
+      ? async () => {
+          await convex.mutation(api.notifications.createNotificationForAllResidents, {
+            type: 'poll',
+            title: 'New Poll',
+            body: `${createdBy} created a poll: ${title}`,
+            data: {
+              title,
+              createdBy,
+            },
+          });
+        }
+      : undefined
+  );
 };
 
 export const notifyNewFee = async (
@@ -233,30 +247,29 @@ export const notifyNewFee = async (
   convex?: ConvexReactClient,
   notifyAllResidents?: boolean
 ): Promise<void> => {
-  await triggerNotification({
-    type: 'fee',
-    title: 'New Fee',
-    body: `New fee: ${feeName} - $${amount.toFixed(2)} (Due: ${dueDate})`,
-    priority: 'High',
-    data: {
-      feeName,
-      amount,
-      dueDate,
+  await deliverNotification(
+    {
+      type: 'fee',
+      title: 'New Fee',
+      body: `New fee: ${feeName} - $${amount.toFixed(2)} (Due: ${dueDate})`,
+      priority: 'High',
+      data: {
+        feeName,
+        amount,
+        dueDate,
+      },
     },
-  });
-
-  if (convex && notifyAllResidents) {
-    try {
-      await convex.mutation(api.notifications.createNotificationForAllResidents, {
-        type: 'fee',
-        title: 'New Fee',
-        body: `New fee: ${feeName} - $${amount.toFixed(2)} (Due: ${dueDate})`,
-        data: { feeName, amount, dueDate },
-      });
-    } catch (error) {
-      console.error('Failed to create fee notification records:', error);
-    }
-  }
+    convex && notifyAllResidents
+      ? async () => {
+          await convex.mutation(api.notifications.createNotificationForAllResidents, {
+            type: 'fee',
+            title: 'New Fee',
+            body: `New fee: ${feeName} - $${amount.toFixed(2)} (Due: ${dueDate})`,
+            data: { feeName, amount, dueDate },
+          });
+        }
+      : undefined
+  );
 };
 
 export const notifyOverdueFee = async (feeName: string, amount: number): Promise<void> => {
@@ -280,31 +293,30 @@ export const notifyNewFine = async (
   residentId?: string,
   convex?: ConvexReactClient
 ): Promise<void> => {
-  await triggerNotification({
-    type: 'fine',
-    title: 'New Fine',
-    body: `Fine issued: ${violation} - $${amount.toFixed(2)} (Due: ${dueDate})`,
-    priority: 'High',
-    data: {
-      violation,
-      amount,
-      dueDate,
+  await deliverNotification(
+    {
+      type: 'fine',
+      title: 'New Fine',
+      body: `Fine issued: ${violation} - $${amount.toFixed(2)} (Due: ${dueDate})`,
+      priority: 'High',
+      data: {
+        violation,
+        amount,
+        dueDate,
+      },
     },
-  });
-
-  if (convex && residentId) {
-    try {
-      await convex.mutation(api.notifications.createNotificationForUsers, {
-        userIds: [residentId],
-        type: 'fine',
-        title: 'New Fine',
-        body: `Fine issued: ${violation} - $${amount.toFixed(2)} (Due: ${dueDate})`,
-        data: { violation, amount, dueDate },
-      });
-    } catch (error) {
-      console.error('Failed to create fine notification record:', error);
-    }
-  }
+    convex && residentId
+      ? async () => {
+          await convex.mutation(api.notifications.createNotificationForUsers, {
+            userIds: [residentId],
+            type: 'fine',
+            title: 'New Fine',
+            body: `Fine issued: ${violation} - $${amount.toFixed(2)} (Due: ${dueDate})`,
+            data: { violation, amount, dueDate },
+          });
+        }
+      : undefined
+  );
 };
 
 export const notifyOverdueFine = async (violation: string, amount: number): Promise<void> => {
@@ -342,37 +354,33 @@ export const notifyResidentNotification = async (
   address: string,
   convex?: ConvexReactClient
 ): Promise<void> => {
-  // Send local notification for immediate feedback (notification creator)
-  await triggerNotification({
-    type: 'resident_notification',
-    title: `Resident ${type}`,
-    body: `${residentName} at ${address} is ${type.toLowerCase()}`,
-    priority: 'Medium',
-    data: {
-      type,
-      residentName,
-      address,
+  await deliverNotification(
+    {
+      type: 'resident_notification',
+      title: `Resident ${type}`,
+      body: `${residentName} at ${address} is ${type.toLowerCase()}`,
+      priority: 'Medium',
+      data: {
+        type,
+        residentName,
+        address,
+      },
     },
-  });
-
-  // Create notification records for all residents
-  if (convex) {
-    try {
-      await convex.mutation(api.notifications.createNotificationForAllResidents, {
-        type: 'resident_notification',
-        title: `Resident ${type}`,
-        body: `${residentName} at ${address} is ${type.toLowerCase()}`,
-        data: {
-          type,
-          residentName,
-          address,
-        },
-      });
-    } catch (error) {
-      console.error('Failed to create notification records for residents:', error);
-      // Don't throw - notification records are non-critical
-    }
-  }
+    convex
+      ? async () => {
+          await convex.mutation(api.notifications.createNotificationForAllResidents, {
+            type: 'resident_notification',
+            title: `Resident ${type}`,
+            body: `${residentName} at ${address} is ${type.toLowerCase()}`,
+            data: {
+              type,
+              residentName,
+              address,
+            },
+          });
+        }
+      : undefined
+  );
 };
 
 export const notifyBoardUpdate = async (
@@ -380,29 +388,28 @@ export const notifyBoardUpdate = async (
   details: string,
   convex?: ConvexReactClient
 ): Promise<void> => {
-  await triggerNotification({
-    type: 'board_update',
-    title: 'Board Update',
-    body: `${updateType}: ${details}`,
-    priority: 'Medium',
-    data: {
-      updateType,
-      details,
+  await deliverNotification(
+    {
+      type: 'board_update',
+      title: 'Board Update',
+      body: `${updateType}: ${details}`,
+      priority: 'Medium',
+      data: {
+        updateType,
+        details,
+      },
     },
-  });
-
-  if (convex) {
-    try {
-      await convex.mutation(api.notifications.createNotificationForAllResidents, {
-        type: 'board_update',
-        title: 'Board Update',
-        body: `${updateType}: ${details}`,
-        data: { updateType, details },
-      });
-    } catch (error) {
-      console.error('Failed to create board update notification records:', error);
-    }
-  }
+    convex
+      ? async () => {
+          await convex.mutation(api.notifications.createNotificationForAllResidents, {
+            type: 'board_update',
+            title: 'Board Update',
+            body: `${updateType}: ${details}`,
+            data: { updateType, details },
+          });
+        }
+      : undefined
+  );
 };
 
 export const notifyPendingVenmoPayment = async (
@@ -411,39 +418,35 @@ export const notifyPendingVenmoPayment = async (
   feeType: string,
   convex?: ConvexReactClient
 ): Promise<void> => {
-  // Send local notification for immediate feedback (homeowner)
-  await triggerNotification({
-    type: 'payment_pending',
-    title: '💳 Venmo Payment Pending Verification',
-    body: `${homeownerName} submitted $${amount.toFixed(2)} for ${feeType} - needs verification`,
-    priority: 'High',
-    data: {
-      homeownerName,
-      amount,
-      feeType,
-      pendingVerification: true,
+  await deliverNotification(
+    {
+      type: 'payment_pending',
+      title: '💳 Venmo Payment Pending Verification',
+      body: `${homeownerName} submitted $${amount.toFixed(2)} for ${feeType} - needs verification`,
+      priority: 'High',
+      data: {
+        homeownerName,
+        amount,
+        feeType,
+        pendingVerification: true,
+      },
     },
-  });
-
-  // Create notification records for all board members
-  if (convex) {
-    try {
-      await convex.mutation(api.notifications.createNotificationForBoardMembers, {
-        type: 'payment_pending',
-        title: '💳 Venmo Payment Pending Verification',
-        body: `${homeownerName} submitted $${amount.toFixed(2)} for ${feeType} - needs verification`,
-        data: {
-          homeownerName,
-          amount,
-          feeType,
-          pendingVerification: true,
-        },
-      });
-    } catch (error) {
-      console.error('Failed to create notification records for board members:', error);
-      // Don't throw - notification records are non-critical
-    }
-  }
+    convex
+      ? async () => {
+          await convex.mutation(api.notifications.createNotificationForBoardMembers, {
+            type: 'payment_pending',
+            title: '💳 Venmo Payment Pending Verification',
+            body: `${homeownerName} submitted $${amount.toFixed(2)} for ${feeType} - needs verification`,
+            data: {
+              homeownerName,
+              amount,
+              feeType,
+              pendingVerification: true,
+            },
+          });
+        }
+      : undefined
+  );
 };
 
 export const notifyNewDocument = async (
@@ -452,29 +455,28 @@ export const notifyNewDocument = async (
   uploadedBy: string,
   convex?: ConvexReactClient
 ): Promise<void> => {
-  await triggerNotification({
-    type: 'document',
-    title: `New ${docType} Document`,
-    body: `${uploadedBy} uploaded: ${title}`,
-    priority: 'Medium',
-    data: {
-      title,
-      type: docType,
-      uploadedBy,
+  await deliverNotification(
+    {
+      type: 'document',
+      title: `New ${docType} Document`,
+      body: `${uploadedBy} uploaded: ${title}`,
+      priority: 'Medium',
+      data: {
+        title,
+        type: docType,
+        uploadedBy,
+      },
     },
-  });
-
-  if (convex) {
-    try {
-      await convex.mutation(api.notifications.createNotificationForAllResidents, {
-        type: 'document',
-        title: `New ${docType} Document`,
-        body: `${uploadedBy} uploaded: ${title}`,
-        data: { title, type: docType, uploadedBy },
-      });
-    } catch (error) {
-      console.error('Failed to create document notification records:', error);
-    }
-  }
+    convex
+      ? async () => {
+          await convex.mutation(api.notifications.createNotificationForAllResidents, {
+            type: 'document',
+            title: `New ${docType} Document`,
+            body: `${uploadedBy} uploaded: ${title}`,
+            data: { title, type: docType, uploadedBy },
+          });
+        }
+      : undefined
+  );
 };
 

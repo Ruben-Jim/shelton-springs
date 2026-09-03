@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useAuth } from '../context/AuthContext';
+import { useBrandSplash } from '../context/BrandSplashContext';
 import { AuthStackParamList } from '../navigation/AuthNavigator';
 import { simpleAlert } from '../utils/webCompatibleAlert';
 import CustomAlert from '../components/CustomAlert';
@@ -27,6 +28,7 @@ type LoginScreenNavigationProp = StackNavigationProp<AuthStackParamList, 'Login'
 const LoginScreen = () => {
   const navigation = useNavigation<LoginScreenNavigationProp>();
   const { signIn } = useAuth();
+  const { beginSigningIn, finishSignIn, cancelSigningIn } = useBrandSplash();
   useResetTokenRedirect();
   const convex = useConvex();
   const [formData, setFormData] = useState({
@@ -60,6 +62,7 @@ const LoginScreen = () => {
     }
 
     setIsLoading(true);
+    beginSigningIn();
 
     try {
       // Authenticate user with email and password
@@ -69,6 +72,7 @@ const LoginScreen = () => {
       });
 
       if (!user) {
+        cancelSigningIn();
         showAlert({
           title: 'Login Failed',
           message: 'Invalid email or password. Please try again.',
@@ -79,14 +83,19 @@ const LoginScreen = () => {
       }
 
       await signIn(user);
-      showAlert({
-        title: 'Success',
-        message: 'Logged in successfully!',
-        buttons: [{ text: 'OK', onPress: () => {} }],
-        type: 'success'
-      });
+      if (Platform.OS === 'web') {
+        showAlert({
+          title: 'Success',
+          message: 'Logged in successfully!',
+          buttons: [{ text: 'OK', onPress: () => {} }],
+          type: 'success'
+        });
+      } else {
+        await finishSignIn();
+      }
     } catch (error) {
       console.error('Login error:', error);
+      cancelSigningIn();
       showAlert({
         title: 'Error',
         message: 'Failed to login. Please try again.',

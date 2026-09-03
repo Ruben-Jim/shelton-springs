@@ -220,3 +220,32 @@ export const getUnreadCount = query({
     return notifications.length;
   },
 });
+
+export const markAdminNoticeTicketRead = mutation({
+  args: {
+    userId: v.string(),
+    ticketId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const unreadNotifications = await ctx.db
+      .query("userNotifications")
+      .withIndex("by_user_unread", (q) =>
+        q.eq("userId", args.userId).eq("isRead", false)
+      )
+      .collect();
+
+    const matching = unreadNotifications.filter(
+      (notification) =>
+        notification.type === "admin_notice" &&
+        notification.data?.ticketId === args.ticketId
+    );
+
+    await Promise.all(
+      matching.map((notification) =>
+        ctx.db.patch(notification._id, { isRead: true })
+      )
+    );
+
+    return matching.length;
+  },
+});

@@ -10,6 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notifyPendingVenmoPayment } from '../utils/notificationHelpers';
 import * as ImagePicker from 'expo-image-picker';
 import { getUploadReadyImage } from '../utils/imageUpload';
+import { ensurePhotoLibraryAccess } from '../utils/ensurePhotoLibraryAccess';
 
 interface VenmoCheckoutProps {
   amount: number;
@@ -115,11 +116,10 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
 
   const handlePickReceipt = async () => {
     try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Required', 'Please grant camera roll permissions to upload receipt.');
-        return;
-      }
+      const allowed = await ensurePhotoLibraryAccess(
+        'Please grant camera roll permissions to upload receipt.'
+      );
+      if (!allowed) return;
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,

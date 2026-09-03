@@ -33,6 +33,12 @@ import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
 import ScrollToTopButton from '../components/ScrollToTopButton';
 import { useScrollToTop } from '../hooks/useScrollToTop';
+import {
+  HERO_TAB_CONTAINER_STYLE,
+  HERO_TAB_SAFE_AREA_EDGES,
+  HERO_TAB_SAFE_AREA_STYLE,
+} from '../hooks/useHeroHeaderPadding';
+import TabHeroHeader from '../components/TabHeroHeader';
 
 const FeesScreen = () => {
   const { user } = useAuth();
@@ -297,8 +303,8 @@ const FeesScreen = () => {
   const [showPaymentHistory, setShowPaymentHistory] = useState(false);
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
+    <SafeAreaView style={HERO_TAB_SAFE_AREA_STYLE} edges={HERO_TAB_SAFE_AREA_EDGES}>
+      <View style={HERO_TAB_CONTAINER_STYLE}>
         {/* Mobile Navigation - Only when screen is narrow */}
         {showMobileNav && (
           <MobileTabBar 
@@ -341,59 +347,16 @@ const FeesScreen = () => {
             },
           })}
         >
-        {/* Header */}
-        <Animated.View
-          style={[
-            {
-          opacity: fadeAnim,
-            },
-            styles.headerContainerIOS,
-            { width: screenWidth }
-          ]}
-        >
-          <ImageBackground
-            source={require('../../assets/hoa-4k.jpg')}
-            style={styles.header}
-            imageStyle={[styles.headerImage, { width: screenWidth }]}
-            resizeMode="stretch"
-          >
-            <View style={styles.headerOverlay} />
-            <View style={styles.headerTop}>
-              {/* Hamburger Menu - Only when mobile nav is shown */}
-              {showMobileNav && (
-                <TouchableOpacity
-                  style={styles.menuButton}
-                  onPress={() => setIsMenuOpen(true)}
-                >
-                  <Ionicons name="menu" size={24} color="#ffffff" />
-                </TouchableOpacity>
-              )}
-              
-              <View style={styles.headerLeft}>
-                <View style={styles.titleContainer}>
-                  <Text style={styles.headerTitle}>Fees & Fines</Text>
-                </View>
-                <Text style={styles.headerSubtitle}>
-                  Manage your HOA payments and violations
-                </Text>
-                <View style={styles.indicatorsContainer}>
-                  <DeveloperIndicator />
-                  <BoardMemberIndicator />
-                </View>
-              </View>
-
-              {/* Spacer for non-board members to center the text */}
-              {!isBoardMember && <View style={styles.headerSpacer} />}
-
-              {/* Messaging Button - Board Members Only */}
-              {isBoardMember && (
-                <View style={styles.headerRight}>
-                  <MessagingButton onPress={() => setShowOverlay(true)} />
-                </View>
-              )}
-            </View>
-          </ImageBackground>
-        </Animated.View>
+        <TabHeroHeader
+          screenWidth={screenWidth}
+          showMobileNav={showMobileNav}
+          isBoardMember={!!isBoardMember}
+          onOpenMenu={() => setIsMenuOpen(true)}
+          onOpenMessaging={() => setShowOverlay(true)}
+          title="Fees & Fines"
+          subtitle="Manage your HOA payments and violations"
+          animatedOpacity={fadeAnim}
+        />
 
         {/* Custom Tab Bar - Only when screen is wide enough */}
         {showDesktopNav && (

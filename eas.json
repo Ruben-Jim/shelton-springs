@@ -32,7 +32,7 @@
   "submit": {
     "production": {
       "android": {
-        "track": "alpha",
+        "track": "production",
         "serviceAccountKeyPath": "./credentials/shelton-springs-35b0fbc3c527.json"
       },
       "ios": {

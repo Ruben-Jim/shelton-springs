@@ -42,6 +42,7 @@ import ProfileImage from '../components/ProfileImage';
 import { getBoardMemberPhoto } from '../utils/boardMemberPhoto';
 import OptimizedImage from '../components/OptimizedImage';
 import { getUploadReadyImage } from '../utils/imageUpload';
+import { ensurePhotoLibraryAccess } from '../utils/ensurePhotoLibraryAccess';
 import {
   notifyNewPoll,
   notifyBoardUpdate
@@ -53,13 +54,25 @@ import {
   getIosAppStoreUrl,
 } from '../constants/publicLinks';
 import { useAdminLayout } from '../hooks/useAdminLayout';
-import AdminNav, { AdminMobileMoreSheet } from '../components/admin/AdminNav';
+import AdminNav, { AdminMobileMoreSheet, ADMIN_MOBILE_TAB_BAR_HEIGHT } from '../components/admin/AdminNav';
 import AdminOverview from '../components/admin/AdminOverview';
 import { AdminGrid, AdminGridItem } from '../components/admin/AdminGrid';
 import { AdminTabId, CommunitySubTab } from '../components/admin/types';
 import DamageReportsPanel from '../components/admin/DamageReportsPanel';
+import CommunicationsPanel from '../components/admin/communications/CommunicationsPanel';
+import ComposeNoticeSheet from '../components/admin/communications/ComposeNoticeSheet';
+import { ResidentOption } from '../components/admin/communications/types';
 import ScrollToTopButton from '../components/ScrollToTopButton';
 import { useScrollToTop } from '../hooks/useScrollToTop';
+import TabHeroHeader from '../components/TabHeroHeader';
+import {
+  HERO_BASE_HEIGHT,
+  HERO_HEADER_EXTRA_PADDING,
+  HERO_HEADER_IMAGE,
+  HERO_TAB_CONTAINER_STYLE,
+  HERO_TAB_SAFE_AREA_EDGES,
+  HERO_TAB_SAFE_AREA_STYLE,
+} from '../hooks/useHeroHeaderPadding';
 
 const AdminScreen = () => {
   const { user, updateUser } = useAuth();
@@ -92,6 +105,8 @@ const AdminScreen = () => {
   // State (define early so it can be used in conditional queries)
   const [activeTab, setActiveTab] = useState<AdminTabId>('overview');
   const [showAdminMoreSheet, setShowAdminMoreSheet] = useState(false);
+  const [composeNoticeVisible, setComposeNoticeVisible] = useState(false);
+  const [focusCommunicationsTicketId, setFocusCommunicationsTicketId] = useState<string | null>(null);
   const shareLinkItems = useMemo(
     () =>
       [
@@ -220,6 +235,23 @@ const AdminScreen = () => {
       renters: residents.filter((r: any) => r.isRenter).length,
     };
   }, [residents]);
+
+  const noticeResidentOptions: ResidentOption[] = useMemo(
+    () =>
+      residents
+        .filter((r: any) => r.isActive && !r.isBlocked)
+        .map((r: any) => ({
+          _id: String(r._id),
+          firstName: r.firstName,
+          lastName: r.lastName,
+          email: r.email,
+          address: r.address,
+          unitNumber: r.unitNumber,
+          isRenter: r.isRenter,
+          isResident: r.isResident,
+        })),
+    [residents]
+  );
 
   const adminNavBadges = useMemo(
     () => ({
@@ -888,11 +920,8 @@ const AdminScreen = () => {
 
   const handleCovenantPickImage = async () => {
     try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission required', 'Please allow photo library access.');
-        return;
-      }
+      const allowed = await ensurePhotoLibraryAccess('Please allow photo library access.');
+      if (!allowed) return;
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: false,
@@ -2233,11 +2262,10 @@ const AdminScreen = () => {
   // Image upload functions
   const pickImage = async () => {
     try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Required', 'Please grant camera roll permissions to upload images.');
-        return;
-      }
+      const allowed = await ensurePhotoLibraryAccess(
+        'Please grant camera roll permissions to upload images.'
+      );
+      if (!allowed) return;
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: 'images' as any,
@@ -2346,6 +2374,12 @@ const AdminScreen = () => {
       setPostsSubTab(communitySubTab);
     }
     setActiveTab(tab);
+  };
+
+  const handleAdminNoticeSent = (ticketId: string) => {
+    setComposeNoticeVisible(false);
+    setFocusCommunicationsTicketId(ticketId);
+    setActiveTab('communications');
   };
 
   const renderTabContent = () => {
@@ -2970,6 +3004,20 @@ const AdminScreen = () => {
                 })}
               </AdminGrid>
             )}
+          </View>
+        );
+
+      case 'communications':
+        return (
+          <View style={styles.tabContent}>
+            <CommunicationsPanel
+              residents={residents}
+              useSidebar={useSidebar}
+              isMobileDevice={isMobileDevice}
+              onComposeVisibleChange={setComposeNoticeVisible}
+              focusTicketId={focusCommunicationsTicketId}
+              onFocusTicketHandled={() => setFocusCommunicationsTicketId(null)}
+            />
           </View>
         );
       
@@ -4450,15 +4498,29 @@ const AdminScreen = () => {
     }
   };
 
-  const renderAdminHeader = () => (
-    <View style={[styles.headerContainerIOS, !useSidebar && { width: screenWidth }]}>
+  const renderAdminHeader = () => {
+    if (!useSidebar) {
+      return (
+        <TabHeroHeader
+          screenWidth={screenWidth}
+          showMobileNav={showMobileNav}
+          isBoardMember
+          onOpenMenu={() => setIsMenuOpen(true)}
+          title="Admin Dashboard"
+          subtitle="Manage community content and residents"
+        />
+      );
+    }
+
+    return (
+    <View style={[styles.headerContainerIOS, { width: screenWidth }]}>
       <ImageBackground
-        source={require('../../assets/hoa-4k.jpg')}
-        style={[styles.header, useSidebar && styles.headerCompact]}
-        imageStyle={useSidebar ? styles.headerImageCover : [styles.headerImage, { width: screenWidth }]}
-        resizeMode={useSidebar ? 'cover' : 'stretch'}
+        source={HERO_HEADER_IMAGE}
+        style={[styles.header, styles.headerCompact]}
+        imageStyle={styles.headerImageCover}
+        resizeMode="cover"
       >
-        <View style={[styles.headerOverlay, useSidebar && styles.headerOverlayCompact]} />
+        <View style={[styles.headerOverlay, styles.headerOverlayCompact]} />
         <View style={styles.headerTop}>
           {showMobileNav && (
             <TouchableOpacity
@@ -4484,11 +4546,15 @@ const AdminScreen = () => {
         </View>
       </ImageBackground>
     </View>
-  );
+    );
+  };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={[styles.container, useSidebar && styles.containerWithSidebar]}>
+    <SafeAreaView
+      style={useSidebar ? styles.safeArea : HERO_TAB_SAFE_AREA_STYLE}
+      edges={useSidebar ? undefined : HERO_TAB_SAFE_AREA_EDGES}
+    >
+      <View style={[useSidebar ? styles.container : HERO_TAB_CONTAINER_STYLE, useSidebar && styles.containerWithSidebar]}>
         {!useSidebar && showMobileNav && (
           <MobileTabBar 
             isMenuOpen={isMenuOpen}
@@ -6732,7 +6798,13 @@ const AdminScreen = () => {
           {/* Additional content to ensure scrollable content */}
           <View style={styles.spacer} />
         </ScrollView>
-        <ScrollToTopButton visible={showScrollToTop} onPress={scrollToTop} />
+        <ScrollToTopButton
+          visible={showScrollToTop && !showAdminMoreSheet}
+          onPress={scrollToTop}
+          bottomOffset={
+            !useSidebar && isMobileDevice ? ADMIN_MOBILE_TAB_BAR_HEIGHT + 12 : undefined
+          }
+        />
 
           {!useSidebar && isMobileDevice ? (
             <AdminNav
@@ -6745,6 +6817,14 @@ const AdminScreen = () => {
           ) : null}
         </View>
       </View>
+
+      <ComposeNoticeSheet
+        visible={composeNoticeVisible}
+        onClose={() => setComposeNoticeVisible(false)}
+        onSent={handleAdminNoticeSent}
+        residents={noticeResidentOptions}
+        useDesktopModal={useSidebar || !isMobileDevice}
+      />
 
       {/* Payment Verification Modal */}
       <Modal
@@ -7403,14 +7483,15 @@ const styles = StyleSheet.create({
     marginHorizontal: 0,
   },
   header: {
-    height: 180,
-    padding: 20,
-    paddingTop: 40,
+    height: HERO_BASE_HEIGHT,
+    paddingHorizontal: 20,
+    paddingTop: HERO_HEADER_EXTRA_PADDING,
     paddingBottom: 20,
     position: 'relative',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     width: '100%',
     alignSelf: 'stretch',
+    overflow: 'hidden',
   },
   headerCompact: {
     height: 140,

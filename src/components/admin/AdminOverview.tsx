@@ -32,38 +32,19 @@ export default function AdminOverview({
 }: AdminOverviewProps) {
   const cards: OverviewCard[] = [
     {
+      id: 'communications',
+      title: 'Send Notice',
+      subtitle: 'Compose notices & view delivery history',
+      icon: 'mail',
+      color: '#2563eb',
+    },
+    {
       id: 'residents',
       title: 'Residents',
       subtitle: `${homeownerCount} homeowners · ${renterCount} renters`,
       icon: 'people',
       color: '#10b981',
       stat: String(badges.residents ?? homeownerCount + renterCount),
-    },
-    {
-      id: 'board',
-      title: 'Board',
-      subtitle: 'Manage officers & roles',
-      icon: 'shield',
-      color: '#f59e0b',
-      stat: String(badges.board ?? 0),
-    },
-    {
-      id: 'Community',
-      title: 'Community',
-      subtitle:
-        (badges.complaints ?? 0) > 0 || (badges.pendingDamage ?? 0) > 0
-          ? [
-              (badges.complaints ?? 0) > 0 ? `${badges.complaints} complaint${badges.complaints === 1 ? '' : 's'}` : null,
-              (badges.pendingDamage ?? 0) > 0 ? `${badges.pendingDamage} damage report${badges.pendingDamage === 1 ? '' : 's'}` : null,
-            ].filter(Boolean).join(' · ')
-          : 'Damage, posts, polls, pets & moderation',
-      icon: 'chatbubbles',
-      color: '#3b82f6',
-      alert: (badges.complaints ?? 0) > 0 || (badges.pendingDamage ?? 0) > 0,
-      stat:
-        (badges.complaints ?? 0) > 0 || (badges.pendingDamage ?? 0) > 0
-          ? String((badges.complaints ?? 0) + (badges.pendingDamage ?? 0))
-          : undefined,
     },
     {
       id: 'fees',
@@ -76,6 +57,38 @@ export default function AdminOverview({
       color: '#ec4899',
       alert: (badges.pendingPayments ?? 0) > 0,
       stat: (badges.pendingPayments ?? 0) > 0 ? String(badges.pendingPayments) : undefined,
+    },
+    {
+      id: 'Community',
+      title: 'Community',
+      subtitle:
+        (badges.complaints ?? 0) > 0 || (badges.pendingDamage ?? 0) > 0
+          ? [
+              (badges.complaints ?? 0) > 0
+                ? `${badges.complaints} complaint${badges.complaints === 1 ? '' : 's'}`
+                : null,
+              (badges.pendingDamage ?? 0) > 0
+                ? `${badges.pendingDamage} damage report${badges.pendingDamage === 1 ? '' : 's'}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')
+          : 'Damage, posts, polls, pets & moderation',
+      icon: 'chatbubbles',
+      color: '#3b82f6',
+      alert: (badges.complaints ?? 0) > 0 || (badges.pendingDamage ?? 0) > 0,
+      stat:
+        (badges.complaints ?? 0) > 0 || (badges.pendingDamage ?? 0) > 0
+          ? String((badges.complaints ?? 0) + (badges.pendingDamage ?? 0))
+          : undefined,
+    },
+    {
+      id: 'board',
+      title: 'Board',
+      subtitle: 'Manage officers & roles',
+      icon: 'shield',
+      color: '#f59e0b',
+      stat: String(badges.board ?? 0),
     },
     {
       id: 'covenants',
@@ -178,7 +191,7 @@ const styles = StyleSheet.create({
   subheading: {
     fontSize: 14,
     color: '#6b7280',
-    marginBottom: 16,
+    marginBottom: 14,
     lineHeight: 20,
   },
   alertRow: {

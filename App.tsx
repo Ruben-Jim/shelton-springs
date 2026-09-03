@@ -1,5 +1,5 @@
 import React, { useMemo, useEffect, useState, useRef, useCallback } from 'react';
-import { StatusBar } from 'expo-status-bar';
+import DynamicStatusBar from './src/components/DynamicStatusBar';
 import { StyleSheet, Text, View, Platform, ScrollView } from 'react-native';
 import {
   NavigationContainer,
@@ -21,10 +21,14 @@ import enhancedUnifiedNotificationManager from './src/services/EnhancedUnifiedNo
 import MessagingOverlay from './src/components/MessagingOverlay';
 import MinimizedMessageBubble from './src/components/MinimizedMessageBubble';
 import ErrorBoundary from './src/components/ErrorBoundary';
-import AnimatedSplashScreen from './src/components/AnimatedSplashScreen';
+import BrandSplashScreen from './src/components/BrandSplashScreen';
+import { BrandSplashProvider } from './src/context/BrandSplashContext';
+import { PostLoginPromptsProvider } from './src/context/PostLoginPromptsContext';
 import { DesktopTabBarProvider } from './src/components/DesktopTabBarLayer';
 import IosAppUpdatePrompt from './src/components/IosAppUpdatePrompt';
 import { useUserNotifications } from './src/hooks/useUserNotifications';
+import { useNotificationNavigation, onNavigationReadyForNotifications } from './src/hooks/useNotificationNavigation';
+import { registerNotificationNavigationRef } from './src/navigation/notificationNavigation';
 
 import HomeScreen from './src/screens/HomeScreen';
 import BoardScreen from './src/screens/BoardScreen';
@@ -34,6 +38,7 @@ import DocumentsScreen from './src/screens/DocumentsScreen';
 import FeesScreen from './src/screens/FeesScreen';
 import BlockedAccountScreen from './src/screens/BlockedAccountScreen';
 import AdminScreen from './src/screens/AdminScreen';
+import ResidentNoticeScreen from './src/screens/ResidentNoticeScreen';
 
 const Stack = createStackNavigator();
 const navigationRef = createNavigationContainerRef();
@@ -48,13 +53,17 @@ const MainAppContent = ({ activeRouteName, onTabNavigate }: MainAppContentProps)
   const { showOverlay, setShowOverlay } = useMessaging();
   // Initialize notification hook to reactively get and display notifications
   useUserNotifications();
+  useNotificationNavigation(isAuthenticated);
 
   if (isLoading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>Loading...</Text>
-      </View>
-    );
+    if (Platform.OS === 'web') {
+      return (
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Loading...</Text>
+        </View>
+      );
+    }
+    return null;
   }
 
   if (!isAuthenticated) {
@@ -86,6 +95,7 @@ const MainAppContent = ({ activeRouteName, onTabNavigate }: MainAppContentProps)
         <Stack.Screen name="Community" component={CommunityScreen} />
         <Stack.Screen name="Documents" component={DocumentsScreen} />
         <Stack.Screen name="Fees" component={FeesScreen} />
+        <Stack.Screen name="ResidentNotice" component={ResidentNoticeScreen} />
         {(isBoardMember || isDev) && (
           <Stack.Screen 
             name="Admin" 
@@ -184,8 +194,6 @@ export default function App() {
   };
   
   const [notificationInitAttempted, setNotificationInitAttempted] = useState(false);
-  // Only show splash screen on iOS and Android, not on web
-  const [showSplash, setShowSplash] = useState(Platform.OS !== 'web');
   
   // Persistent navigation state
   const [isReady, setIsReady] = React.useState(false);
@@ -287,6 +295,8 @@ export default function App() {
   };
 
   const handleNavigationReady = useCallback(() => {
+    registerNotificationNavigationRef(navigationRef);
+    onNavigationReadyForNotifications();
     if (navigationRef.isReady()) {
       setActiveRouteName(getActiveRouteName(navigationRef.getRootState()));
     }
@@ -298,23 +308,16 @@ export default function App() {
     }
   }, []);
 
-  // Show animated splash screen first (only on iOS and Android)
-  // This must be after all hooks are called
-  if (showSplash && Platform.OS !== 'web') {
-    return (
-      <AnimatedSplashScreen
-        videoSource={require('./assets/splash-icon.mp4')}
-        onFinish={() => setShowSplash(false)}
-      />
-    );
-  }
-
   if (!isReady) {
     return (
       <SafeAreaProvider>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Loading...</Text>
-        </View>
+        {Platform.OS === 'web' ? (
+          <View style={styles.loadingContainer}>
+            <Text style={styles.loadingText}>Loading...</Text>
+          </View>
+        ) : (
+          <BrandSplashScreen status="loading" progress={0.22} />
+        )}
       </SafeAreaProvider>
     );
   }
@@ -336,40 +339,48 @@ export default function App() {
       {convex ? (
         <ConvexProvider client={convex}>
           <AuthProvider>
-            <QueryCacheProvider>
-              <MessagingProvider>
-                <NavigationContainer
-                  ref={navigationRef}
-                  initialState={initialState}
-                  onStateChange={onStateChange}
-                  onReady={handleNavigationReady}
-                >
-                  <MainAppContent
-                    activeRouteName={activeRouteName}
-                    onTabNavigate={handleTabNavigate}
-                  />
-                  <StatusBar style="dark" />
-                </NavigationContainer>
-              </MessagingProvider>
-            </QueryCacheProvider>
+            <BrandSplashProvider>
+              <PostLoginPromptsProvider>
+              <QueryCacheProvider>
+                <MessagingProvider>
+                  <NavigationContainer
+                    ref={navigationRef}
+                    initialState={initialState}
+                    onStateChange={onStateChange}
+                    onReady={handleNavigationReady}
+                  >
+                    <MainAppContent
+                      activeRouteName={activeRouteName}
+                      onTabNavigate={handleTabNavigate}
+                    />
+                    <DynamicStatusBar routeName={activeRouteName} />
+                  </NavigationContainer>
+                </MessagingProvider>
+              </QueryCacheProvider>
+              </PostLoginPromptsProvider>
+            </BrandSplashProvider>
           </AuthProvider>
         </ConvexProvider>
       ) : (
         <AuthProvider>
-          <MessagingProvider>
-            <NavigationContainer
-              ref={navigationRef}
-              initialState={initialState}
-              onStateChange={onStateChange}
-              onReady={handleNavigationReady}
-            >
-              <MainAppContent
-                activeRouteName={activeRouteName}
-                onTabNavigate={handleTabNavigate}
-              />
-              <StatusBar style="dark" />
-            </NavigationContainer>
-          </MessagingProvider>
+          <BrandSplashProvider>
+            <PostLoginPromptsProvider>
+            <MessagingProvider>
+              <NavigationContainer
+                ref={navigationRef}
+                initialState={initialState}
+                onStateChange={onStateChange}
+                onReady={handleNavigationReady}
+              >
+                <MainAppContent
+                  activeRouteName={activeRouteName}
+                  onTabNavigate={handleTabNavigate}
+                />
+                <DynamicStatusBar routeName={activeRouteName} />
+              </NavigationContainer>
+            </MessagingProvider>
+            </PostLoginPromptsProvider>
+          </BrandSplashProvider>
         </AuthProvider>
       )}
     </SafeAreaProvider>

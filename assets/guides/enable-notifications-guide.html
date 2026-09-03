@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Enable Notifications — Shelton Springs</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", sans-serif;
+      background: #E8EAED;
+      color: #1f2937;
+      padding: 40px;
+    }
+    .canvas {
+      width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 32px;
+      align-items: start;
+    }
+    .step-label {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #6b7280;
+      margin-bottom: 12px;
+    }
+    .phone {
+      width: 390px;
+      height: 844px;
+      border-radius: 44px;
+      background: #000;
+      padding: 10px;
+      box-shadow: 0 24px 60px rgba(0,0,0,0.18);
+    }
+    .screen {
+      width: 100%;
+      height: 100%;
+      border-radius: 36px;
+      overflow: hidden;
+      background: #F2F2F7;
+      position: relative;
+    }
+    .status-bar {
+      height: 54px;
+      padding: 14px 24px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .app-header {
+      background: #0B1A12;
+      color: #fff;
+      padding: 12px 20px 16px;
+    }
+    .app-header h1 { font-size: 22px; font-weight: 700; }
+    .app-header p { font-size: 13px; opacity: 0.75; margin-top: 2px; }
+    .home-body { padding: 16px; }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .card h2 { font-size: 16px; margin-bottom: 6px; }
+    .card p { font-size: 14px; color: #6b7280; line-height: 1.45; }
+    .tab-bar {
+      position: absolute;
+      left: 0; right: 0; bottom: 0;
+      height: 84px;
+      background: rgba(255,255,255,0.96);
+      border-top: 1px solid rgba(60,60,67,0.12);
+      display: flex;
+      justify-content: space-around;
+      align-items: flex-start;
+      padding-top: 8px;
+    }
+    .tab { text-align: center; width: 72px; color: #9ca3af; font-size: 10px; font-weight: 500; }
+    .tab.active { color: #2563eb; }
+    .tab-icon {
+      width: 26px; height: 26px; margin: 0 auto 4px;
+      border-radius: 6px;
+      background: currentColor;
+      opacity: 0.18;
+    }
+    .tab.active .tab-icon { opacity: 1; background: #2563eb; }
+    .highlight-ring {
+      position: absolute;
+      border: 3px solid #2563eb;
+      border-radius: 16px;
+      box-shadow: 0 0 0 4px rgba(37,99,235,0.18);
+    }
+    .step-badge {
+      position: absolute;
+      width: 28px; height: 28px;
+      border-radius: 999px;
+      background: #2563eb;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .dim { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
+    .sheet {
+      position: absolute;
+      left: 0; right: 0; bottom: 0;
+      background: #F2F2F7;
+      border-radius: 13px 13px 0 0;
+      height: 78%;
+      overflow: hidden;
+    }
+    .grabber {
+      width: 36px; height: 5px; border-radius: 3px;
+      background: #C6C6C8;
+      margin: 8px auto 6px;
+    }
+    .sheet-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 16px 10px;
+    }
+    .sheet-title { font-size: 17px; font-weight: 600; flex: 1; text-align: center; }
+    .done { color: #2563eb; font-size: 17px; font-weight: 600; width: 56px; text-align: right; }
+    .sheet-scroll { padding: 0 16px 24px; overflow: hidden; }
+    .hero {
+      background: #fff;
+      border-radius: 12px;
+      padding: 20px 16px;
+      text-align: center;
+      margin-bottom: 8px;
+    }
+    .avatar {
+      width: 88px; height: 88px; border-radius: 999px;
+      background: #0B1A12;
+      color: #fff;
+      font-size: 30px;
+      font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto;
+      border: 3px solid #E5E7EB;
+    }
+    .hero h3 { margin-top: 12px; font-size: 22px; letter-spacing: -0.3px; }
+    .pill {
+      display: inline-block;
+      margin-top: 8px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(11,26,18,0.07);
+      color: #0B1A12;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .meta { margin-top: 6px; font-size: 14px; color: #6b7280; }
+    .section { margin-top: 16px; font-size: 13px; color: #6b7280; margin-left: 16px; margin-bottom: 6px; }
+    .footer-note { font-size: 13px; line-height: 18px; color: #6b7280; margin: 0 16px 8px; }
+    .group { background: #fff; border-radius: 12px; overflow: hidden; margin-bottom: 8px; }
+    .row {
+      min-height: 50px;
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      border-bottom: 0.5px solid rgba(60,60,67,0.29);
+      font-size: 16px;
+    }
+    .row:last-child { border-bottom: none; }
+    .icon {
+      width: 30px; height: 30px; border-radius: 8px;
+      background: rgba(37,99,235,0.08);
+      display: flex; align-items: center; justify-content: center;
+      margin-right: 12px;
+    }
+    .icon svg { width: 16px; height: 16px; display: block; }
+    .row-label { flex: 1; }
+    .chevron { color: #C7C7CC; font-size: 18px; }
+    .row.highlight { background: rgba(37,99,235,0.06); }
+    .caption {
+      grid-column: 1 / -1;
+      text-align: center;
+      margin-top: 8px;
+      font-size: 15px;
+      color: #374151;
+      line-height: 1.5;
+    }
+    .brand {
+      grid-column: 1 / -1;
+      text-align: center;
+      margin-top: 8px;
+      font-size: 13px;
+      color: #6b7280;
+    }
+  </style>
+</head>
+<body>
+  <div class="canvas">
+    <div>
+      <div class="step-label">Step 1 — Open Account</div>
+      <div class="phone">
+        <div class="screen">
+          <div class="status-bar"><span>9:41</span><span>●●●</span></div>
+          <div class="app-header">
+            <h1>Shelton Springs</h1>
+            <p>Welcome home</p>
+          </div>
+          <div class="home-body">
+            <div class="card">
+              <h2>Community Updates</h2>
+              <p>Posts, polls, and neighborhood news appear here.</p>
+            </div>
+            <div class="card">
+              <h2>Notifications</h2>
+              <p>Turn on alerts so you never miss an update.</p>
+            </div>
+          </div>
+          <div class="tab-bar">
+            <div class="tab"><div class="tab-icon"></div>Home</div>
+            <div class="tab"><div class="tab-icon"></div>Board</div>
+            <div class="tab"><div class="tab-icon"></div>Community</div>
+            <div class="tab"><div class="tab-icon"></div>Fees</div>
+            <div class="tab active"><div class="tab-icon"></div>Profile</div>
+          </div>
+          <div class="highlight-ring" style="right: 18px; bottom: 10px; width: 72px; height: 72px;"></div>
+          <div class="step-badge" style="right: 8px; bottom: 78px;">1</div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="step-label">Step 2 — Enable Notifications</div>
+      <div class="phone">
+        <div class="screen">
+          <div class="status-bar"><span>9:41</span><span>●●●</span></div>
+          <div class="app-header">
+            <h1>Shelton Springs</h1>
+            <p>Welcome home</p>
+          </div>
+          <div class="home-body">
+            <div class="card"><h2>Community Updates</h2><p>Posts, polls, and neighborhood news.</p></div>
+          </div>
+          <div class="dim"></div>
+          <div class="sheet">
+            <div class="grabber"></div>
+            <div class="sheet-header">
+              <div style="width:56px"></div>
+              <div class="sheet-title">Account</div>
+              <div class="done">Done</div>
+            </div>
+            <div class="sheet-scroll">
+              <div class="hero">
+                <div class="avatar">SM</div>
+                <h3>Sarah Mitchell</h3>
+                <div class="pill">Homeowner</div>
+                <div class="meta">s.mitchell@example.com</div>
+                <div class="meta">1842 Oak Ridge Dr</div>
+              </div>
+              <div class="section">NOTIFICATIONS</div>
+              <div class="footer-note">Allow notifications on this device to receive community posts, polls, and important HOA updates.</div>
+              <div class="group">
+                <div class="row highlight">
+                  <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg></div>
+                  <div class="row-label">Enable Notifications</div>
+                  <div class="chevron">›</div>
+                </div>
+              </div>
+              <div class="section">ACCOUNT</div>
+              <div class="group">
+                <div class="row"><div class="icon" style="background:rgba(220,38,38,0.08)"><svg viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div><div class="row-label" style="color:#dc2626">Sign Out</div></div>
+                <div class="row"><div class="icon" style="background:rgba(220,38,38,0.08)"><svg viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg></div><div class="row-label" style="color:#dc2626">Delete Account</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="highlight-ring" style="left: 16px; right: 16px; bottom: 198px; height: 52px; border-radius: 12px;"></div>
+          <div class="step-badge" style="left: 8px; bottom: 262px;">2</div>
+        </div>
+      </div>
+    </div>
+
+    <p class="caption">Tap <strong>Profile</strong> → open <strong>Account</strong> → tap <strong>Enable Notifications</strong> and allow when iOS asks.</p>
+    <p class="brand">Shelton Springs · sheltonsprings.homes</p>
+  </div>
+</body>
+</html>

@@ -24,6 +24,7 @@ import { useStorageUrl } from '../../hooks/useStorageUrl';
 import CustomAlert from '../CustomAlert';
 import { useCustomAlert } from '../../hooks/useCustomAlert';
 import { getUploadReadyImage } from '../../utils/imageUpload';
+import { ensurePhotoLibraryAccess } from '../../utils/ensurePhotoLibraryAccess';
 
 const DocumentViewer = ({ storageId }: { storageId: string }) => {
   const fileUrl = useStorageUrl(storageId);
@@ -155,11 +156,8 @@ const DocumentsContent = ({ isActive }: DocumentsContentProps) => {
 
   const handlePickImage = async () => {
     try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Required', 'Please grant permission to access your photos.');
-        return;
-      }
+      const allowed = await ensurePhotoLibraryAccess();
+      if (!allowed) return;
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: false,

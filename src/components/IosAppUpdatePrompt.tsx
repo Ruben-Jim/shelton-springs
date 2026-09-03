@@ -8,9 +8,16 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useIosAppUpdate } from '../hooks/useIosAppUpdate';
+import { usePostLoginPrompts } from '../context/PostLoginPromptsContext';
 
 export default function IosAppUpdatePrompt() {
   const { visible, storeVersion, dismiss, openStore } = useIosAppUpdate();
+  const { setPromptBlocked } = usePostLoginPrompts();
+
+  React.useEffect(() => {
+    setPromptBlocked('ios-app-update', visible);
+    return () => setPromptBlocked('ios-app-update', false);
+  }, [visible, setPromptBlocked]);
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={dismiss}>

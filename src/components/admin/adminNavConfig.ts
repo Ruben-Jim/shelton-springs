@@ -23,6 +23,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
     items: [
       { id: 'residents', label: 'Residents', shortLabel: 'Residents', icon: 'people', badgeKey: 'residents' },
       { id: 'board', label: 'Board', shortLabel: 'Board', icon: 'shield' },
+      { id: 'communications', label: 'Send Notice', shortLabel: 'Notice', icon: 'mail' },
     ],
   },
   {
@@ -58,7 +59,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
 
 export const ADMIN_MOBILE_PRIMARY_TABS: AdminTabId[] = ['overview', 'residents', 'Community', 'fees'];
 
-export const ADMIN_MOBILE_MORE_TABS: AdminTabId[] = ['board', 'covenants', 'SheltonHOA'];
+export const ADMIN_MOBILE_MORE_TABS: AdminTabId[] = ['board', 'communications', 'covenants', 'SheltonHOA'];
 
 export function findAdminNavItem(tabId: AdminTabId): AdminNavItem | undefined {
   for (const group of ADMIN_NAV_GROUPS) {

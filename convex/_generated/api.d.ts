@@ -13,6 +13,8 @@ import type {
   FilterApi,
   FunctionReference,
 } from "convex/server";
+import type * as adminNoticeTemplates from "../adminNoticeTemplates.js";
+import type * as adminNotices from "../adminNotices.js";
 import type * as archiver from "../archiver.js";
 import type * as boardMembers from "../boardMembers.js";
 import type * as communityPosts from "../communityPosts.js";
@@ -33,6 +35,7 @@ import type * as payments from "../payments.js";
 import type * as pets from "../pets.js";
 import type * as polls from "../polls.js";
 import type * as push from "../push.js";
+import type * as residentEmail from "../residentEmail.js";
 import type * as residentNotifications from "../residentNotifications.js";
 import type * as residents from "../residents.js";
 import type * as storage from "../storage.js";
@@ -47,6 +50,8 @@ import type * as storageCleanup from "../storageCleanup.js";
  * ```
  */
 declare const fullApi: ApiFromModules<{
+  adminNoticeTemplates: typeof adminNoticeTemplates;
+  adminNotices: typeof adminNotices;
   archiver: typeof archiver;
   boardMembers: typeof boardMembers;
   communityPosts: typeof communityPosts;
@@ -67,6 +72,7 @@ declare const fullApi: ApiFromModules<{
   pets: typeof pets;
   polls: typeof polls;
   push: typeof push;
+  residentEmail: typeof residentEmail;
   residentNotifications: typeof residentNotifications;
   residents: typeof residents;
   storage: typeof storage;

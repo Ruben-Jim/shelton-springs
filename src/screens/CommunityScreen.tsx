@@ -42,15 +42,34 @@ import ProfileImage from '../components/ProfileImage';
 import OptimizedImage from '../components/OptimizedImage';
 import PostVideoPlayer from '../components/PostVideoPlayer';
 import { getUploadReadyImage } from '../utils/imageUpload';
+import { ensurePhotoLibraryAccess } from '../utils/ensurePhotoLibraryAccess';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
 import * as Linking from 'expo-linking';
 import { notifyNewCommunityPost, notifyNewComment, notifyNewPoll, notifyResidentNotification } from '../utils/notificationHelpers';
 import ScrollToTopButton from '../components/ScrollToTopButton';
 import { useScrollToTop } from '../hooks/useScrollToTop';
+import { HERO_TAB_CONTAINER_STYLE, HERO_TAB_SAFE_AREA_EDGES, HERO_TAB_SAFE_AREA_STYLE } from '../hooks/useHeroHeaderPadding';
 
 // Stable component reference so list re-renders don't remount images (prevents image flash)
 const COMMUNITY_DAMAGE_UPDATE_VERSION = '2026-07-community-damage-v1';
+
+type CommunitySubTabId = 'posts' | 'polls' | 'notifications' | 'pets' | 'damage';
+
+const COMMUNITY_DEFAULT_SUB_TAB: CommunitySubTabId = 'posts';
+
+/** Tab bar order only; default subtab when opening Community is still Posts. */
+const COMMUNITY_SUB_TABS: ReadonlyArray<{
+  id: CommunitySubTabId;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}> = [
+  { id: 'damage', label: 'Damage Report', icon: 'construct' },
+  { id: 'posts', label: 'Posts', icon: 'chatbubbles' },
+  { id: 'polls', label: 'Polls', icon: 'bar-chart' },
+  { id: 'notifications', label: 'Moving/Leaving', icon: 'home' },
+  { id: 'pets', label: 'Pet Registration', icon: 'paw' },
+];
 
 const PostImage = ({
   storageId,
@@ -82,7 +101,7 @@ const CommunityScreen = () => {
   const isFocused = useIsFocused();
   const { alertState, showAlert, hideAlert } = useCustomAlert();
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-  const [activeSubTab, setActiveSubTab] = useState<'posts' | 'polls' | 'notifications' | 'pets' | 'damage'>('posts');
+  const [activeSubTab, setActiveSubTab] = useState<CommunitySubTabId>(COMMUNITY_DEFAULT_SUB_TAB);
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
   const [showNewPostModal, setShowNewPostModal] = useState(false);
   const [showCommentModal, setShowCommentModal] = useState(false);
@@ -477,7 +496,7 @@ const CommunityScreen = () => {
   // Handle route params to set active sub-tab and selected post
   useEffect(() => {
     const params = route.params as {
-      activeSubTab?: 'posts' | 'polls' | 'notifications' | 'pets' | 'damage';
+      activeSubTab?: CommunitySubTabId;
       selectedPostId?: string;
     } | undefined;
     if (params?.activeSubTab) {
@@ -1180,11 +1199,10 @@ const CommunityScreen = () => {
 
   const pickNotificationImage = async () => {
     try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Required', 'Permission to access camera roll is required!');
-        return;
-      }
+      const allowed = await ensurePhotoLibraryAccess(
+        'Permission to access camera roll is required!'
+      );
+      if (!allowed) return;
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: 'images' as any,
@@ -1431,11 +1449,10 @@ const CommunityScreen = () => {
   // Pet helper functions
   const pickPetImage = async () => {
     try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Required', 'Permission to access camera roll is required!');
-        return;
-      }
+      const allowed = await ensurePhotoLibraryAccess(
+        'Permission to access camera roll is required!'
+      );
+      if (!allowed) return;
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: 'images' as any,
@@ -1958,41 +1975,19 @@ const CommunityScreen = () => {
           contentContainerStyle={styles.subTabContent}
           style={styles.subTabScrollView}
         >
-          <TouchableOpacity
-            style={[styles.subTabButton, activeSubTab === 'posts' && styles.subTabButtonActive]}
-            onPress={() => setActiveSubTab('posts')}
-          >
-            <Ionicons name="chatbubbles" size={18} color={activeSubTab === 'posts' ? '#eab308' : '#6b7280'} />
-            <Text style={[styles.subTabButtonText, activeSubTab === 'posts' && styles.subTabButtonTextActive]}>Posts</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.subTabButton, activeSubTab === 'damage' && styles.subTabButtonActive]}
-            onPress={() => setActiveSubTab('damage')}
-          >
-            <Ionicons name="construct" size={18} color={activeSubTab === 'damage' ? '#eab308' : '#6b7280'} />
-            <Text style={[styles.subTabButtonText, activeSubTab === 'damage' && styles.subTabButtonTextActive]}>Damage Report</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.subTabButton, activeSubTab === 'polls' && styles.subTabButtonActive]}
-            onPress={() => setActiveSubTab('polls')}
-          >
-            <Ionicons name="bar-chart" size={18} color={activeSubTab === 'polls' ? '#eab308' : '#6b7280'} />
-            <Text style={[styles.subTabButtonText, activeSubTab === 'polls' && styles.subTabButtonTextActive]}>Polls</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.subTabButton, activeSubTab === 'notifications' && styles.subTabButtonActive]}
-            onPress={() => setActiveSubTab('notifications')}
-          >
-            <Ionicons name="home" size={18} color={activeSubTab === 'notifications' ? '#eab308' : '#6b7280'} />
-            <Text style={[styles.subTabButtonText, activeSubTab === 'notifications' && styles.subTabButtonTextActive]}>Moving/Leaving</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.subTabButton, activeSubTab === 'pets' && styles.subTabButtonActive]}
-            onPress={() => setActiveSubTab('pets')}
-          >
-            <Ionicons name="paw" size={18} color={activeSubTab === 'pets' ? '#eab308' : '#6b7280'} />
-            <Text style={[styles.subTabButtonText, activeSubTab === 'pets' && styles.subTabButtonTextActive]}>Pet Registration</Text>
-          </TouchableOpacity>
+          {COMMUNITY_SUB_TABS.map(({ id, label, icon }) => {
+            const isActive = activeSubTab === id;
+            return (
+              <TouchableOpacity
+                key={id}
+                style={[styles.subTabButton, isActive && styles.subTabButtonActive]}
+                onPress={() => setActiveSubTab(id)}
+              >
+                <Ionicons name={icon} size={18} color={isActive ? '#eab308' : '#6b7280'} />
+                <Text style={[styles.subTabButtonText, isActive && styles.subTabButtonTextActive]}>{label}</Text>
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
       </View>
     ),
@@ -2008,6 +2003,7 @@ const CommunityScreen = () => {
           isBoardMember={!!isBoardMember}
           onOpenMenu={openCommunityMenu}
           onOpenMessaging={openMessagingOverlay}
+          animatedOpacity={fadeAnim}
         />
         {showDesktopNav ? <DesktopTabBarSlot /> : null}
         {communitySubTabsRow}
@@ -2020,6 +2016,7 @@ const CommunityScreen = () => {
       isBoardMember,
       openCommunityMenu,
       openMessagingOverlay,
+      fadeAnim,
       communitySubTabsRow,
     ]
   );
@@ -2528,7 +2525,8 @@ const CommunityScreen = () => {
   );
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={HERO_TAB_SAFE_AREA_STYLE} edges={HERO_TAB_SAFE_AREA_EDGES}>
+      <View style={HERO_TAB_CONTAINER_STYLE}>
       {/* Mobile Navigation - Only when screen is narrow */}
       {showMobileNav && (
         <MobileTabBar 
@@ -4124,6 +4122,7 @@ const CommunityScreen = () => {
         type={alertState.type}
         onClose={hideAlert}
       />
+      </View>
     </SafeAreaView>
   );
 };

@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { getUploadReadyImage } from '../utils/imageUpload';
+import { ensurePhotoLibraryAccess } from '../utils/ensurePhotoLibraryAccess';
 
 interface ImageEditModalProps {
   visible: boolean;
@@ -82,11 +83,10 @@ const ImageEditModal: React.FC<ImageEditModalProps> = ({
 
   const pickImage = async () => {
     try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Required', 'Permission to access camera roll is required!');
-        return;
-      }
+      const allowed = await ensurePhotoLibraryAccess(
+        'Permission to access camera roll is required!'
+      );
+      if (!allowed) return;
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: 'images' as any,

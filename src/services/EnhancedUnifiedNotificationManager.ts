@@ -104,8 +104,18 @@ class EnhancedUnifiedNotificationManager {
     if (Platform.OS === 'web') {
       return enhancedWebNotificationService.getPermissionStatus();
     } else {
-      return enhancedNotificationService.getPermissionStatus() || 'denied';
+      return enhancedNotificationService.getPermissionStatus() || 'undetermined';
     }
+  }
+
+  /**
+   * Re-read permission from the OS (e.g. after returning from Settings)
+   */
+  public async refreshPermissionStatus(): Promise<string> {
+    if (Platform.OS === 'web') {
+      return enhancedWebNotificationService.getPermissionStatus();
+    }
+    return enhancedNotificationService.refreshPermissionStatus();
   }
 
   /**

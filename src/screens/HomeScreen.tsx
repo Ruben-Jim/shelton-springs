@@ -33,10 +33,20 @@ import { useCustomAlert } from '../hooks/useCustomAlert';
 import ProfileImage from '../components/ProfileImage';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
+import { usePostLoginPrompts } from '../context/PostLoginPromptsContext';
+import { useBrandSplash } from '../context/BrandSplashContext';
 import HomeQuickLinks, { HomeQuickLink } from '../components/home/HomeQuickLinks';
 import HomeAttentionStrip, { HomeAttentionItem } from '../components/home/HomeAttentionStrip';
+import HomeHoaNoticesSection from '../components/home/HomeHoaNoticesSection';
 import ScrollToTopButton from '../components/ScrollToTopButton';
 import { useScrollToTop } from '../hooks/useScrollToTop';
+import {
+  HERO_TAB_CONTAINER_STYLE,
+  HERO_TAB_SAFE_AREA_EDGES,
+  HERO_TAB_SAFE_AREA_STYLE,
+  HERO_HEADER_IMAGE,
+  useHeroHeaderLayout,
+} from '../hooks/useHeroHeaderPadding';
 
 const RAINBOW_COLORS = [
   '#ef4444', // Red
@@ -50,6 +60,8 @@ const RAINBOW_COLORS = [
 ] as const;
 
 const HOME_UI_UPDATE_NOTICE_VERSION = '2026-07-home-public-ui-v1';
+/** Set true and bump HOME_UI_UPDATE_NOTICE_VERSION when shipping the next major Home UI change. */
+const HOME_UI_UPDATE_NOTICE_ENABLED = false;
 
 function buildRainbowSectionColors(options: {
   hasActivePoll: boolean;
@@ -70,10 +82,13 @@ function buildRainbowSectionColors(options: {
 
 const HomeScreen = () => {
   const { user } = useAuth();
+  const { setPromptBlocked, notificationPromptHandled } = usePostLoginPrompts();
+  const { visible: splashVisible } = useBrandSplash();
   const navigation = useNavigation();
   const isFocused = useIsFocused();
   const { setShowOverlay } = useMessaging();
   const isBoardMember = user?.isBoardMember && user?.isActive;
+  const heroHeaderLayout = useHeroHeaderLayout();
   const isDev = user?.isDev ?? false;
   const showFeesAccess = isBoardMember || !user?.isRenter;
   const hoaInfo = useCachedHoaInfo();
@@ -228,10 +243,10 @@ const HomeScreen = () => {
     clearLegacyOnboarding();
   }, [user?._id]);
 
-  // Pet registration prompt - show on app launch until user confirms they've registered
+  // Pet registration prompt — after splash and push notification permission.
   useEffect(() => {
     const checkPetRegistrationPrompt = async () => {
-      if (!user?._id || !isFocused) return;
+      if (!user?._id || !isFocused || splashVisible || !notificationPromptHandled) return;
       try {
         const confirmed = await AsyncStorage.getItem(`pet_registration_confirmed_${user._id}`);
         const isConfirmed = confirmed === 'true';
@@ -244,14 +259,19 @@ const HomeScreen = () => {
       }
     };
     checkPetRegistrationPrompt();
-  }, [user?._id, isFocused]);
+  }, [user?._id, isFocused, splashVisible, notificationPromptHandled]);
 
-  // One-time "What's New" announcement for major public Home UI updates
   useEffect(() => {
-    if (!isFocused) return;
+    setPromptBlocked('pet-registration', showPetRegistrationModal);
+    return () => setPromptBlocked('pet-registration', false);
+  }, [showPetRegistrationModal, setPromptBlocked]);
+
+  // One-time "What's New" for major Home UI updates (disabled until next release).
+  useEffect(() => {
+    if (!HOME_UI_UPDATE_NOTICE_ENABLED || !user?._id || !isFocused) return;
 
     let cancelled = false;
-    const storageKey = `home_ui_notice_seen_${HOME_UI_UPDATE_NOTICE_VERSION}_${user?._id ?? 'guest'}`;
+    const storageKey = `home_ui_notice_seen_${HOME_UI_UPDATE_NOTICE_VERSION}_${user._id}`;
 
     const maybeShowUiUpdateNotice = async () => {
       try {
@@ -271,7 +291,11 @@ const HomeScreen = () => {
   }, [isFocused, user?._id]);
 
   const handleDismissUiUpdateModal = async () => {
-    const storageKey = `home_ui_notice_seen_${HOME_UI_UPDATE_NOTICE_VERSION}_${user?._id ?? 'guest'}`;
+    if (!user?._id) {
+      setShowUiUpdateModal(false);
+      return;
+    }
+    const storageKey = `home_ui_notice_seen_${HOME_UI_UPDATE_NOTICE_VERSION}_${user._id}`;
     try {
       await AsyncStorage.setItem(storageKey, 'true');
     } catch (error) {
@@ -381,8 +405,27 @@ const HomeScreen = () => {
     [activePoll, residentNotifications]
   );
 
+  const myAdminNotices = useQuery(
+    api.adminNotices.listMyAdminNotices,
+    user?._id ? { residentId: user._id, limit: 10 } : 'skip'
+  );
+
   const attentionItems = useMemo((): HomeAttentionItem[] => {
     const items: HomeAttentionItem[] = [];
+
+    const unreadAdminNotice = myAdminNotices?.find((notice) => !notice.isRead);
+    if (unreadAdminNotice) {
+      items.push({
+        id: `notice-${unreadAdminNotice.ticketId}`,
+        label: unreadAdminNotice.title,
+        icon: 'mail',
+        color: '#dc2626',
+        onPress: () =>
+          (navigation as any).navigate('ResidentNotice', {
+            ticketId: unreadAdminNotice.ticketId,
+          }),
+      });
+    }
 
     if (activePoll?.isActive) {
       const hasVoted = (selectedPollVotes[activePoll._id]?.length ?? 0) > 0;
@@ -452,6 +495,7 @@ const HomeScreen = () => {
     petRegistrationConfirmed,
     myDamageReports,
     residentNotifications.length,
+    myAdminNotices,
     navigation,
   ]);
 
@@ -535,8 +579,8 @@ const HomeScreen = () => {
 
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
+    <SafeAreaView style={HERO_TAB_SAFE_AREA_STYLE} edges={HERO_TAB_SAFE_AREA_EDGES}>
+      <View style={HERO_TAB_CONTAINER_STYLE}>
         {/* Mobile Navigation - Only when screen is narrow */}
         {showMobileNav && (
           <MobileTabBar 
@@ -590,9 +634,18 @@ const HomeScreen = () => {
         ]}
       >
         <ImageBackground
-          source={require('../../assets/hoa-4k.jpg')}
-          style={[styles.header, !isBoardMember && styles.headerNonMember]}
-          imageStyle={[styles.headerImage, { width: screenWidth }]}
+          source={HERO_HEADER_IMAGE}
+          style={[
+            styles.header,
+            {
+              paddingTop: heroHeaderLayout.paddingTop,
+              height: heroHeaderLayout.height,
+            },
+          ]}
+          imageStyle={[
+            styles.headerImage,
+            { width: screenWidth, height: heroHeaderLayout.imageHeight },
+          ]}
           resizeMode="stretch"
         >
         <View style={styles.headerOverlay} />
@@ -672,6 +725,31 @@ const HomeScreen = () => {
           showDivider={attentionItems.length > 0}
         />
       </Animated.View>
+
+      {myAdminNotices && myAdminNotices.length > 0 ? (
+        <Animated.View
+          style={[
+            styles.section,
+            !showMobileNav && styles.sectionDesktop,
+            {
+              opacity: quickActionsAnim,
+              transform: [{
+                translateY: quickActionsAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [30, 0],
+                }),
+              }],
+            },
+          ]}
+        >
+          <HomeHoaNoticesSection
+            notices={myAdminNotices}
+            onOpenNotice={(ticketId) =>
+              (navigation as any).navigate('ResidentNotice', { ticketId })
+            }
+          />
+        </Animated.View>
+      ) : null}
 
       {/* Upcoming Events */}
       <Animated.View style={[
@@ -1017,9 +1095,9 @@ const HomeScreen = () => {
         
       />
 
-      {/* Pet Registration Prompt Modal */}
+      {/* What's New — only when HOME_UI_UPDATE_NOTICE_ENABLED is true */}
       <Modal
-        visible={showUiUpdateModal}
+        visible={HOME_UI_UPDATE_NOTICE_ENABLED && showUiUpdateModal}
         transparent
         animationType="fade"
       >
@@ -1129,34 +1207,16 @@ const styles = StyleSheet.create({
     marginHorizontal: 0,
   },
   header: {
-    height: 240,
-    padding: 20,
-    paddingTop: 40,
+    paddingHorizontal: 20,
     paddingBottom: 20,
     position: 'relative',
     justifyContent: 'space-between',
     width: '100%',
     alignSelf: 'stretch',
-  },
-  headerNonMember: {
-    height: 215,
-    padding: 20,
-    paddingTop: 40,
-    paddingBottom: 20,
-    position: 'relative',
-    justifyContent: 'space-between',
-    width: '100%',
-    alignSelf: 'stretch',
+    overflow: 'hidden',
   },
   headerImage: {
     borderRadius: 0,
-    width: Dimensions.get('window').width,
-    height: 240,
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
   },
   headerOverlay: {
     position: 'absolute',

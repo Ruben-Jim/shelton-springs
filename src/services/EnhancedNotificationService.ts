@@ -64,34 +64,31 @@ class EnhancedNotificationService {
     try {
       // Load saved settings
       await this.loadSettings();
-      
-      // Request permissions
-      const { status: existingStatus } = await Notifications.getPermissionsAsync();
-      let finalStatus = existingStatus;
 
-      if (existingStatus !== 'granted') {
-        const { status } = await Notifications.requestPermissionsAsync({
-          ios: {
-            allowAlert: true,
-            allowBadge: true,
-            allowSound: true,
-          },
+      if (Platform.OS === 'android') {
+        await Notifications.setNotificationChannelAsync('default', {
+          name: 'Community Updates',
+          importance: Notifications.AndroidImportance.MAX,
+          vibrationPattern: [0, 250, 250, 250],
+          lightColor: '#2563eb',
         });
-        finalStatus = status;
       }
 
-      this.permissionStatus = finalStatus;
+      // Check existing permission only — do not prompt at launch.
+      // The system dialog is shown when the user taps Enable Notifications.
+      const { status: existingStatus } = await Notifications.getPermissionsAsync();
+      this.permissionStatus = existingStatus;
       this.isInitialized = true;
 
       // Configure notification categories
       await this.configureNotificationCategories();
 
       // Get push token for remote notifications (skip on web)
-      if (finalStatus === 'granted' && Platform.OS !== 'web') {
+      if (existingStatus === 'granted' && Platform.OS !== 'web') {
         await this.getPushToken();
       }
 
-      return finalStatus === 'granted';
+      return existingStatus === 'granted';
     } catch (error) {
       console.error('Failed to initialize EnhancedNotificationService:', error);
       return false;
@@ -212,6 +209,18 @@ class EnhancedNotificationService {
   }
 
   /**
+   * Re-read permission from the OS (e.g. after returning from Settings)
+   */
+  public async refreshPermissionStatus(): Promise<Notifications.PermissionStatus> {
+    const { status } = await Notifications.getPermissionsAsync();
+    this.permissionStatus = status;
+    if (status === 'granted' && Platform.OS !== 'web') {
+      await this.getPushToken();
+    }
+    return status;
+  }
+
+  /**
    * Get push token (for server-side notifications)
    */
   public getPushTokenValue(): string | null {
@@ -240,6 +249,19 @@ class EnhancedNotificationService {
    */
   public async requestPermissions(): Promise<boolean> {
     try {
+      if (!this.isInitialized) {
+        await this.initialize();
+      }
+
+      const existing = await Notifications.getPermissionsAsync();
+      if (existing.status === 'granted') {
+        this.permissionStatus = existing.status;
+        if (Platform.OS !== 'web') {
+          await this.getPushToken();
+        }
+        return true;
+      }
+
       const { status } = await Notifications.requestPermissionsAsync({
         ios: {
           allowAlert: true,
@@ -250,7 +272,7 @@ class EnhancedNotificationService {
       
       this.permissionStatus = status;
       
-      if (status === 'granted') {
+      if (status === 'granted' && Platform.OS !== 'web') {
         await this.getPushToken();
       }
       

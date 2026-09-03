@@ -9,6 +9,9 @@ import {
 } from './adminNavConfig';
 import { AdminNavBadges, AdminTabId } from './types';
 
+/** Bottom admin tab bar content height (icon + label + padding). */
+export const ADMIN_MOBILE_TAB_BAR_HEIGHT = 52;
+
 type AdminNavProps = {
   activeTab: AdminTabId;
   onTabChange: (tab: AdminTabId) => void;
@@ -436,7 +439,7 @@ const styles = StyleSheet.create({
   },
   moreSheetOverlay: {
     ...StyleSheet.absoluteFillObject,
-    zIndex: 50,
+    zIndex: 200,
     justifyContent: 'flex-end',
   },
   moreSheetBackdrop: {

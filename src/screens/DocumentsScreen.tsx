@@ -33,7 +33,14 @@ import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
+import { ensurePhotoLibraryAccess } from '../utils/ensurePhotoLibraryAccess';
 import { getUploadReadyImage } from '../utils/imageUpload';
+import {
+  HERO_TAB_CONTAINER_STYLE,
+  HERO_TAB_SAFE_AREA_EDGES,
+  HERO_TAB_SAFE_AREA_STYLE,
+} from '../hooks/useHeroHeaderPadding';
+import TabHeroHeader from '../components/TabHeroHeader';
 
 const DocumentsScreen = () => {
   const { user } = useAuth();
@@ -179,12 +186,8 @@ const DocumentsScreen = () => {
 
   const handlePickImage = async () => {
     try {
-      // Request permissions
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Required', 'Please grant permission to access your photos.');
-        return;
-      }
+      const allowed = await ensurePhotoLibraryAccess();
+      if (!allowed) return;
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -366,8 +369,8 @@ const DocumentsScreen = () => {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
+    <SafeAreaView style={HERO_TAB_SAFE_AREA_STYLE} edges={HERO_TAB_SAFE_AREA_EDGES}>
+      <View style={HERO_TAB_CONTAINER_STYLE}>
         {/* Mobile Navigation */}
         {showMobileNav && (
           <MobileTabBar 
@@ -408,57 +411,16 @@ const DocumentsScreen = () => {
             onScroll: syncDesktopTabBar,
           })}
         >
-          {/* Header */}
-          <Animated.View
-            style={[
-              { opacity: fadeAnim },
-              styles.headerContainerIOS,
-              { width: screenWidth }
-            ]}
-          >
-            <ImageBackground
-              source={require('../../assets/hoa-4k.jpg')}
-              style={[styles.header, !isBoardMember && styles.headerNonMember]}
-              imageStyle={[styles.headerImage, { width: screenWidth }]}
-              resizeMode="stretch"
-            >
-              <View style={styles.headerOverlay} />
-                <View style={styles.headerTop}>
-                {/* Hamburger Menu - Only when mobile nav is shown */}
-                {showMobileNav && (
-                  <TouchableOpacity
-                    style={styles.menuButton}
-                    onPress={() => setIsMenuOpen(true)}
-                  >
-                    <Ionicons name="menu" size={24} color="#ffffff" />
-                  </TouchableOpacity>
-                )}
-                
-                <View style={styles.headerLeft}>
-                  <View style={styles.titleContainer}>
-                    <Text style={styles.headerTitle}>Documents</Text>
-                  </View>
-                  <Text style={styles.headerSubtitle}>
-                    Meeting minutes and financial records
-                  </Text>
-                  <View style={styles.indicatorsContainer}>
-                    <DeveloperIndicator />
-                    <BoardMemberIndicator />
-                  </View>
-                </View>
-
-                {/* Spacer for non-board members to center the text */}
-                {!isBoardMember && <View style={styles.headerSpacer} />}
-
-                {/* Messaging Button - Board Members Only */}
-                {isBoardMember && (
-                  <View style={styles.headerRight}>
-                    <MessagingButton onPress={() => setShowOverlay(true)} />
-                  </View>
-                )}
-              </View>
-            </ImageBackground>
-          </Animated.View>
+          <TabHeroHeader
+            screenWidth={screenWidth}
+            showMobileNav={showMobileNav}
+            isBoardMember={!!isBoardMember}
+            onOpenMenu={() => setIsMenuOpen(true)}
+            onOpenMessaging={() => setShowOverlay(true)}
+            title="Documents"
+            subtitle="Meeting minutes and financial records"
+            animatedOpacity={fadeAnim}
+          />
 
           {/* Custom Tab Bar - Only when screen is wide enough */}
           {showDesktopNav && (

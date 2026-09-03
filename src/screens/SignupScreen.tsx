@@ -20,9 +20,11 @@ import { useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useConvex } from 'convex/react';
 import { useAuth } from '../context/AuthContext';
+import { useBrandSplash } from '../context/BrandSplashContext';
 import { User } from '../types';
 import { AuthStackParamList } from '../navigation/AuthNavigator';
 import { simpleAlert } from '../utils/webCompatibleAlert';
+import { ensurePhotoLibraryAccess } from '../utils/ensurePhotoLibraryAccess';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
 import { useResetTokenRedirect } from '../hooks/useResetTokenRedirect';
@@ -33,6 +35,7 @@ type SignupScreenNavigationProp = StackNavigationProp<AuthStackParamList, 'Signu
 const SignupScreen = () => {
   const navigation = useNavigation<SignupScreenNavigationProp>();
   const { signUp } = useAuth();
+  const { beginSigningIn, finishSignIn, cancelSigningIn } = useBrandSplash();
   useResetTokenRedirect();
   const convex = useConvex();
   const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
@@ -98,15 +101,11 @@ const SignupScreen = () => {
 
   const pickImage = async () => {
     try {
-      // Request permission
-      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      
-      if (permissionResult.granted === false) {
-        Alert.alert('Permission Required', 'Permission to access camera roll is required!');
-        return;
-      }
+      const allowed = await ensurePhotoLibraryAccess(
+        'Permission to access camera roll is required!'
+      );
+      if (!allowed) return;
 
-      // Launch image picker
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: 'images' as any,
         allowsEditing: true,
@@ -218,6 +217,7 @@ const SignupScreen = () => {
     }
 
     try {
+      beginSigningIn();
       let profileImageUrl: string | undefined;
       
       // Upload profile image if selected
@@ -241,14 +241,19 @@ const SignupScreen = () => {
       };
 
       await signUp(userData);
-      showAlert({
-        title: 'Success',
-        message: 'Account created successfully!',
-        buttons: [{ text: 'OK', onPress: () => {} }],
-        type: 'success'
-      });
+      if (Platform.OS === 'web') {
+        showAlert({
+          title: 'Success',
+          message: 'Account created successfully!',
+          buttons: [{ text: 'OK', onPress: () => {} }],
+          type: 'success'
+        });
+      } else {
+        await finishSignIn();
+      }
     } catch (error) {
       console.error('Signup error:', error);
+      cancelSigningIn();
       showAlert({
         title: 'Error',
         message: 'Failed to create account. Please try again.',

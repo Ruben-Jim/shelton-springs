@@ -274,6 +274,64 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_token", ["token"]).index("by_email", ["email"]),
 
+  adminNoticeTickets: defineTable({
+    createdBy: v.id("residents"),
+    createdByName: v.string(),
+    templateType: v.union(
+      v.literal("notice"),
+      v.literal("action_request"),
+      v.literal("reminder")
+    ),
+    audienceType: v.union(
+      v.literal("all"),
+      v.literal("homeowners"),
+      v.literal("renters"),
+      v.literal("custom")
+    ),
+    recipientIds: v.array(v.id("residents")),
+    channels: v.union(
+      v.literal("push"),
+      v.literal("email"),
+      v.literal("both")
+    ),
+    title: v.string(),
+    body: v.string(),
+    emailSubject: v.string(),
+    noticeNumber: v.optional(v.number()),
+    selectedViolations: v.optional(v.array(v.string())),
+    status: v.union(
+      v.literal("sending"),
+      v.literal("sent"),
+      v.literal("partial"),
+      v.literal("failed")
+    ),
+    pushSentCount: v.number(),
+    emailSentCount: v.number(),
+    emailFailedCount: v.number(),
+    createdAt: v.number(),
+    sentAt: v.number(),
+  }).index("by_created_at", ["createdAt"])
+    .index("by_notice_number", ["noticeNumber"]),
+
+  adminNoticeRecipients: defineTable({
+    ticketId: v.id("adminNoticeTickets"),
+    residentId: v.id("residents"),
+    residentName: v.string(),
+    email: v.string(),
+    pushStatus: v.union(
+      v.literal("sent"),
+      v.literal("skipped"),
+      v.literal("not_requested")
+    ),
+    emailStatus: v.union(
+      v.literal("sent"),
+      v.literal("failed"),
+      v.literal("pending"),
+      v.literal("not_requested")
+    ),
+    error: v.optional(v.string()),
+  }).index("by_ticket", ["ticketId"]),
+
   damageReports: defineTable({
     residentId: v.string(),
     residentName: v.string(),
