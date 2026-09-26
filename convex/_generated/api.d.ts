@@ -19,6 +19,7 @@ import type * as archiver from "../archiver.js";
 import type * as boardMembers from "../boardMembers.js";
 import type * as communityPosts from "../communityPosts.js";
 import type * as covenants from "../covenants.js";
+import type * as crons from "../crons.js";
 import type * as damageCategoryUtils from "../damageCategoryUtils.js";
 import type * as damageReports from "../damageReports.js";
 import type * as documents from "../documents.js";
@@ -56,6 +57,7 @@ declare const fullApi: ApiFromModules<{
   boardMembers: typeof boardMembers;
   communityPosts: typeof communityPosts;
   covenants: typeof covenants;
+  crons: typeof crons;
   damageCategoryUtils: typeof damageCategoryUtils;
   damageReports: typeof damageReports;
   documents: typeof documents;

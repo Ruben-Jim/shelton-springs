@@ -25,7 +25,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useIsFocused } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useQuery, useMutation } from 'convex/react';
+import { useQuery } from 'convex/react';
+import { useGuardedMutation, isTestUserReadOnlyError, useIsTestUserReadOnly } from '../hooks/useGuardedMutation';
 import { useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
@@ -81,21 +82,30 @@ const PostImage = ({
   onPress: () => void;
   wrapperStyle: object;
   imageStyle: object;
-}) => (
-  <TouchableOpacity onPress={onPress} activeOpacity={0.9} style={wrapperStyle}>
-    <OptimizedImage
-      storageId={storageId}
-      style={imageStyle}
-      contentFit="cover"
-      priority="high"
-    />
-  </TouchableOpacity>
-);
+}) => {
+  const isUrl =
+    !!storageId &&
+    /^https?:\/\//i.test(storageId.trim()) &&
+    !/\s/.test(storageId.trim());
+
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.9} style={wrapperStyle}>
+      <OptimizedImage
+        source={isUrl ? storageId.trim() : undefined}
+        storageId={isUrl ? undefined : storageId}
+        style={imageStyle}
+        contentFit="cover"
+        priority="high"
+      />
+    </TouchableOpacity>
+  );
+};
 
 const CommunityScreen = () => {
   const { user } = useAuth();
   const { setShowOverlay } = useMessaging();
   const convex = useConvex();
+  const { isReadOnly } = useIsTestUserReadOnly();
   const isBoardMember = user?.isBoardMember && user?.isActive;
   const route = useRoute();
   const isFocused = useIsFocused();
@@ -388,22 +398,22 @@ const CommunityScreen = () => {
   };
 
   // Convex mutations
-  const createPost = useMutation(api.communityPosts.create);
-  const addComment = useMutation(api.communityPosts.addComment);
-  const likePost = useMutation(api.communityPosts.like);
-  const voteOnPoll = useMutation(api.polls.vote);
-  const createPoll = useMutation(api.polls.create);
-  const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
-  const deleteStorageFile = useMutation(api.storage.deleteStorageFile);
-  const createNotification = useMutation(api.residentNotifications.create);
-  const updateNotification = useMutation(api.residentNotifications.update);
-  const deleteNotification = useMutation(api.residentNotifications.remove);
-  const createPet = useMutation(api.pets.create);
-  const updatePet = useMutation(api.pets.update);
-  const deletePet = useMutation(api.pets.remove);
-  const createDamageReport = useMutation(api.damageReports.create);
-  const updateDamageReport = useMutation(api.damageReports.updateByResident);
-  const removeDamageReport = useMutation(api.damageReports.remove);
+  const createPost = useGuardedMutation(api.communityPosts.create);
+  const addComment = useGuardedMutation(api.communityPosts.addComment);
+  const likePost = useGuardedMutation(api.communityPosts.like);
+  const voteOnPoll = useGuardedMutation(api.polls.vote);
+  const createPoll = useGuardedMutation(api.polls.create);
+  const generateUploadUrl = useGuardedMutation(api.storage.generateUploadUrl);
+  const deleteStorageFile = useGuardedMutation(api.storage.deleteStorageFile);
+  const createNotification = useGuardedMutation(api.residentNotifications.create);
+  const updateNotification = useGuardedMutation(api.residentNotifications.update);
+  const deleteNotification = useGuardedMutation(api.residentNotifications.remove);
+  const createPet = useGuardedMutation(api.pets.create);
+  const updatePet = useGuardedMutation(api.pets.update);
+  const deletePet = useGuardedMutation(api.pets.remove);
+  const createDamageReport = useGuardedMutation(api.damageReports.create);
+  const updateDamageReport = useGuardedMutation(api.damageReports.updateByResident);
+  const removeDamageReport = useGuardedMutation(api.damageReports.remove);
 
   const categories = ['General', 'Event', 'Suggestion', 'Lost & Found'];
   const postCategories = ['General', 'Event', 'Complaint', 'Suggestion', 'Lost & Found']; // Include Complaint for post creation
@@ -524,6 +534,7 @@ const CommunityScreen = () => {
           }
         });
       } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
         // Best effort only.
       }
     };
@@ -545,6 +556,7 @@ const CommunityScreen = () => {
     try {
       await AsyncStorage.setItem(storageKey, 'true');
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       // Best effort only.
     }
     setShowDamageUpdateNoticeModal(false);
@@ -648,6 +660,7 @@ const CommunityScreen = () => {
     try {
       await likePost({ id: postId as any });
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       // Silently handle like errors
       Alert.alert('Error', 'Failed to like post');
     }
@@ -667,12 +680,19 @@ const CommunityScreen = () => {
         if (loadedComments[postId] !== undefined) continue;
         
         try {
-          const comments = await convex.query(api.communityPosts.getCommentsByPost, { postId: postId as any });
+          const viewerName = user
+            ? `${user.firstName} ${user.lastName}`
+            : undefined;
+          const comments = await convex.query(api.communityPosts.getCommentsByPost, {
+            postId: postId as any,
+            viewerName,
+          });
           setLoadedComments(prev => ({
             ...prev,
             [postId]: comments || []
           }));
         } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
           console.error(`Failed to load comments for post ${postId}:`, error);
           // Set empty array on error to prevent retrying
           setLoadedComments(prev => ({
@@ -684,7 +704,7 @@ const CommunityScreen = () => {
     };
     
     loadComments();
-  }, [postsNeedingComments.size, isFocused, convex]);
+  }, [postsNeedingComments.size, isFocused, convex, user?.firstName, user?.lastName]);
   
   // Auto-load comments for visible posts (limit to first 10 posts to reduce bandwidth)
   // This ensures preview comments are shown for posts currently on screen
@@ -734,6 +754,18 @@ const CommunityScreen = () => {
       Alert.alert('Error', 'Please sign in to comment');
       return;
     }
+    if (isReadOnly) {
+      Alert.alert(
+        'View only',
+        'Test accounts can browse the app, but cannot add comments. Sign in with a regular resident account to test commenting.',
+      );
+      return;
+    }
+    // Web: scrolling sets body user-select:none; reset so the comment field accepts typing
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      document.body.style.userSelect = 'auto';
+      document.body.style.cursor = 'default';
+    }
     setSelectedPostForComment(post);
     setShowCommentModal(true);
     animateIn('comment');
@@ -756,14 +788,18 @@ const CommunityScreen = () => {
     }
 
     try {
-      await addComment({
+      const result = await addComment({
         postId: selectedPostForComment._id as any,
         author: `${user.firstName} ${user.lastName}`,
         content: newComment.trim(),
       });
 
-      // Send notification for new comment
-      await notifyNewComment(`${user.firstName} ${user.lastName}`, selectedPostForComment.title);
+      const status = (result as any)?.status ?? 'approved';
+
+      if (status === 'approved') {
+        // Send notification for new comment
+        await notifyNewComment(`${user.firstName} ${user.lastName}`, selectedPostForComment.title);
+      }
 
       // Auto-expand comments for the post that just got a new comment
       setExpandedComments(prev => new Set(prev).add(selectedPostForComment._id));
@@ -772,17 +808,25 @@ const CommunityScreen = () => {
       setPostsNeedingComments(prev => new Set(prev).add(selectedPostForComment._id));
       // Clear cached comments so they reload
       setLoadedComments(prev => {
-        const updated = { ...prev };
-        delete updated[selectedPostForComment._id];
-        return updated;
+        const next = { ...prev };
+        delete next[selectedPostForComment._id];
+        return next;
       });
 
-      setNewComment('');
       animateOut('comment', () => {
         setShowCommentModal(false);
+        setNewComment('');
         setSelectedPostForComment(null);
       });
+
+      if (status === 'pending') {
+        Alert.alert(
+          'Comment submitted',
+          'Your comment is pending board approval. You’ll see it marked as Pending until it’s reviewed.',
+        );
+      }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       // Silently handle comment errors
       Alert.alert('Error', 'Failed to add comment');
     }
@@ -823,6 +867,7 @@ const CommunityScreen = () => {
         setShowNewPostModal(false);
       });
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       // Silently handle post creation errors
       Alert.alert('Error', 'Failed to create post');
     } finally {
@@ -902,6 +947,7 @@ const CommunityScreen = () => {
         hideAlert();
       }, 2000);
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error voting on poll:', error);
       showAlert({
         title: 'Error',
@@ -957,6 +1003,7 @@ const CommunityScreen = () => {
       pollModalTranslateY.setValue(300);
       overlayOpacity.setValue(0);
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error creating poll:', error);
       Alert.alert('Error', 'Failed to create poll. Please try again.');
     }
@@ -1049,6 +1096,7 @@ const CommunityScreen = () => {
         setSelectedMedia(prev => [...prev, { uri: mediaUri, type: isVideo ? 'video' : 'image' }]);
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error picking media:', error);
       Alert.alert('Error', 'Failed to pick media. Please try again.');
     }
@@ -1106,6 +1154,7 @@ const CommunityScreen = () => {
 
       return { images: uploadedImages, videos: uploadedVideos };
     } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return { images: [], videos: [] };
       console.error('Error uploading media:', error);
       console.error('Error details:', {
         message: error?.message,
@@ -1168,11 +1217,17 @@ const CommunityScreen = () => {
     });
   };
 
-  // Helper component for notification house images
+  // Helper component for notification house images (also used for damage photo lightbox)
   const HouseImage = ({ storageId, isFullScreen = false }: { storageId: string; isFullScreen?: boolean }) => {
+    const isUrl =
+      !!storageId &&
+      /^https?:\/\//i.test(storageId.trim()) &&
+      !/\s/.test(storageId.trim());
+
     return (
       <OptimizedImage
-        storageId={storageId}
+        source={isUrl ? storageId.trim() : undefined}
+        storageId={isUrl ? undefined : storageId}
         style={isFullScreen ? styles.fullImage : styles.cardHouseImage}
         contentFit={isFullScreen ? 'contain' : 'cover'}
         priority="high"
@@ -1215,6 +1270,7 @@ const CommunityScreen = () => {
         setPreviewImage(result.assets[0].uri);
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error picking image:', error);
       Alert.alert('Error', 'Failed to pick image. Please try again.');
     }
@@ -1232,6 +1288,7 @@ const CommunityScreen = () => {
       const { storageId } = await uploadResponse.json();
       return storageId;
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) throw error;
       console.error('Error uploading image:', error);
       throw new Error('Failed to upload image');
     }
@@ -1392,6 +1449,7 @@ const CommunityScreen = () => {
         houseImage: null,
       });
     } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
       Alert.alert('Error', error.message || 'Failed to save notification');
     } finally {
       setIsSavingNotification(false);
@@ -1421,6 +1479,7 @@ const CommunityScreen = () => {
               });
               Alert.alert('Success', 'Notification deleted');
             } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
               Alert.alert('Error', error.message || 'Failed to delete');
             }
           },
@@ -1466,6 +1525,7 @@ const CommunityScreen = () => {
         setPetPreviewImage(result.assets[0].uri);
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error picking image:', error);
       Alert.alert('Error', 'Failed to pick image. Please try again.');
     }
@@ -1484,6 +1544,7 @@ const CommunityScreen = () => {
       const { storageId } = await uploadResponse.json();
       return storageId;
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) throw error;
       console.error('Error uploading image:', error);
       throw new Error('Failed to upload image');
     } finally {
@@ -1523,6 +1584,7 @@ const CommunityScreen = () => {
         hideAlert();
       }, 2000);
     } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error removing pet image:', error);
       showAlert({
         title: 'Error',
@@ -1655,6 +1717,7 @@ const CommunityScreen = () => {
         image: null,
       });
     } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
       Alert.alert('Error', error.message || 'Failed to save pet');
     } finally {
       setIsSavingPet(false);
@@ -1675,6 +1738,7 @@ const CommunityScreen = () => {
               await deletePet({ id: petId as any });
               Alert.alert('Success', 'Pet registration deleted');
             } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
               Alert.alert('Error', error.message || 'Failed to delete');
             }
           },
@@ -1808,6 +1872,7 @@ const CommunityScreen = () => {
                 requesterId: user._id,
               });
             } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
               showAlert({
                 title: 'Error',
                 message: error.message || 'Failed to delete damage report',
@@ -1843,6 +1908,7 @@ const CommunityScreen = () => {
         setDamagePhotoUris((prev) => [...prev, ...newUris].slice(0, 5));
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error picking damage photos:', error);
       Alert.alert('Error', 'Failed to pick photos. Please try again.');
     }
@@ -1908,6 +1974,7 @@ const CommunityScreen = () => {
       setShowDamageReportModal(false);
       resetDamageReportModal();
     } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
       Alert.alert('Error', error.message || 'Failed to submit damage report');
     } finally {
       setIsSubmittingDamageReport(false);
@@ -2463,6 +2530,20 @@ const CommunityScreen = () => {
                   </Text>
                 </View>
                 <Text style={styles.commentContent}>{comment.content}</Text>
+                {comment.status === 'pending' && (
+                  <View style={styles.commentStatusBannerPending}>
+                    <Ionicons name="time-outline" size={12} color="#b45309" />
+                    <Text style={styles.commentStatusTextPending}>Pending approval</Text>
+                  </View>
+                )}
+                {comment.status === 'declined' && (
+                  <View style={styles.commentStatusBannerDeclined}>
+                    <Ionicons name="close-circle-outline" size={12} color="#b91c1c" />
+                    <Text style={styles.commentStatusTextDeclined}>
+                      Declined{comment.declineReason ? `: ${comment.declineReason}` : ''}
+                    </Text>
+                  </View>
+                )}
               </View>
             ))}
 
@@ -2499,6 +2580,20 @@ const CommunityScreen = () => {
                         </Text>
                       </View>
                       <Text style={styles.commentContent}>{comment.content}</Text>
+                      {comment.status === 'pending' && (
+                        <View style={styles.commentStatusBannerPending}>
+                          <Ionicons name="time-outline" size={12} color="#b45309" />
+                          <Text style={styles.commentStatusTextPending}>Pending approval</Text>
+                        </View>
+                      )}
+                      {comment.status === 'declined' && (
+                        <View style={styles.commentStatusBannerDeclined}>
+                          <Ionicons name="close-circle-outline" size={12} color="#b91c1c" />
+                          <Text style={styles.commentStatusTextDeclined}>
+                            Declined{comment.declineReason ? `: ${comment.declineReason}` : ''}
+                          </Text>
+                        </View>
+                      )}
                     </View>
                   ))}
                 </ScrollView>
@@ -2981,7 +3076,23 @@ const CommunityScreen = () => {
                       </View>
                     </View>
 
-                    <Text style={styles.damageReportCardDescription}>{report.description}</Text>
+                    {report.description &&
+                    /^https?:\/\//i.test(report.description.trim()) &&
+                    !/\s/.test(report.description.trim()) ? (
+                      <TouchableOpacity
+                        style={styles.damageReportPhotoThumb}
+                        onPress={() => handlePostImagePress(report.description.trim())}
+                      >
+                        <PostImage
+                          storageId={report.description.trim()}
+                          onPress={() => handlePostImagePress(report.description.trim())}
+                          wrapperStyle={styles.damageReportPhotoWrapper}
+                          imageStyle={styles.damageReportPhotoImage}
+                        />
+                      </TouchableOpacity>
+                    ) : (
+                      <Text style={styles.damageReportCardDescription}>{report.description}</Text>
+                    )}
                     <Text style={styles.damageReportCardDate}>
                       {formatDate(new Date(report.createdAt).toISOString())}
                     </Text>
@@ -3247,10 +3358,10 @@ const CommunityScreen = () => {
             <TouchableOpacity
               style={[
                 styles.createButton,
-                (isCreatingPost || uploadingImages) && styles.createButtonDisabled
+                (isCreatingPost || uploadingImages || isReadOnly) && styles.createButtonDisabled
               ]}
               onPress={handleCreatePost}
-              disabled={isCreatingPost || uploadingImages}
+              disabled={isCreatingPost || uploadingImages || isReadOnly}
             >
               {(isCreatingPost || uploadingImages) ? (
                 <View style={styles.buttonLoadingContainer}>
@@ -3309,9 +3420,10 @@ const CommunityScreen = () => {
                 style={[styles.textInput, styles.commentInput]}
                 placeholder="Write your comment..."
                 value={newComment}
-                onChangeText={(text) => setNewComment(text)}
+                onChangeText={setNewComment}
                 multiline
                 textAlignVertical="top"
+                autoFocus
               />
             </View>
 
@@ -3326,8 +3438,9 @@ const CommunityScreen = () => {
               <View style={styles.commentModalFooterSpacer} />
 
               <TouchableOpacity
-                style={styles.createButton}
+                style={[styles.createButton, isReadOnly && styles.createButtonDisabled]}
                 onPress={handleAddComment}
+                disabled={isReadOnly}
               >
                 <Text style={styles.createButtonText}>Add Comment</Text>
               </TouchableOpacity>
@@ -4618,6 +4731,41 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     lineHeight: 16,
   },
+  commentStatusBannerPending: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 6,
+    backgroundColor: '#fffbeb',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    alignSelf: 'flex-start',
+  },
+  commentStatusTextPending: {
+    fontSize: 11,
+    color: '#b45309',
+    fontWeight: '500',
+    flexShrink: 1,
+  },
+  commentStatusBannerDeclined: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 4,
+    marginTop: 6,
+    backgroundColor: '#fef2f2',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+  },
+  commentStatusTextDeclined: {
+    fontSize: 11,
+    color: '#b91c1c',
+    fontWeight: '500',
+    flexShrink: 1,
+  },
   commentTime: {
     fontSize: 10,
     color: '#9ca3af',
@@ -4726,6 +4874,14 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 1,
+    ...(Platform.OS === 'web'
+      ? {
+          userSelect: 'text' as any,
+          WebkitUserSelect: 'text' as any,
+          MozUserSelect: 'text' as any,
+          msUserSelect: 'text' as any,
+        }
+      : {}),
   },
   contentInput: {
     height: 140,

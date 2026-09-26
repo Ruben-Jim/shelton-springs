@@ -88,7 +88,7 @@ export const useStorageUrl = (storageId: string | null | undefined): string | un
   // Priority: cachedResult (sync check) > cachedUrl (state) > urlFromQuery (async)
   const resolvedUrl = cachedResult.url || cachedUrl || urlFromQuery;
 
-  return resolvedUrl;
+  return resolvedUrl ?? undefined;
 };
 
 /**

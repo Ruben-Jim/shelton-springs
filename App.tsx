@@ -84,10 +84,8 @@ const MainAppContent = ({ activeRouteName, onTabNavigate }: MainAppContentProps)
       onNavigate={onTabNavigate}
     >
       <Stack.Navigator
-        screenOptions={{
-          ...defaultStackScreenOptions,
-          detachInactiveScreens: false,
-        }}
+        detachInactiveScreens={false}
+        screenOptions={defaultStackScreenOptions}
       >
         <Stack.Screen name="Home" component={HomeScreen} />
         <Stack.Screen name="Board" component={BoardScreen} />

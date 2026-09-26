@@ -37,7 +37,7 @@ import {
   KeyboardAvoidingView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useMutation } from 'convex/react';
+import { useGuardedMutation, isTestUserReadOnlyError } from '../hooks/useGuardedMutation';
 import { api } from '../../convex/_generated/api';
 import type { Id } from '../../convex/_generated/dataModel';
 import ProfileImage from './ProfileImage';
@@ -327,14 +327,14 @@ export default function HomeownerRecordsModal({
   onClose,
   addressGroup,
 }: HomeownerRecordsModalProps) {
-  const updateFeeMutation = useMutation(api.fees.update);
-  const updateFineMutation = useMutation(api.fines.update);
-  const removeFeeMutation = useMutation(api.fees.remove);
-  const removeFineMutation = useMutation(api.fines.remove);
-  const removePaymentMutation = useMutation(api.payments.remove);
-  const reconcileFeePaidMutation = useMutation(api.payments.adminReconcileVerifiedPaidForFee);
-  const reconcileFinePaidMutation = useMutation(api.payments.adminReconcileVerifiedPaidForFine);
-  const createAnnualFeeForAddressMutation = useMutation(api.fees.createAnnualFeeForAddress);
+  const updateFeeMutation = useGuardedMutation(api.fees.update);
+  const updateFineMutation = useGuardedMutation(api.fines.update);
+  const removeFeeMutation = useGuardedMutation(api.fees.remove);
+  const removeFineMutation = useGuardedMutation(api.fines.remove);
+  const removePaymentMutation = useGuardedMutation(api.payments.remove);
+  const reconcileFeePaidMutation = useGuardedMutation(api.payments.adminReconcileVerifiedPaidForFee);
+  const reconcileFinePaidMutation = useGuardedMutation(api.payments.adminReconcileVerifiedPaidForFine);
+  const createAnnualFeeForAddressMutation = useGuardedMutation(api.fees.createAnnualFeeForAddress);
   const { alertState, showAlert, hideAlert } = useCustomAlert();
 
   const [editTarget, setEditTarget] = useState<
@@ -454,6 +454,7 @@ export default function HomeownerRecordsModal({
         setEditTarget(null);
       }
     } catch (e: unknown) {
+      if (isTestUserReadOnlyError(e)) return;
       const msg = e instanceof Error ? e.message : 'Delete failed';
       showAlert({
         title: `Could not delete ${target.kind}`,
@@ -523,6 +524,7 @@ export default function HomeownerRecordsModal({
       }
       setEditTarget(null);
     } catch (e: unknown) {
+      if (isTestUserReadOnlyError(e)) return;
       const msg = e instanceof Error ? e.message : 'Update failed';
       Alert.alert('Could not save', msg);
     } finally {
@@ -590,6 +592,7 @@ export default function HomeownerRecordsModal({
       setShowAddAnnualModal(false);
       Alert.alert('Annual fee added', `HOA dues for ${year} were added for this address.`);
     } catch (e: unknown) {
+      if (isTestUserReadOnlyError(e)) return;
       const msg = e instanceof Error ? e.message : 'Could not add annual fee';
       Alert.alert('Could not add fee', msg);
     } finally {

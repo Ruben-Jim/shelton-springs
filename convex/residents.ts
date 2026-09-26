@@ -46,6 +46,7 @@ export const create = mutation({
     isBoardMember: v.boolean(),
     isRenter: v.boolean(),
     isDev: v.optional(v.boolean()),
+    isTestUser: v.optional(v.boolean()),
     password: v.optional(v.string()),
     profileImage: v.optional(v.string()),
   },
@@ -64,6 +65,7 @@ export const create = mutation({
     const id = await ctx.db.insert("residents", {
       ...args,
       isDev: args.isDev ?? false, // Default to false if not provided
+      isTestUser: args.isTestUser ?? false,
       isActive: true,
       isBlocked: false,
       blockReason: undefined,
@@ -95,6 +97,7 @@ export const update = mutation({
     isBoardMember: v.optional(v.boolean()),
     isRenter: v.optional(v.boolean()),
     isDev: v.optional(v.boolean()),
+    isTestUser: v.optional(v.boolean()),
     isActive: v.optional(v.boolean()),
     password: v.optional(v.string()),
     profileImage: v.optional(v.string()),
@@ -236,5 +239,52 @@ export const setBlockStatus = mutation({
     });
     
     return { success: true };
+  },
+});
+
+const APP_STORE_TEST_EMAIL = "test@test.com";
+
+/**
+ * Upsert the App Store / QA review account (Jane Doe).
+ * Not a homeowner or renter; isDev for Admin access; isTestUser for header badge.
+ */
+export const ensureAppStoreTestUser = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const fields = {
+      firstName: "Jane",
+      lastName: "Doe",
+      email: APP_STORE_TEST_EMAIL,
+      phone: undefined as string | undefined,
+      address: "App Store Review Account",
+      unitNumber: undefined as string | undefined,
+      isResident: false,
+      isBoardMember: false,
+      isRenter: false,
+      isDev: true,
+      isTestUser: true,
+      isActive: true,
+      isBlocked: false,
+      blockReason: undefined as string | undefined,
+      password: "12345",
+      updatedAt: now,
+    };
+
+    const existing = await ctx.db
+      .query("residents")
+      .withIndex("by_email", (q) => q.eq("email", APP_STORE_TEST_EMAIL))
+      .first();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, fields);
+      return { id: existing._id, created: false };
+    }
+
+    const id = await ctx.db.insert("residents", {
+      ...fields,
+      createdAt: now,
+    });
+    return { id, created: true };
   },
 });

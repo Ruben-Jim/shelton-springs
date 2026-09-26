@@ -6,8 +6,10 @@ import { useAuth } from '../context/AuthContext';
 const DeveloperIndicator = () => {
   const { user } = useAuth();
   const isDev = user?.isDev ?? false;
+  const isTestUser = user?.isTestUser === true;
 
-  if (!isDev) {
+  // Test User badge replaces Developer in headers for the review account
+  if (!isDev || isTestUser) {
     return null;
   }
 

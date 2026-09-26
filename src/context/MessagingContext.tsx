@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { useQuery, useMutation } from 'convex/react';
+import { useQuery } from 'convex/react';
+import { useGuardedMutation, isTestUserReadOnlyError } from '../hooks/useGuardedMutation';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from './AuthContext';
 import { Id } from '../../convex/_generated/dataModel';
@@ -23,7 +24,7 @@ interface Conversation {
     id: string;
     name: string;
     email: string;
-    profileImage?: string;
+    profileImage?: string | null;
     isBoardMember: boolean;
   } | null;
 }
@@ -73,8 +74,8 @@ export const MessagingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   ) || [];
 
   // Mutations
-  const createConversation = useMutation(api.messages.createConversation);
-  const sendMessageMutation = useMutation(api.messages.sendMessage);
+  const createConversation = useGuardedMutation(api.messages.createConversation);
+  const sendMessageMutation = useGuardedMutation(api.messages.sendMessage);
 
   // Check for unread messages (for non-board users) - optimized to reduce re-computations
   const hasUnreadMessages = React.useMemo(() => {
@@ -108,6 +109,7 @@ export const MessagingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setActiveConversationId(conversationId);
       return conversationId;
     } catch (error) {
+      if (isTestUserReadOnlyError(error)) return null;
       console.error('Error creating conversation:', error);
       return null;
     }
@@ -139,6 +141,7 @@ export const MessagingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       // This local notification only works for the sender's device
       // In a production app, you'd want to send remote push notifications to the recipient
     } catch (error) {
+      if (isTestUserReadOnlyError(error)) return;
       console.error('Error sending message:', error);
       throw error;
     }

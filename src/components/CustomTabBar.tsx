@@ -51,12 +51,13 @@ function CustomTabBarView({ routeName, onNavigate, embedded = false }: CustomTab
   const isBoardMember = user?.isBoardMember && user?.isActive;
   const isRenter = user?.isRenter;
   const isDev = user?.isDev ?? false;
+  const isTestUser = user?.isTestUser === true;
 
   const tabs: TabItem[] = [
     { name: 'Home', icon: 'home', label: 'Home', color: '#6b7280' },
     { name: 'Board', icon: 'business', label: 'HOA', color: '#6b7280' },
     { name: 'Community', icon: 'chatbubbles', label: 'Community', color: '#6b7280' },
-    ...(isBoardMember || !isRenter ? [{ name: 'Fees', icon: 'card', label: 'Fees', color: '#6b7280' }] : []),
+    ...(isBoardMember || (!isRenter && !isTestUser) ? [{ name: 'Fees', icon: 'card', label: 'Fees', color: '#6b7280' }] : []),
     ...(isBoardMember || isDev ? [{ name: 'Admin', icon: 'settings', label: 'Admin', color: '#6b7280' }] : []),
   ];
 
@@ -189,8 +190,12 @@ const TabButton = ({ tab, isActive, onPress }: TabButtonProps) => {
       onPress={onPress}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
+      {...(Platform.OS === 'web'
+        ? ({
+            onMouseEnter: handleMouseEnter,
+            onMouseLeave: handleMouseLeave,
+          } as object)
+        : null)}
       style={styles.tabPressable}
       accessibilityRole="tab"
       accessibilityState={{ selected: isActive }}

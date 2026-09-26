@@ -210,9 +210,10 @@ export const hasPaidAnnualFee = query({
       .collect();
     if (unpaidFines.length > 0) return false;
 
-    // Get user's address to check fees by address (for households)
-    const residentId = args.userId as Id<"residents">;
-    const user = await ctx.db.get(residentId);
+    // Resolve resident for address-based fee lookup. Demo/review string ids
+    // (e.g. "demo_user_board_1") are not Convex document ids — skip db.get.
+    const residentId = ctx.db.normalizeId("residents", args.userId);
+    const user = residentId ? await ctx.db.get(residentId) : null;
     const addressKey = user
       ? `${user.address}${user.unitNumber ? ` Unit ${user.unitNumber}` : ''}`
       : null;

@@ -16,6 +16,7 @@ export type AdminNavBadgeKey =
   | 'community'
   | 'complaints'
   | 'pendingPayments'
-  | 'pendingDamage';
+  | 'pendingDamage'
+  | 'pendingComments';
 
 export type AdminNavBadges = Partial<Record<AdminNavBadgeKey, number>>;

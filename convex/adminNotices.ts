@@ -156,12 +156,13 @@ export const getNoticeForResident = query({
 
 export const listMyAdminNotices = query({
   args: {
-    residentId: v.id("residents"),
+    // Match userNotifications.userId (string) — demo accounts use ids like "demo_user_board_1"
+    residentId: v.string(),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const limit = args.limit ?? 20;
-    const userId = String(args.residentId);
+    const userId = args.residentId;
     const notifications = await ctx.db
       .query("userNotifications")
       .withIndex("by_user", (q) => q.eq("userId", userId))

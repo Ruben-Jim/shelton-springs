@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
+import type { Id } from '../../convex/_generated/dataModel';
 import { useAuth } from '../context/AuthContext';
 import { useBrandSplash } from '../context/BrandSplashContext';
 import { usePostLoginPrompts } from '../context/PostLoginPromptsContext';
@@ -56,7 +57,7 @@ export const useUserNotifications = () => {
         const token = result.token ?? enhancedUnifiedNotificationManager.getPushToken();
         if (token) {
           await updatePushToken({
-            userId: user._id,
+            userId: user._id as Id<'residents'>,
             expoPushToken: token,
           });
         }

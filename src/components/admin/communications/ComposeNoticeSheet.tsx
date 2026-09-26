@@ -9,7 +9,8 @@ import {
   ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useMutation, useQuery } from 'convex/react';
+import { useQuery } from 'convex/react';
+import { useGuardedMutation, isTestUserReadOnlyError, useIsTestUserReadOnly } from '../../../hooks/useGuardedMutation';
 import { api } from '../../../../convex/_generated/api';
 import { Id } from '../../../../convex/_generated/dataModel';
 import { useAuth } from '../../../context/AuthContext';
@@ -99,9 +100,10 @@ export default function ComposeNoticeSheet({
   useDesktopModal = false,
 }: ComposeNoticeSheetProps) {
   const { user } = useAuth();
+  const { isReadOnly } = useIsTestUserReadOnly();
   const templates = useQuery(api.adminNotices.getTemplates) ?? [];
   const nextNoticeNumber = useQuery(api.adminNotices.getNextNoticeNumber);
-  const sendNotice = useMutation(api.adminNotices.send);
+  const sendNotice = useGuardedMutation(api.adminNotices.send);
 
   const [stepIndex, setStepIndex] = useState(0);
   const [templateType, setTemplateType] = useState<NoticeTemplateType>('action_request');
@@ -179,6 +181,7 @@ export default function ComposeNoticeSheet({
 
   const goNext = () => {
     if (step === 'review') {
+      if (isReadOnly) return;
       void handleSend();
       return;
     }
@@ -216,6 +219,7 @@ export default function ComposeNoticeSheet({
               onClose();
               Alert.alert('Sent', 'Your notice has been queued for delivery.');
             } catch (error) {
+              if (isTestUserReadOnlyError(error)) return;
               Alert.alert(
                 'Send failed',
                 error instanceof Error ? error.message : 'Unable to send notice.'
@@ -379,7 +383,7 @@ export default function ComposeNoticeSheet({
         onCancel={goBack}
         onConfirm={goNext}
         confirmLabel={step === 'review' ? 'Send' : 'Next'}
-        confirmDisabled={!canProceed}
+        confirmDisabled={!canProceed || (step === 'review' && isReadOnly)}
         loading={sending}
       />
       <StepDots steps={steps} stepIndex={stepIndex} />

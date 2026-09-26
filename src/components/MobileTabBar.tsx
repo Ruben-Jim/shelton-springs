@@ -21,6 +21,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery, useMutation } from 'convex/react';
+import { useGuardedMutation, isTestUserReadOnlyError, useIsTestUserReadOnly } from '../hooks/useGuardedMutation';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
 import { useCachedResidents } from '../context/QueryCacheContext';
@@ -66,10 +67,11 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
   const displayImage = currentUser?.profileImage;
   
   // Convex mutations
-  const updateResident = useMutation(api.residents.update);
-  const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
-  const deleteStorageFile = useMutation(api.storage.deleteStorageFile);
-  const deleteResident = useMutation(api.residents.remove);
+  const updateResident = useGuardedMutation(api.residents.update);
+  const generateUploadUrl = useGuardedMutation(api.storage.generateUploadUrl);
+  const deleteStorageFile = useGuardedMutation(api.storage.deleteStorageFile);
+  const deleteResident = useGuardedMutation(api.residents.remove);
+  // Push token updates stay allowed for test / review devices
   const updatePushToken = useMutation(api.residents.updatePushToken);
   
   // Account deletion state
@@ -99,6 +101,7 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
         }
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.warn('Failed to refresh notification status:', error);
     }
   }, [user?._id, updatePushToken, currentUser?.expoPushToken]);
@@ -117,6 +120,8 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
   const isBoardMember = user?.isBoardMember && user?.isActive;
   const isRenter = user?.isRenter;
   const isDev = user?.isDev ?? false;
+  const isTestUser = user?.isTestUser === true;
+  const { isReadOnly, guardPress } = useIsTestUserReadOnly();
 
   // Handle external menu state changes
   useEffect(() => {
@@ -166,7 +171,7 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
     { name: 'Home', icon: 'home', label: 'Home', color: '#6b7280' },
     { name: 'Board', icon: 'business', label: 'HOA', color: '#6b7280' },
     { name: 'Community', icon: 'chatbubbles', label: 'Community', color: '#6b7280' },
-    ...(isBoardMember || !isRenter ? [{ name: 'Fees', icon: 'card', label: 'Fees', color: '#6b7280' }] : []),
+    ...(isBoardMember || (!isRenter && !isTestUser) ? [{ name: 'Fees', icon: 'card', label: 'Fees', color: '#6b7280' }] : []),
     ...(isBoardMember || isDev ? [{ name: 'Admin', icon: 'settings', label: 'Admin', color: '#6b7280' }] : []),
   ];
 
@@ -239,6 +244,7 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
         setProfileImage(result.assets[0].uri);
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error picking image:', error);
       Alert.alert('Error', 'Failed to pick image. Please try again.');
     }
@@ -262,6 +268,7 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
         setProfileImage(result.assets[0].uri);
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error taking photo:', error);
       Alert.alert('Error', 'Failed to take photo. Please try again.');
     }
@@ -279,6 +286,7 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
       const { storageId } = await uploadResponse.json();
       return storageId;
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) throw error;
       console.error('Error uploading image:', error);
       throw new Error('Failed to upload image');
     }
@@ -350,6 +358,7 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
 
       // Don't close the modal - let user choose a new image or close manually
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error removing profile image:', error);
       showAlert({
         title: 'Error',
@@ -399,6 +408,7 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
         setProfileImage(null);
       });
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error updating profile image:', error);
       showAlert({
         title: 'Error',
@@ -419,6 +429,7 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
       setShowProfileModal(false);
       await signOut();
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error signing out:', error);
     }
   };
@@ -489,6 +500,7 @@ const handleDeleteAccount = () => {
         try {
           await deleteStorageFile({ storageId: currentUser.profileImage as any });
         } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
           console.log('Error deleting profile image (continuing with account deletion):', error);
         }
       }
@@ -502,6 +514,7 @@ const handleDeleteAccount = () => {
       // Show success message using native Alert
       Alert.alert('Account Deleted', 'Your account has been permanently deleted.');
     } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error deleting account:', error);
       Alert.alert(
         'Error',
@@ -539,6 +552,7 @@ const handleDeleteAccount = () => {
               expoPushToken: token,
             });
           } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
             console.warn('Failed to save push token:', error);
           }
         }
@@ -565,6 +579,7 @@ const handleDeleteAccount = () => {
         }
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Failed to enable notifications:', error);
       showAlert({
         title: 'Error',
@@ -674,7 +689,15 @@ const handleDeleteAccount = () => {
                       {user.firstName} {user.lastName}
                     </Text>
                     <Text style={styles.userRole}>
-                      {(user.isDev ?? false) ? 'Developer' : user.isBoardMember ? 'Board Member' : user.isRenter ? 'Renter' : 'Resident'}
+                      {user.isTestUser
+                        ? 'Test User'
+                        : (user.isDev ?? false)
+                          ? 'Developer'
+                          : user.isBoardMember
+                            ? 'Board Member'
+                            : user.isRenter
+                              ? 'Renter'
+                              : 'Resident'}
                     </Text>
                   </View>
                   <View style={styles.userActions}>
@@ -764,14 +787,15 @@ const handleDeleteAccount = () => {
                 deleting={deleting}
                 notificationsEnabled={notificationsEnabled}
                 requestingNotifications={requestingNotifications}
-                onPickImage={pickImage}
-                onTakePhoto={takePhoto}
-                onRemoveProfileImage={handleRemoveProfileImage}
-                onSaveProfileImage={handleSaveProfileImage}
+                readOnly={isReadOnly}
+                onPickImage={() => guardPress(pickImage)}
+                onTakePhoto={() => guardPress(takePhoto)}
+                onRemoveProfileImage={() => guardPress(() => { void handleRemoveProfileImage(); })}
+                onSaveProfileImage={() => guardPress(() => { void handleSaveProfileImage(); })}
                 onCancelProfileImage={() => setProfileImage(null)}
                 onEnableNotifications={handleEnableNotifications}
                 onSignOut={handleSignOut}
-                onDeleteAccount={handleDeleteAccount}
+                onDeleteAccount={() => guardPress(handleDeleteAccount)}
               />
             </View>
         </KeyboardAvoidingView>

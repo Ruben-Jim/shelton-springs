@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import { Platform } from 'react-native';
 import * as Linking from 'expo-linking';
 import { useNavigation } from '@react-navigation/native';
+import type { StackNavigationProp } from '@react-navigation/stack';
+import type { AuthStackParamList } from '../navigation/AuthNavigator';
 
 /**
  * When mounted on an auth screen, checks for resetToken in the URL and
@@ -9,7 +11,7 @@ import { useNavigation } from '@react-navigation/native';
  * and mobile deep links.
  */
 export function useResetTokenRedirect() {
-  const navigation = useNavigation();
+  const navigation = useNavigation<StackNavigationProp<AuthStackParamList>>();
 
   useEffect(() => {
     let cancelled = false;

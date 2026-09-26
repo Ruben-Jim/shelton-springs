@@ -19,13 +19,16 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useIsFocused } from '@react-navigation/native';
-import { useQuery, useMutation } from 'convex/react';
+import { useQuery } from 'convex/react';
+import { useGuardedMutation, isTestUserReadOnlyError } from '../hooks/useGuardedMutation';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
 import { useCachedHoaInfo, useCachedResidents } from '../context/QueryCacheContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
+import TestUserIndicator from '../components/TestUserIndicator';
+import TestUserReadOnlyBanner from '../components/TestUserReadOnlyBanner';
 import { DesktopTabBarSlot, useDesktopTabBarScrollSync } from '../components/DesktopTabBarLayer';
 import MobileTabBar from '../components/MobileTabBar';
 import CustomAlert from '../components/CustomAlert';
@@ -90,7 +93,11 @@ const HomeScreen = () => {
   const isBoardMember = user?.isBoardMember && user?.isActive;
   const heroHeaderLayout = useHeroHeaderLayout();
   const isDev = user?.isDev ?? false;
-  const showFeesAccess = isBoardMember || !user?.isRenter;
+  const isTestUser = user?.isTestUser === true;
+  const isHomeowner = Boolean(user?.isResident && !user?.isRenter);
+  const showFeesAccess = !isTestUser && (isBoardMember || !user?.isRenter);
+  // Personal dues status only applies to homeowners — not pure developer / guest accounts
+  const showPersonalDues = !isTestUser && isHomeowner;
   const hoaInfo = useCachedHoaInfo();
   const residents = useCachedResidents();
   // Use paginated queries with small initial limits for home screen (conditional based on screen focus)
@@ -119,9 +126,9 @@ const HomeScreen = () => {
   ) ?? [];
   const hasPaidAnnualFee = useQuery(
     api.fees.hasPaidAnnualFee,
-    isFocused && user?._id && showFeesAccess ? { userId: user._id } : "skip"
+    isFocused && user?._id && showPersonalDues ? { userId: user._id } : "skip"
   );
-  const voteOnPoll = useMutation(api.polls.vote);
+  const voteOnPoll = useGuardedMutation(api.polls.vote);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [selectedPollVotes, setSelectedPollVotes] = useState<{[pollId: string]: number[]}>({});
   const { alertState, showAlert, hideAlert } = useCustomAlert();
@@ -236,6 +243,7 @@ const HomeScreen = () => {
           await AsyncStorage.setItem(`onboarding_seen_${user._id}`, 'true');
         }
       } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
         console.error('Error clearing onboarding flag:', error);
       }
       setShowOnboarding(false);
@@ -255,6 +263,7 @@ const HomeScreen = () => {
           setShowPetRegistrationModal(true);
         }
       } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
         console.error('Error checking pet registration status:', error);
       }
     };
@@ -279,6 +288,7 @@ const HomeScreen = () => {
         if (seen === 'true' || cancelled) return;
         setShowUiUpdateModal(true);
       } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
         // Fallback silently if local storage is unavailable.
       }
     };
@@ -299,6 +309,7 @@ const HomeScreen = () => {
     try {
       await AsyncStorage.setItem(storageKey, 'true');
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       // Best effort only.
     }
     setShowUiUpdateModal(false);
@@ -314,6 +325,7 @@ const HomeScreen = () => {
       try {
         await AsyncStorage.setItem(`pet_registration_confirmed_${user._id}`, 'true');
       } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
         console.error('Error saving pet registration confirmation:', error);
       }
     }
@@ -407,7 +419,7 @@ const HomeScreen = () => {
 
   const myAdminNotices = useQuery(
     api.adminNotices.listMyAdminNotices,
-    user?._id ? { residentId: user._id, limit: 10 } : 'skip'
+    user?._id ? { residentId: String(user._id), limit: 10 } : 'skip'
   );
 
   const attentionItems = useMemo((): HomeAttentionItem[] => {
@@ -442,7 +454,7 @@ const HomeScreen = () => {
       }
     }
 
-    if (showFeesAccess && hasPaidAnnualFee === false) {
+    if (showPersonalDues && hasPaidAnnualFee === false) {
       items.push({
         id: 'dues',
         label: 'Unpaid annual dues',
@@ -489,7 +501,7 @@ const HomeScreen = () => {
   }, [
     activePoll,
     selectedPollVotes,
-    showFeesAccess,
+    showPersonalDues,
     hasPaidAnnualFee,
     user?._id,
     petRegistrationConfirmed,
@@ -555,6 +567,7 @@ const HomeScreen = () => {
         hideAlert();
       }, 2000);
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error voting on poll:', error);
       showAlert({
         title: 'Error',
@@ -573,6 +586,7 @@ const HomeScreen = () => {
     try {
       return new Date(dateString).toLocaleDateString();
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       return 'Invalid date';
     }
   };
@@ -683,11 +697,22 @@ const HomeScreen = () => {
               <Text style={styles.userName}>
                 Welcome back, {user.firstName} {user.lastName}
               </Text>
+              <TestUserIndicator />
               <DeveloperIndicator />
               <BoardMemberIndicator />
             </View>
+            <TestUserReadOnlyBanner />
             <Text style={styles.userRole}>
-              {(user.isDev ?? false) ? 'Developer' : user.isBoardMember ? 'Board Member' : user.isRenter ? 'Renter' : 'Resident'} • {user.address}
+              {isTestUser
+                ? 'Test User'
+                : (user.isDev ?? false)
+                  ? 'Developer'
+                  : user.isBoardMember
+                    ? 'Board Member'
+                    : user.isRenter
+                      ? 'Renter'
+                      : 'Resident'}
+              {isTestUser ? '' : ` • ${user.address}`}
             </Text>
           </View>
         )}

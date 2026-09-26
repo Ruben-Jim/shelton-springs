@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
-import { useMutation } from 'convex/react';
+import { useGuardedMutation, isTestUserReadOnlyError } from '../hooks/useGuardedMutation';
 import { api } from '../../convex/_generated/api';
 import { getUploadReadyImage } from '../utils/imageUpload';
 import { ensurePhotoLibraryAccess } from '../utils/ensurePhotoLibraryAccess';
@@ -36,7 +36,7 @@ const ImageEditModal: React.FC<ImageEditModalProps> = ({
 }) => {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
+  const generateUploadUrl = useGuardedMutation(api.storage.generateUploadUrl);
 
   const modalOpacity = useRef(new Animated.Value(0)).current;
   const modalOverlayOpacity = useRef(new Animated.Value(0)).current;
@@ -100,6 +100,7 @@ const ImageEditModal: React.FC<ImageEditModalProps> = ({
         setSelectedImage(result.assets[0].uri);
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error picking image:', error);
       Alert.alert('Error', 'Failed to pick image. Please try again.');
     }
@@ -123,6 +124,7 @@ const ImageEditModal: React.FC<ImageEditModalProps> = ({
         setSelectedImage(result.assets[0].uri);
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error taking photo:', error);
       Alert.alert('Error', 'Failed to take photo. Please try again.');
     }
@@ -140,6 +142,7 @@ const ImageEditModal: React.FC<ImageEditModalProps> = ({
       const { storageId } = await uploadResponse.json();
       return storageId;
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) throw error;
       console.error('Error uploading image:', error);
       throw new Error('Failed to upload image');
     }
@@ -159,6 +162,7 @@ const ImageEditModal: React.FC<ImageEditModalProps> = ({
         onClose();
       });
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error saving image:', error);
       Alert.alert('Error', 'Failed to save image. Please try again.');
     } finally {

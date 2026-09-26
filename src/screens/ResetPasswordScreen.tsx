@@ -11,6 +11,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import type { StackNavigationProp } from '@react-navigation/stack';
 import * as Linking from 'expo-linking';
 import { useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
@@ -22,9 +23,10 @@ type ResetPasswordScreenRouteProp = RouteProp<
   AuthStackParamList,
   'ResetPassword'
 >;
+type ResetPasswordScreenNavigationProp = StackNavigationProp<AuthStackParamList>;
 
 const ResetPasswordScreen = () => {
-  const navigation = useNavigation();
+  const navigation = useNavigation<ResetPasswordScreenNavigationProp>();
   const route = useRoute<ResetPasswordScreenRouteProp>();
   const convex = useConvex();
   const [token, setToken] = useState(route.params?.resetToken ?? '');

@@ -56,6 +56,8 @@ export interface Comment {
   author: string;
   content: string;
   timestamp: string;
+  status?: 'pending' | 'approved' | 'declined';
+  declineReason?: string;
 }
 
 export interface EmergencyNotification {
@@ -92,6 +94,7 @@ export interface User {
   isBoardMember: boolean;
   isRenter: boolean;
   isDev?: boolean;
+  isTestUser?: boolean;
   isActive: boolean;
   isBlocked: boolean;
   blockReason?: string;

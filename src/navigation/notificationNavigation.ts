@@ -1,23 +1,28 @@
 import { NavigationContainerRef } from '@react-navigation/native';
 
+type AppParamList = {
+  ResidentNotice: { ticketId: string };
+  [key: string]: object | undefined;
+};
+
 type PendingNoticeNavigation = {
   ticketId: string;
 };
 
-let navigationRef: NavigationContainerRef<any> | null = null;
+let navigationRef: NavigationContainerRef<AppParamList> | null = null;
 let pendingNotice: PendingNoticeNavigation | null = null;
 
 export function registerNotificationNavigationRef(
   ref: NavigationContainerRef<any> | null
 ) {
-  navigationRef = ref;
+  navigationRef = ref as NavigationContainerRef<AppParamList> | null;
 }
 
 export function navigateToResidentNotice(ticketId: string) {
   if (!ticketId) return;
 
   if (navigationRef?.isReady()) {
-    navigationRef.navigate('ResidentNotice' as never, { ticketId } as never);
+    navigationRef.navigate('ResidentNotice', { ticketId });
     pendingNotice = null;
     return;
   }
@@ -27,10 +32,9 @@ export function navigateToResidentNotice(ticketId: string) {
 
 export function flushPendingNoticeNavigation() {
   if (!pendingNotice || !navigationRef?.isReady()) return;
-  navigationRef.navigate(
-    'ResidentNotice' as never,
-    { ticketId: pendingNotice.ticketId } as never
-  );
+  navigationRef.navigate('ResidentNotice', {
+    ticketId: pendingNotice.ticketId,
+  });
   pendingNotice = null;
 }
 

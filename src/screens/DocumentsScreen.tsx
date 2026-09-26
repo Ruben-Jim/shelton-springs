@@ -21,7 +21,8 @@ import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
-import { useQuery, useMutation } from 'convex/react';
+import { useQuery } from 'convex/react';
+import { useGuardedMutation, isTestUserReadOnlyError } from '../hooks/useGuardedMutation';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
@@ -162,9 +163,9 @@ const DocumentsScreen = () => {
   const documents = allDocuments.filter((doc: any) => doc.type === activeType);
 
   // Convex mutations
-  const createDocument = useMutation(api.documents.create);
-  const deleteDocument = useMutation(api.documents.remove);
-  const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
+  const createDocument = useGuardedMutation(api.documents.create);
+  const deleteDocument = useGuardedMutation(api.documents.remove);
+  const generateUploadUrl = useGuardedMutation(api.storage.generateUploadUrl);
 
   const handlePickDocument = async () => {
     try {
@@ -179,6 +180,7 @@ const DocumentsScreen = () => {
         setFileType('document');
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error picking document:', error);
       Alert.alert('Error', 'Failed to pick document. Please try again.');
     }
@@ -201,6 +203,7 @@ const DocumentsScreen = () => {
         setFileType('image');
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error picking image:', error);
       Alert.alert('Error', 'Failed to pick image. Please try again.');
     }
@@ -287,6 +290,7 @@ const DocumentsScreen = () => {
         setShowUploadModal(false);
       });
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error uploading document:', error);
       Alert.alert('Error', 'Failed to upload document. Please try again.');
     } finally {
@@ -314,6 +318,7 @@ const DocumentsScreen = () => {
       });
       setDocumentToDelete(null);
     } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error deleting document:', error);
       showAlert({
         title: 'Error',

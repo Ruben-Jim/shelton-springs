@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Alert, Linking, Image, Platform, Modal, ScrollView, KeyboardAvoidingView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useMutation, useQuery, useConvex } from 'convex/react';
+import { useQuery, useConvex } from 'convex/react';
+import { useGuardedMutation, isTestUserReadOnlyError } from '../hooks/useGuardedMutation';
 import { api } from '../../convex/_generated/api';
 import { useCachedResidents } from '../context/QueryCacheContext';
 import QRCode from 'react-native-qrcode-svg';
@@ -32,8 +33,8 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
   onError,
 }) => {
   const convex = useConvex();
-  const createVenmoPayment = useMutation(api.payments.createVenmoPayment);
-  const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
+  const createVenmoPayment = useGuardedMutation(api.payments.createVenmoPayment);
+  const generateUploadUrl = useGuardedMutation(api.storage.generateUploadUrl);
   const residents = useCachedResidents();
   const [venmoUsername, setVenmoUsername] = useState('');
   const [venmoTransactionId, setVenmoTransactionId] = useState('');
@@ -55,6 +56,7 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
           setVenmoUsername(savedUsername);
         }
       } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
         console.error('Error loading saved Venmo username:', error);
       }
     };
@@ -68,6 +70,7 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
         try {
           await AsyncStorage.setItem(VENMO_USERNAME_KEY, venmoUsername.trim());
         } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
           console.error('Error saving Venmo username:', error);
         }
       }
@@ -100,6 +103,7 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
         return;
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       // Deep link not available, fall through to web link
     }
     
@@ -132,6 +136,7 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
         setReceiptImage(result.assets[0].uri);
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error picking receipt image:', error);
       Alert.alert('Error', 'Failed to pick image. Please try again.');
     }
@@ -170,6 +175,7 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
           const { storageId } = await uploadResponse.json();
           receiptImageId = storageId;
         } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
           console.error('Error uploading receipt:', error);
           // Don't fail the payment if receipt upload fails
           Alert.alert('Warning', 'Payment will be submitted, but receipt upload failed. You can still proceed.');
@@ -198,6 +204,7 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
 
       onSuccess();
     } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Venmo payment submission error:', error);
       onError(error.message || 'Failed to submit payment information');
     } finally {
@@ -541,6 +548,7 @@ const VenmoCheckout: React.FC<VenmoCheckoutProps> = ({
                       // Close overlay on successful submission
                       handleCloseOverlay();
                     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
                       // Error is already handled by handleSubmit's onError callback
                       // Keep overlay open so user can fix the issue
                     }

@@ -6,7 +6,7 @@ import {
 
 export const defaultStackScreenOptions: StackNavigationOptions = {
   headerShown: false,
-  animationEnabled: Platform.OS !== 'web',
+  animation: Platform.OS === 'web' ? 'none' : 'default',
   gestureEnabled: Platform.OS !== 'web',
   gestureDirection: 'horizontal',
   cardOverlayEnabled: Platform.OS !== 'web',

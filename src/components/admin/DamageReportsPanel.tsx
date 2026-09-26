@@ -12,7 +12,7 @@ import {
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useMutation } from 'convex/react';
+import { useGuardedMutation, isTestUserReadOnlyError } from '../../hooks/useGuardedMutation';
 import { api } from '../../../convex/_generated/api';
 import OptimizedImage from '../OptimizedImage';
 import { AdminGrid, AdminGridItem } from './AdminGrid';
@@ -22,6 +22,16 @@ import CustomAlert from '../CustomAlert';
 import { useCustomAlert } from '../../hooks/useCustomAlert';
 
 type DamageStatus = 'Pending' | 'In Progress' | 'Resolved';
+
+function isRemoteImageUrl(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const trimmed = value.trim();
+  return (
+    /^https?:\/\//i.test(trimmed) &&
+    !/\s/.test(trimmed) &&
+    trimmed.length < 2048
+  );
+}
 
 export type DamageReportItem = {
   _id: string;
@@ -93,10 +103,10 @@ export default function DamageReportsPanel({
 }: DamageReportsPanelProps) {
   const { user } = useAuth();
   const { alertState, showAlert, hideAlert } = useCustomAlert();
-  const updateDamageReportStatus = useMutation(api.damageReports.updateStatus);
-  const updateAdminNotes = useMutation(api.damageReports.updateAdminNotes);
-  const updateDamageCategories = useMutation(api.damageReports.updateCategories);
-  const removeDamageReport = useMutation(api.damageReports.remove);
+  const updateDamageReportStatus = useGuardedMutation(api.damageReports.updateStatus);
+  const updateAdminNotes = useGuardedMutation(api.damageReports.updateAdminNotes);
+  const updateDamageCategories = useGuardedMutation(api.damageReports.updateCategories);
+  const removeDamageReport = useGuardedMutation(api.damageReports.remove);
 
   const [statusFilter, setStatusFilter] = useState<'All' | DamageStatus>('All');
   const [searchQuery, setSearchQuery] = useState('');
@@ -188,6 +198,7 @@ export default function DamageReportsPanel({
       });
       setNewDamageCategory('');
     } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
       Alert.alert('Error', error.message || 'Failed to add category');
     } finally {
       setSavingDamageCategories(false);
@@ -212,6 +223,7 @@ export default function DamageReportsPanel({
               categories: configuredDamageCategories.filter((entry) => entry !== category),
             });
           } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
             Alert.alert('Error', error.message || 'Failed to remove category');
           } finally {
             setSavingDamageCategories(false);
@@ -231,6 +243,7 @@ export default function DamageReportsPanel({
         ...(draft !== undefined ? { adminNotes: draft.trim() || undefined } : {}),
       });
     } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
       Alert.alert('Error', error.message || 'Failed to update damage report');
     } finally {
       setUpdatingReportId(null);
@@ -246,6 +259,7 @@ export default function DamageReportsPanel({
       });
       setNotesEditing((prev) => ({ ...prev, [reportId]: false }));
     } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
       Alert.alert('Error', error.message || 'Failed to save notes');
     } finally {
       setSavingNotesReportId(null);
@@ -304,6 +318,7 @@ export default function DamageReportsPanel({
         asAdmin: true,
       });
     } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
       showAlert({
         title: 'Error',
         message: error.message || 'Failed to delete damage report',
@@ -521,27 +536,73 @@ export default function DamageReportsPanel({
 
     return (
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photosRow}>
-        {report.photos.map((photoId, index) => (
-          <TouchableOpacity
-            key={`${report._id}-${index}`}
-            style={[styles.photoThumb, thumbStyle]}
-            onPress={() => setLightboxPhotoId(photoId)}
-            activeOpacity={0.85}
-          >
-            <OptimizedImage
-              storageId={photoId}
-              style={styles.photoImage}
-              contentFit="cover"
-              priority="high"
-            />
-            {(isDesktop || variant === 'list') && (
-              <View style={styles.photoExpandHint}>
-                <Ionicons name="expand-outline" size={12} color="#ffffff" />
-              </View>
-            )}
-          </TouchableOpacity>
-        ))}
+        {report.photos.map((photoId, index) => {
+          const isUrl = isRemoteImageUrl(photoId);
+          return (
+            <TouchableOpacity
+              key={`${report._id}-${index}`}
+              style={[styles.photoThumb, thumbStyle]}
+              onPress={() => setLightboxPhotoId(photoId)}
+              activeOpacity={0.85}
+            >
+              <OptimizedImage
+                source={isUrl ? photoId.trim() : undefined}
+                storageId={isUrl ? undefined : photoId}
+                style={styles.photoImage}
+                contentFit="cover"
+                priority="high"
+              />
+              {(isDesktop || variant === 'list') && (
+                <View style={styles.photoExpandHint}>
+                  <Ionicons name="expand-outline" size={12} color="#ffffff" />
+                </View>
+              )}
+            </TouchableOpacity>
+          );
+        })}
       </ScrollView>
+    );
+  };
+
+  const renderDescription = (report: DamageReportItem, variant: 'kanban' | 'list') => {
+    const description = (report.description ?? '').trim();
+    if (!description) return null;
+
+    // App Store / QA samples sometimes paste a screenshot URL as the description
+    if (isRemoteImageUrl(description)) {
+      const thumbStyle =
+        variant === 'kanban'
+          ? styles.photoThumbCompact
+          : isDesktop
+            ? styles.photoThumbDesktop
+            : styles.photoThumbMobile;
+
+      return (
+        <TouchableOpacity
+          style={[styles.photoThumb, thumbStyle, styles.descriptionAsPhoto]}
+          onPress={() => setLightboxPhotoId(description)}
+          activeOpacity={0.85}
+        >
+          <OptimizedImage
+            source={description}
+            style={styles.photoImage}
+            contentFit="cover"
+            priority="high"
+          />
+          <View style={styles.photoExpandHint}>
+            <Ionicons name="expand-outline" size={12} color="#ffffff" />
+          </View>
+        </TouchableOpacity>
+      );
+    }
+
+    return (
+      <Text
+        style={styles.reportDescription}
+        numberOfLines={variant === 'kanban' ? 4 : undefined}
+      >
+        {report.description}
+      </Text>
     );
   };
 
@@ -604,12 +665,7 @@ export default function DamageReportsPanel({
             ) : null}
           </View>
 
-          <Text
-            style={styles.reportDescription}
-            numberOfLines={isKanban ? 4 : undefined}
-          >
-            {report.description}
-          </Text>
+          {renderDescription(report, variant)}
           <Text style={styles.reportDate}>
             Reported {new Date(report.createdAt).toLocaleDateString()}
           </Text>
@@ -884,7 +940,8 @@ export default function DamageReportsPanel({
             </TouchableOpacity>
             {lightboxPhotoId ? (
               <OptimizedImage
-                storageId={lightboxPhotoId}
+                source={isRemoteImageUrl(lightboxPhotoId) ? lightboxPhotoId.trim() : undefined}
+                storageId={isRemoteImageUrl(lightboxPhotoId) ? undefined : lightboxPhotoId}
                 style={styles.lightboxImage}
                 contentFit="contain"
                 priority="high"
@@ -1245,6 +1302,11 @@ const styles = StyleSheet.create({
   },
   photosRow: {
     marginBottom: 4,
+  },
+  descriptionAsPhoto: {
+    marginTop: 8,
+    marginBottom: 4,
+    alignSelf: 'flex-start',
   },
   photoThumb: {
     borderRadius: 8,

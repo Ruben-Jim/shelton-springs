@@ -99,9 +99,26 @@ export default defineSchema({
     postId: v.id("communityPosts"),
     author: v.string(),
     content: v.string(),
+    /** pending | approved | declined — missing status treated as approved (legacy) */
+    status: v.optional(
+      v.union(
+        v.literal("pending"),
+        v.literal("approved"),
+        v.literal("declined")
+      )
+    ),
+    declineReason: v.optional(v.string()),
+    declineReasonKey: v.optional(v.string()),
+    declinedAt: v.optional(v.number()),
+    declinedBy: v.optional(v.string()),
+    approvedAt: v.optional(v.number()),
+    approvedBy: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_post", ["postId"]),
+  })
+    .index("by_post", ["postId"])
+    .index("by_status", ["status"])
+    .index("by_declinedAt", ["declinedAt"]),
 
   hoaInfo: defineTable({
     name: v.string(),
@@ -137,6 +154,8 @@ export default defineSchema({
     isBoardMember: v.boolean(),
     isRenter: v.boolean(),
     isDev: v.optional(v.boolean()),
+    /** App Store / QA review account — not a real homeowner or renter */
+    isTestUser: v.optional(v.boolean()),
     isActive: v.boolean(),
     isBlocked: v.boolean(),
     blockReason: v.optional(v.string()),

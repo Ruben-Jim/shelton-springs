@@ -1,17 +1,17 @@
 import React from 'react';
-import { View, StyleSheet, Text } from 'react-native';
+import { View, StyleSheet, Text, StyleProp, ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import OptimizedImage from './OptimizedImage';
 
 interface ProfileImageProps {
   source: string | null | undefined;
   size?: number;
-  style?: any;
+  style?: StyleProp<ViewStyle>;
   initials?: string;
 }
 
 const ProfileImage = ({ source, size = 40, style, initials }: ProfileImageProps) => {
-  const radiusStyle = { width: size, height: size, borderRadius: size / 2 };
+  const radiusStyle: ViewStyle = { width: size, height: size, borderRadius: size / 2 };
   const placeholder = (
     <View style={[styles.placeholder, radiusStyle, style]}>
       {initials ? (
@@ -39,8 +39,8 @@ const ProfileImage = ({ source, size = 40, style, initials }: ProfileImageProps)
       source={isUrl ? source : undefined}
       storageId={isUrl ? undefined : source}
       fallback={placeholder}
-      containerStyle={[radiusStyle, style]}
-      style={[styles.image, radiusStyle]}
+      containerStyle={StyleSheet.flatten([radiusStyle, style])}
+      style={[styles.image, radiusStyle] as any}
       priority="high"
     />
   );

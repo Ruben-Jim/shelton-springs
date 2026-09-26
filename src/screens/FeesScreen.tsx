@@ -244,8 +244,9 @@ const FeesScreen = () => {
     : null;
   
   // Filter fees for the current user (direct userId) plus household fees (address-based annual dues).
-  // Annual fees are created one-per-address and can be linked to a different homeowner at that address.
-  const fees = user && ((user.isResident && !user.isRenter) || user.isDev) 
+  // Annual fees are one-per-address for homeowners only — not for pure developer / guest accounts.
+  const isHomeowner = Boolean(user?.isResident && !user?.isRenter);
+  const fees = user && isHomeowner
     ? allFeesFromDatabase.filter((fee: any) => {
         const matchesUser = fee.userId === user._id;
         const matchesAddress =
@@ -262,8 +263,8 @@ const FeesScreen = () => {
     isFocused ? {} : "skip"
   ) ?? [];
   
-  // Filter fines for the current user if they are a homeowner or developer
-  const fines = user && ((user.isResident && !user.isRenter) || user.isDev) 
+  // Fines only apply to homeowners on this screen (same eligibility as dues)
+  const fines = user && isHomeowner
     ? allFines.filter((fine: any) => fine.residentId === user._id)
     : [];
   
@@ -392,9 +393,15 @@ const FeesScreen = () => {
                 <View style={styles.compactUserDetails}>
                   <Text style={styles.compactUserName}>{user.firstName} {user.lastName}</Text>
                   <Text style={styles.compactUserType}>
-                    {user.isBoardMember ? 'Board Member' : 
-                     user.isRenter ? 'Renter' : 
-                     user.isResident ? 'Homeowner' : 'Resident'}
+                    {user.isDev && !user.isResident
+                      ? 'Developer'
+                      : user.isBoardMember
+                        ? 'Board Member'
+                        : user.isRenter
+                          ? 'Renter'
+                          : user.isResident
+                            ? 'Homeowner'
+                            : 'Resident'}
                   </Text>
                 </View>
                 {/* Show status only if there are fees, otherwise show no fees message */}

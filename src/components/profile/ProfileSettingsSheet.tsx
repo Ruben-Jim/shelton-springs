@@ -26,6 +26,7 @@ type ProfileSettingsSheetProps = {
     unitNumber?: string;
     profileImage?: string | null;
     isDev?: boolean;
+    isTestUser?: boolean;
     isBoardMember?: boolean;
     isRenter?: boolean;
   };
@@ -36,6 +37,7 @@ type ProfileSettingsSheetProps = {
   deleting: boolean;
   notificationsEnabled: boolean;
   requestingNotifications: boolean;
+  readOnly?: boolean;
   onPickImage: () => void;
   onTakePhoto: () => void;
   onRemoveProfileImage: () => void;
@@ -113,6 +115,7 @@ export default function ProfileSettingsSheet({
   deleting,
   notificationsEnabled,
   requestingNotifications,
+  readOnly = false,
   onPickImage,
   onTakePhoto,
   onRemoveProfileImage,
@@ -130,13 +133,15 @@ export default function ProfileSettingsSheet({
   const fullName = currentUser
     ? `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim()
     : 'Resident';
-  const roleLabel = currentUser?.isDev
-    ? 'Developer'
-    : currentUser?.isBoardMember
-      ? 'Board Member'
-      : currentUser?.isRenter
-        ? 'Renter'
-        : 'Homeowner';
+  const roleLabel = currentUser?.isTestUser
+    ? 'Test User'
+    : currentUser?.isDev
+      ? 'Developer'
+      : currentUser?.isBoardMember
+        ? 'Board Member'
+        : currentUser?.isRenter
+          ? 'Renter'
+          : 'Homeowner';
   const addressLine = currentUser
     ? `${currentUser.address || ''}${currentUser.unitNumber ? `, Unit ${currentUser.unitNumber}` : ''}`
     : '';
@@ -199,7 +204,7 @@ export default function ProfileSettingsSheet({
                 iconColor={theme.accentGreen}
                 label="Save new profile photo"
                 onPress={onSaveProfileImage}
-                disabled={uploading}
+                disabled={uploading || readOnly}
                 trailing={uploading ? <ActivityIndicator size="small" color={theme.accent} /> : null}
                 isLast
               />
@@ -224,7 +229,7 @@ export default function ProfileSettingsSheet({
                 iconColor={theme.destructive}
                 label="Remove Profile Photo"
                 onPress={onRemoveProfileImage}
-                disabled={busy}
+                disabled={busy || readOnly}
                 destructive
                 trailing={removing || uploading ? <ActivityIndicator size="small" color={theme.destructive} /> : null}
                 isLast
@@ -239,14 +244,14 @@ export default function ProfileSettingsSheet({
                 icon="images-outline"
                 label="Choose from Gallery"
                 onPress={onPickImage}
-                disabled={busy}
+                disabled={busy || readOnly}
                 showChevron
               />
               <SettingsRow
                 icon="camera-outline"
                 label="Take Photo"
                 onPress={onTakePhoto}
-                disabled={busy}
+                disabled={busy || readOnly}
                 showChevron
                 isLast
               />
@@ -294,7 +299,7 @@ export default function ProfileSettingsSheet({
             iconColor={theme.destructive}
             label="Delete Account"
             onPress={onDeleteAccount}
-            disabled={busy}
+            disabled={busy || readOnly}
             destructive
             isLast
           />

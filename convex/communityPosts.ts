@@ -1,6 +1,55 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { api } from "./_generated/api";
+import type { Doc } from "./_generated/dataModel";
+
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+const GENERIC_DECLINE_MESSAGE = "Your comment was not approved by the board.";
+
+const DECLINE_MESSAGES: Record<string, string> = {
+  inappropriate:
+    "Your comment was declined because it contained inappropriate or offensive language.",
+  off_topic:
+    "Your comment was declined because it was off-topic or not community-related.",
+  spam: "Your comment was declined because it appeared to be spam or advertising.",
+  personal_attack:
+    "Your comment was declined because it involved a personal attack or conflict.",
+  guidelines:
+    "Your comment was declined because it violates community guidelines.",
+  no_reason: GENERIC_DECLINE_MESSAGE,
+};
+
+function normalizeFullName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function getCommentStatus(
+  comment: Pick<Doc<"comments">, "status">,
+): "pending" | "approved" | "declined" {
+  if (comment.status === "pending" || comment.status === "declined") {
+    return comment.status;
+  }
+  return "approved";
+}
+
+function isCommentVisibleToViewer(
+  comment: Doc<"comments">,
+  viewerName?: string,
+): boolean {
+  const status = getCommentStatus(comment);
+  if (status === "approved") return true;
+  if (!viewerName) return false;
+  return normalizeFullName(comment.author) === normalizeFullName(viewerName);
+}
+
+function resolveDeclineMessage(reasonKey: string, customText?: string): string {
+  if (reasonKey === "custom") {
+    const trimmed = (customText ?? "").trim();
+    return trimmed || GENERIC_DECLINE_MESSAGE;
+  }
+  return DECLINE_MESSAGES[reasonKey] || GENERIC_DECLINE_MESSAGE;
+}
 
 export const getAll = query({
   args: {},
@@ -41,9 +90,11 @@ export const getAll = query({
     });
 
     // Sort comments within each post and add profile image storage IDs
+    // Public lists only include approved (or legacy) comments
     const postsWithComments = posts.map((post) => {
       const comments = (commentsByPostId.get(post._id) || [])
-        .sort((a: any, b: any) => a.createdAt - b.createdAt); // Order ascending
+        .filter((c: Doc<"comments">) => getCommentStatus(c) === "approved")
+        .sort((a: any, b: any) => a.createdAt - b.createdAt);
 
         // Get author profile image storage ID for each comment
       const commentsWithProfileImages = comments.map((comment: any) => {
@@ -170,7 +221,8 @@ export const getByCategory = query({
     // Sort comments within each post and add profile image storage IDs
     const postsWithComments = posts.map((post) => {
       const comments = (commentsByPostId.get(post._id) || [])
-        .sort((a: any, b: any) => a.createdAt - b.createdAt); // Order ascending
+        .filter((c: Doc<"comments">) => getCommentStatus(c) === "approved")
+        .sort((a: any, b: any) => a.createdAt - b.createdAt);
 
         // Get author profile image storage ID for each comment
       const commentsWithProfileImages = comments.map((comment: any) => {
@@ -207,7 +259,10 @@ export const getById = query({
       .order("asc")
       .collect();
     
-    return { ...post, comments };
+    return {
+      ...post,
+      comments: comments.filter((c) => getCommentStatus(c) === "approved"),
+    };
   },
 });
 
@@ -334,17 +389,33 @@ export const addComment = mutation({
     const post = await ctx.db.get(args.postId);
     if (!post) throw new Error("Post not found");
 
+    const residents = await ctx.db.query("residents").collect();
+    const authorResident = residents.find(
+      (r) =>
+        normalizeFullName(`${r.firstName} ${r.lastName}`) ===
+        normalizeFullName(args.author),
+    );
+    const autoApprove = !!(
+      authorResident &&
+      (authorResident.isBoardMember || authorResident.isDev)
+    );
+    const status = autoApprove ? ("approved" as const) : ("pending" as const);
+
     const commentId = await ctx.db.insert("comments", {
-      ...args,
+      postId: args.postId,
+      author: args.author,
+      content: args.content,
+      status,
+      ...(autoApprove ? { approvedAt: now, approvedBy: "auto" } : {}),
       createdAt: now,
       updatedAt: now,
     });
 
-    // Notify post author of new comment (skip if commenter is the author)
-    if (post.author !== args.author) {
-      const residents = await ctx.db.query("residents").collect();
+    if (autoApprove && post.author !== args.author) {
       const postAuthorResident = residents.find(
-        (r) => `${r.firstName} ${r.lastName}` === post.author
+        (r) =>
+          normalizeFullName(`${r.firstName} ${r.lastName}`) ===
+          normalizeFullName(post.author),
       );
       if (postAuthorResident?.isActive) {
         await ctx.runMutation(api.notifications.createNotificationForUsers, {
@@ -357,7 +428,153 @@ export const addComment = mutation({
       }
     }
 
-    return commentId;
+    if (!autoApprove) {
+      await ctx.runMutation(api.notifications.createNotificationForBoardMembers, {
+        type: "community_post",
+        title: "Comment awaiting approval",
+        body: `${args.author} commented on: ${post.title}`,
+        data: {
+          author: args.author,
+          postTitle: post.title,
+          commentId: commentId.toString(),
+        },
+      });
+    }
+
+    return { commentId, status };
+  },
+});
+
+export const approveComment = mutation({
+  args: {
+    id: v.id("comments"),
+    moderatorName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const comment = await ctx.db.get(args.id);
+    if (!comment) throw new Error("Comment not found");
+
+    const now = Date.now();
+    await ctx.db.replace(args.id, {
+      postId: comment.postId,
+      author: comment.author,
+      content: comment.content,
+      status: "approved",
+      approvedAt: now,
+      approvedBy: args.moderatorName ?? "board",
+      createdAt: comment.createdAt,
+      updatedAt: now,
+    });
+
+    const post = await ctx.db.get(comment.postId);
+    if (post && post.author !== comment.author) {
+      const residents = await ctx.db.query("residents").collect();
+      const postAuthorResident = residents.find(
+        (r) =>
+          normalizeFullName(`${r.firstName} ${r.lastName}`) ===
+          normalizeFullName(post.author),
+      );
+      if (postAuthorResident?.isActive) {
+        await ctx.runMutation(api.notifications.createNotificationForUsers, {
+          userIds: [postAuthorResident._id.toString()],
+          type: "community_post",
+          title: "New Comment",
+          body: `${comment.author} commented on: ${post.title}`,
+          data: { author: comment.author, postTitle: post.title },
+        });
+      }
+    }
+
+    const residents = await ctx.db.query("residents").collect();
+    const commenter = residents.find(
+      (r) =>
+        normalizeFullName(`${r.firstName} ${r.lastName}`) ===
+        normalizeFullName(comment.author),
+    );
+    if (commenter?.isActive) {
+      await ctx.runMutation(api.notifications.createNotificationForUsers, {
+        userIds: [commenter._id.toString()],
+        type: "community_post",
+        title: "Comment approved",
+        body: post
+          ? `Your comment on "${post.title}" is now live.`
+          : "Your comment was approved and is now live.",
+        data: { postTitle: post?.title ?? "" },
+      });
+    }
+
+    return { success: true };
+  },
+});
+
+export const declineComment = mutation({
+  args: {
+    id: v.id("comments"),
+    reasonKey: v.string(),
+    customReason: v.optional(v.string()),
+    moderatorName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const comment = await ctx.db.get(args.id);
+    if (!comment) throw new Error("Comment not found");
+
+    const declineReason = resolveDeclineMessage(
+      args.reasonKey,
+      args.customReason,
+    );
+    const now = Date.now();
+
+    await ctx.db.patch(args.id, {
+      status: "declined",
+      declineReason,
+      declineReasonKey: args.reasonKey,
+      declinedAt: now,
+      declinedBy: args.moderatorName ?? "board",
+      updatedAt: now,
+    });
+
+    const post = await ctx.db.get(comment.postId);
+    const residents = await ctx.db.query("residents").collect();
+    const commenter = residents.find(
+      (r) =>
+        normalizeFullName(`${r.firstName} ${r.lastName}`) ===
+        normalizeFullName(comment.author),
+    );
+    if (commenter?.isActive) {
+      await ctx.runMutation(api.notifications.createNotificationForUsers, {
+        userIds: [commenter._id.toString()],
+        type: "community_post",
+        title: "Comment declined",
+        body: declineReason,
+        data: {
+          postTitle: post?.title ?? "",
+          declineReason,
+        },
+      });
+    }
+
+    return { success: true };
+  },
+});
+
+/** Move a declined comment back to pending for re-review. */
+export const restoreComment = mutation({
+  args: { id: v.id("comments") },
+  handler: async (ctx, args) => {
+    const comment = await ctx.db.get(args.id);
+    if (!comment) throw new Error("Comment not found");
+
+    const now = Date.now();
+    await ctx.db.replace(args.id, {
+      postId: comment.postId,
+      author: comment.author,
+      content: comment.content,
+      status: "pending",
+      createdAt: comment.createdAt,
+      updatedAt: now,
+    });
+
+    return { success: true };
   },
 });
 
@@ -368,78 +585,124 @@ export const removeComment = mutation({
   },
 });
 
+/** Hard-delete declined comments older than 30 days. */
+export const purgeDeclinedComments = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const cutoff = Date.now() - THIRTY_DAYS_MS;
+    const declined = await ctx.db
+      .query("comments")
+      .withIndex("by_status", (q) => q.eq("status", "declined"))
+      .collect();
+
+    let deleted = 0;
+    for (const comment of declined) {
+      if (comment.declinedAt != null && comment.declinedAt < cutoff) {
+        await ctx.db.delete(comment._id);
+        deleted++;
+      }
+    }
+    return { deleted };
+  },
+});
+
 // Get comments for a specific post (for lazy loading)
 export const getCommentsByPost = query({
-  args: { postId: v.id("communityPosts") },
+  args: {
+    postId: v.id("communityPosts"),
+    viewerName: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const comments = await ctx.db
       .query("comments")
       .withIndex("by_post", (q) => q.eq("postId", args.postId))
       .order("asc")
       .collect();
-    
-    // Get all active residents once for profile image lookup
+
+    const visible = comments.filter((c) =>
+      isCommentVisibleToViewer(c, args.viewerName),
+    );
+
     const residents = await ctx.db
       .query("residents")
       .filter((q) => q.eq(q.field("isActive"), true))
       .collect();
-    
-    // Create a map for quick lookup by full name
+
     const residentsByName = new Map();
-    residents.forEach(resident => {
+    residents.forEach((resident) => {
       const fullName = `${resident.firstName} ${resident.lastName}`;
       residentsByName.set(fullName, resident);
     });
-    
-    // Get author profile image storage ID for each comment
-    const commentsWithProfileImages = comments.map(comment => {
+
+    return visible.map((comment) => {
       const authorResident = residentsByName.get(comment.author);
       return {
         ...comment,
-        authorProfileImage: authorResident?.profileImage || null
+        status: getCommentStatus(comment),
+        authorProfileImage: authorResident?.profileImage || null,
       };
     });
-    
-    return commentsWithProfileImages;
   },
 });
 
 // Get all comments for admin management
 export const getAllComments = query({
-  args: {},
-  handler: async (ctx) => {
-    const comments = await ctx.db
-      .query("comments")
-      .order("desc")
-      .collect();
-    
-    // Get all active residents for profile image lookup
+  args: {
+    statusFilter: v.optional(
+      v.union(
+        v.literal("pending"),
+        v.literal("approved"),
+        v.literal("declined"),
+        v.literal("all"),
+      ),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const filter = args.statusFilter ?? "all";
+    const comments = await ctx.db.query("comments").order("desc").collect();
+
+    const filtered = comments.filter((c) => {
+      const status = getCommentStatus(c);
+      if (filter === "all") return true;
+      return status === filter;
+    });
+
     const residents = await ctx.db
       .query("residents")
       .filter((q) => q.eq(q.field("isActive"), true))
       .collect();
-    
-    // Create a map for quick lookup by full name
+
     const residentsByName = new Map();
-    residents.forEach(resident => {
+    residents.forEach((resident) => {
       const fullName = `${resident.firstName} ${resident.lastName}`;
       residentsByName.set(fullName, resident);
     });
-    
-    // Get post information and author profile image storage ID for each comment
+
     const commentsWithPosts = await Promise.all(
-      comments.map(async (comment) => {
+      filtered.map(async (comment) => {
         const post = await ctx.db.get(comment.postId);
         const authorResident = residentsByName.get(comment.author);
-        
-        return { 
-          ...comment, 
-          postTitle: post?.title || 'Deleted Post',
-          authorProfileImage: authorResident?.profileImage || null
+
+        return {
+          ...comment,
+          status: getCommentStatus(comment),
+          postTitle: post?.title || "Deleted Post",
+          authorProfileImage: authorResident?.profileImage || null,
         };
-      })
+      }),
     );
-    
+
     return commentsWithPosts;
   },
-}); 
+});
+
+export const getPendingCommentsCount = query({
+  args: {},
+  handler: async (ctx) => {
+    const pending = await ctx.db
+      .query("comments")
+      .withIndex("by_status", (q) => q.eq("status", "pending"))
+      .collect();
+    return pending.length;
+  },
+});

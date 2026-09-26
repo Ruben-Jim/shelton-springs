@@ -317,14 +317,12 @@ class EnhancedNotificationService {
         notificationContent.badge = notificationData.badge;
       }
       
-      // Add Android channel ID if specified
-      if (Platform.OS === 'android' && notificationData.channelId) {
-        notificationContent.channelId = notificationData.channelId;
-      }
-
       const notificationId = await Notifications.scheduleNotificationAsync({
         content: notificationContent,
-        trigger: null, // Show immediately
+        trigger:
+          Platform.OS === 'android' && notificationData.channelId
+            ? { channelId: notificationData.channelId }
+            : null,
       });
 
       this.retryAttempts = 0; // Reset retry counter on success
@@ -397,6 +395,30 @@ class EnhancedNotificationService {
       vibrate: priority === 'High',
       data: {
         type: 'alert',
+        priority,
+        timestamp: Date.now(),
+      },
+    });
+  }
+
+  /**
+   * Send emergency alert notification (highest priority local alert)
+   */
+  public async sendEmergencyAlert(
+    title: string,
+    content: string,
+    priority: 'High' | 'Medium' | 'Low' = 'High'
+  ): Promise<string | null> {
+    return this.sendLocalNotification({
+      title: `🚨 ${title}`,
+      body: content,
+      priority: 'high',
+      category: 'emergency',
+      sound: true,
+      vibrate: true,
+      channelId: 'emergency',
+      data: {
+        type: 'emergency',
         priority,
         timestamp: Date.now(),
       },

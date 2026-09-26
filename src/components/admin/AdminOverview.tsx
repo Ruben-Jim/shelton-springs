@@ -62,7 +62,9 @@ export default function AdminOverview({
       id: 'Community',
       title: 'Community',
       subtitle:
-        (badges.complaints ?? 0) > 0 || (badges.pendingDamage ?? 0) > 0
+        (badges.complaints ?? 0) > 0 ||
+        (badges.pendingDamage ?? 0) > 0 ||
+        (badges.pendingComments ?? 0) > 0
           ? [
               (badges.complaints ?? 0) > 0
                 ? `${badges.complaints} complaint${badges.complaints === 1 ? '' : 's'}`
@@ -70,16 +72,28 @@ export default function AdminOverview({
               (badges.pendingDamage ?? 0) > 0
                 ? `${badges.pendingDamage} damage report${badges.pendingDamage === 1 ? '' : 's'}`
                 : null,
+              (badges.pendingComments ?? 0) > 0
+                ? `${badges.pendingComments} comment${badges.pendingComments === 1 ? '' : 's'} pending`
+                : null,
             ]
               .filter(Boolean)
               .join(' · ')
           : 'Damage, posts, polls, pets & moderation',
       icon: 'chatbubbles',
       color: '#3b82f6',
-      alert: (badges.complaints ?? 0) > 0 || (badges.pendingDamage ?? 0) > 0,
+      alert:
+        (badges.complaints ?? 0) > 0 ||
+        (badges.pendingDamage ?? 0) > 0 ||
+        (badges.pendingComments ?? 0) > 0,
       stat:
-        (badges.complaints ?? 0) > 0 || (badges.pendingDamage ?? 0) > 0
-          ? String((badges.complaints ?? 0) + (badges.pendingDamage ?? 0))
+        (badges.complaints ?? 0) > 0 ||
+        (badges.pendingDamage ?? 0) > 0 ||
+        (badges.pendingComments ?? 0) > 0
+          ? String(
+              (badges.complaints ?? 0) +
+                (badges.pendingDamage ?? 0) +
+                (badges.pendingComments ?? 0),
+            )
           : undefined,
     },
     {

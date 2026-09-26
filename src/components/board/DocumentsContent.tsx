@@ -17,7 +17,8 @@ import { ScrollView } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery, useMutation } from 'convex/react';
+import { useQuery } from 'convex/react';
+import { useGuardedMutation, isTestUserReadOnlyError } from '../../hooks/useGuardedMutation';
 import { api } from '../../../convex/_generated/api';
 import { useAuth } from '../../context/AuthContext';
 import { useStorageUrl } from '../../hooks/useStorageUrl';
@@ -89,9 +90,9 @@ const DocumentsContent = ({ isActive }: DocumentsContentProps) => {
   const allDocuments = documentsData?.items ?? [];
   const documents = allDocuments.filter((doc: any) => doc.type === activeType);
 
-  const createDocument = useMutation(api.documents.create);
-  const deleteDocument = useMutation(api.documents.remove);
-  const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
+  const createDocument = useGuardedMutation(api.documents.create);
+  const deleteDocument = useGuardedMutation(api.documents.remove);
+  const generateUploadUrl = useGuardedMutation(api.storage.generateUploadUrl);
 
   const animateModalIn = () => {
     Animated.parallel([
@@ -231,6 +232,7 @@ const DocumentsContent = ({ isActive }: DocumentsContentProps) => {
       setFileType(null);
       animateModalOut(() => setShowUploadModal(false));
     } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
       Alert.alert('Error', error?.message || 'Failed to upload document. Please try again.');
     } finally {
       setUploading(false);
@@ -250,6 +252,7 @@ const DocumentsContent = ({ isActive }: DocumentsContentProps) => {
       });
       setDocumentToDelete(null);
     } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
       showAlert({
         title: 'Error',
         message: error?.message || 'Failed to delete document. Please try again.',

@@ -3,20 +3,18 @@ import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 
-const BoardMemberIndicator = () => {
+const TestUserIndicator = () => {
   const { user } = useAuth();
-  const isBoardMember = user?.isBoardMember && user?.isActive;
-  const isDev = user?.isDev ?? false;
+  const isTestUser = user?.isTestUser === true;
 
-  // Devs / test users see their own indicator; don't show Board Member
-  if (!isBoardMember || isDev || user?.isTestUser) {
+  if (!isTestUser) {
     return null;
   }
 
   return (
     <View style={styles.badge}>
-      <Ionicons name="shield" size={12} color="#ffffff" />
-      <Text style={styles.badgeText}>Board Member</Text>
+      <Ionicons name="flask" size={12} color="#ffffff" />
+      <Text style={styles.badgeText}>Test User</Text>
     </View>
   );
 };
@@ -25,7 +23,7 @@ const styles = StyleSheet.create({
   badge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#10b981',
+    backgroundColor: '#d97706',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
@@ -38,4 +36,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default BoardMemberIndicator;
+export default TestUserIndicator;

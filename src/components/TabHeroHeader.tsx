@@ -10,11 +10,14 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import DeveloperIndicator from './DeveloperIndicator';
 import BoardMemberIndicator from './BoardMemberIndicator';
+import TestUserIndicator from './TestUserIndicator';
+import TestUserReadOnlyBanner from './TestUserReadOnlyBanner';
 import MessagingButton from './MessagingButton';
 import {
   HERO_HEADER_IMAGE,
   useHeroHeaderLayout,
 } from '../hooks/useHeroHeaderPadding';
+import { useIsTestUserReadOnly } from '../hooks/useGuardedMutation';
 
 type TabHeroHeaderProps = {
   screenWidth: number;
@@ -42,6 +45,7 @@ export default function TabHeroHeader({
   footer,
 }: TabHeroHeaderProps) {
   const { paddingTop, height } = useHeroHeaderLayout();
+  const { isReadOnly } = useIsTestUserReadOnly();
 
   const header = (
     <View style={[styles.headerContainer, { width: screenWidth, height }]}>
@@ -70,10 +74,12 @@ export default function TabHeroHeader({
             </Text>
             {showIndicators ? (
               <View style={styles.indicatorsContainer}>
+                <TestUserIndicator />
                 <DeveloperIndicator />
                 <BoardMemberIndicator />
               </View>
             ) : null}
+            {isReadOnly ? <TestUserReadOnlyBanner /> : null}
           </View>
 
           {isBoardMember && onOpenMessaging ? (

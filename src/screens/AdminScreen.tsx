@@ -23,23 +23,36 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { Ionicons } from '@expo/vector-icons';
 import QRCode from 'react-native-qrcode-svg';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useQuery, useMutation } from 'convex/react';
+import { useQuery } from 'convex/react';
 import { useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
+import { useGuardedMutation, useIsTestUserReadOnly, isTestUserReadOnlyError } from '../hooks/useGuardedMutation';
 import { useCachedResidents, useCachedHoaInfo } from '../context/QueryCacheContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
+import TestUserIndicator from '../components/TestUserIndicator';
+import TestUserReadOnlyBanner from '../components/TestUserReadOnlyBanner';
 import MobileTabBar from '../components/MobileTabBar';
 import { useNavigation } from '@react-navigation/native';
 import ProfileImage from '../components/ProfileImage';
 import { getBoardMemberPhoto } from '../utils/boardMemberPhoto';
+import {
+  BOARD_POSITION_PRESETS,
+  getBoardRoleBadge,
+  isBoardPositionPreset,
+  isLocalImageUri,
+} from '../utils/boardPositions';
+import {
+  COMMENT_DECLINE_REASONS,
+  resolveDeclineMessage,
+} from '../utils/commentModeration';
 import OptimizedImage from '../components/OptimizedImage';
 import { getUploadReadyImage } from '../utils/imageUpload';
 import { ensurePhotoLibraryAccess } from '../utils/ensurePhotoLibraryAccess';
@@ -142,8 +155,12 @@ const AdminScreen = () => {
   
   const comments = useQuery(
     api.communityPosts.getAllComments,
-    activeTab === 'Community' ? {} : "skip"
+    activeTab === 'Community' ? { statusFilter: 'all' } : 'skip'
   ) ?? [];
+  const pendingCommentsCount = useQuery(
+    api.communityPosts.getPendingCommentsCount,
+    activeTab === 'Community' || activeTab === 'overview' ? {} : 'skip'
+  ) ?? 0;
   
   const pollsData = useQuery(
     api.polls.getPaginated,
@@ -260,11 +277,13 @@ const AdminScreen = () => {
       complaints: communityPosts.filter((p: any) => p.category === 'Complaint').length,
       pendingPayments: pendingVenmoPayments.length,
       pendingDamage: damageReports.filter((report: any) => report.status === 'Pending').length,
+      pendingComments: pendingCommentsCount,
       community:
         communityPosts.filter((p: any) => p.category === 'Complaint').length +
-        damageReports.filter((report: any) => report.status === 'Pending').length,
+        damageReports.filter((report: any) => report.status === 'Pending').length +
+        pendingCommentsCount,
     }),
-    [residents.length, boardMembers.length, communityPosts, pendingVenmoPayments, damageReports],
+    [residents.length, boardMembers.length, communityPosts, pendingVenmoPayments, damageReports, pendingCommentsCount],
   );
 
   // Fees grouped by userId for quick lookup (includes fees by address for households)
@@ -555,52 +574,62 @@ const AdminScreen = () => {
   // ========== END MEMOIZED DATA CACHING ==========
   
   // Mutations
-  const setBlockStatus = useMutation(api.residents.setBlockStatus);
-  const removeResident = useMutation(api.residents.remove);
-  const deleteCovenant = useMutation(api.covenants.remove);
-  const deleteCommunityPost = useMutation(api.communityPosts.remove);
-  const deleteBoardMember = useMutation(api.boardMembers.remove);
-  const deleteComment = useMutation(api.communityPosts.removeComment);
-  const createBoardMember = useMutation(api.boardMembers.create);
-  const updateBoardMember = useMutation(api.boardMembers.update);
-  const syncResidentBoardFlags = useMutation(api.boardMembers.syncResidentBoardFlags);
-  const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
+  const setBlockStatus = useGuardedMutation(api.residents.setBlockStatus);
+  const removeResident = useGuardedMutation(api.residents.remove);
+  const deleteCovenant = useGuardedMutation(api.covenants.remove);
+  const deleteCommunityPost = useGuardedMutation(api.communityPosts.remove);
+  const deleteBoardMember = useGuardedMutation(api.boardMembers.remove);
+  const deleteComment = useGuardedMutation(api.communityPosts.removeComment);
+  const approveComment = useGuardedMutation(api.communityPosts.approveComment);
+  const declineComment = useGuardedMutation(api.communityPosts.declineComment);
+  const restoreComment = useGuardedMutation(api.communityPosts.restoreComment);
+  const createBoardMember = useGuardedMutation(api.boardMembers.create);
+  const updateBoardMember = useGuardedMutation(api.boardMembers.update);
+  const syncResidentBoardFlags = useGuardedMutation(api.boardMembers.syncResidentBoardFlags);
+  const generateUploadUrl = useGuardedMutation(api.storage.generateUploadUrl);
   
   // Fee management mutations
-  const createYearFeesForAllHomeowners = useMutation(api.fees.createYearFeesForAllHomeowners);
-  const addFineToProperty = useMutation(api.fees.addFineToProperty);
-  const updateFee = useMutation(api.fees.update);
-  const createFee = useMutation(api.fees.create);
-  const addPastDueAmount = useMutation(api.fees.addPastDueAmount);
-  const updateAllAnnualFees = useMutation(api.fees.updateAllAnnualFees);
+  const createYearFeesForAllHomeowners = useGuardedMutation(api.fees.createYearFeesForAllHomeowners);
+  const addFineToProperty = useGuardedMutation(api.fees.addFineToProperty);
+  const updateFee = useGuardedMutation(api.fees.update);
+  const createFee = useGuardedMutation(api.fees.create);
+  const addPastDueAmount = useGuardedMutation(api.fees.addPastDueAmount);
+  const updateAllAnnualFees = useGuardedMutation(api.fees.updateAllAnnualFees);
   
   // Covenant management mutations
-  const createCovenant = useMutation(api.covenants.create);
-  const updateCovenant = useMutation(api.covenants.update);
-  const updateCcrsPdf = useMutation(api.hoaInfo.updateCcrsPdf);
+  const createCovenant = useGuardedMutation(api.covenants.create);
+  const updateCovenant = useGuardedMutation(api.covenants.update);
+  const updateCcrsPdf = useGuardedMutation(api.hoaInfo.updateCcrsPdf);
   
   // Poll management mutations
-  const createPoll = useMutation(api.polls.create);
-  const updatePoll = useMutation(api.polls.update);
-  const deletePoll = useMutation(api.polls.remove);
-  const togglePollActive = useMutation(api.polls.toggleActive);
+  const createPoll = useGuardedMutation(api.polls.create);
+  const updatePoll = useGuardedMutation(api.polls.update);
+  const deletePoll = useGuardedMutation(api.polls.remove);
+  const togglePollActive = useGuardedMutation(api.polls.toggleActive);
   
   // Payment management mutations
-  const verifyVenmoPayment = useMutation(api.payments.verifyVenmoPayment);
-  const recordCheckOrCashPayment = useMutation(api.payments.recordCheckOrCashPayment);
-  const correctPaymentAmount = useMutation(api.payments.correctPaymentAmount);
+  const verifyVenmoPayment = useGuardedMutation(api.payments.verifyVenmoPayment);
+  const recordCheckOrCashPayment = useGuardedMutation(api.payments.recordCheckOrCashPayment);
+  const correctPaymentAmount = useGuardedMutation(api.payments.correctPaymentAmount);
   
   // Pet management mutations
-  const deletePet = useMutation(api.pets.remove);
-  const updatePet = useMutation(api.pets.update);
+  const deletePet = useGuardedMutation(api.pets.remove);
+  const updatePet = useGuardedMutation(api.pets.update);
   
   // HOA Info management mutation
-  const upsertHoaInfo = useMutation(api.hoaInfo.upsert);
+  const upsertHoaInfo = useGuardedMutation(api.hoaInfo.upsert);
   
   // State
   const [refreshing, setRefreshing] = useState(false);
   // activeTab moved earlier (before queries) for lazy loading
   const [postsSubTab, setPostsSubTab] = useState<CommunitySubTab>('posts');
+  const [commentsStatusFilter, setCommentsStatusFilter] = useState<
+    'pending' | 'approved' | 'declined' | 'all'
+  >('pending');
+  const [showDeclineCommentModal, setShowDeclineCommentModal] = useState(false);
+  const [declineCommentTarget, setDeclineCommentTarget] = useState<any>(null);
+  const [declineReasonKey, setDeclineReasonKey] = useState<string>('no_reason');
+  const [declineCustomReason, setDeclineCustomReason] = useState('');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   
   // Transactions modal state - declared early so it can be used in queries
@@ -629,6 +658,9 @@ const AdminScreen = () => {
     termEnd: '',
   });
   const [boardMemberImage, setBoardMemberImage] = useState<string | null>(null);
+  const [boardPositionPreset, setBoardPositionPreset] = useState<string>('President');
+  const [boardPositionCustom, setBoardPositionCustom] = useState('');
+  const [showBoardPositionDropdown, setShowBoardPositionDropdown] = useState(false);
   const [paymentSearchQuery, setPaymentSearchQuery] = useState('');
   const [selectedPaymentForVerification, setSelectedPaymentForVerification] = useState<any>(null);
   const [showVerificationModal, setShowVerificationModal] = useState(false);
@@ -913,6 +945,7 @@ const AdminScreen = () => {
         setCovenantClearAttachment(false);
       }
     } catch (e) {
+    if (isTestUserReadOnlyError(e)) return;
       console.error('Covenant document pick:', e);
       Alert.alert('Error', 'Failed to pick document.');
     }
@@ -933,6 +966,7 @@ const AdminScreen = () => {
         setCovenantClearAttachment(false);
       }
     } catch (e) {
+    if (isTestUserReadOnlyError(e)) return;
       console.error('Covenant image pick:', e);
       Alert.alert('Error', 'Failed to pick image.');
     }
@@ -1005,6 +1039,8 @@ const AdminScreen = () => {
   const boardContentModalTranslateY = useRef(new Animated.Value(300)).current;
   const categoryDropdownOpacity = useRef(new Animated.Value(0)).current;
   const categoryDropdownScale = useRef(new Animated.Value(0.95)).current;
+  const boardPositionDropdownOpacity = useRef(new Animated.Value(0)).current;
+  const boardPositionDropdownScale = useRef(new Animated.Value(0.95)).current;
   const overlayOpacity = useRef(new Animated.Value(0)).current;
   const buttonScale = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current; // Start at 0 for individual item animations
@@ -1088,6 +1124,7 @@ const AdminScreen = () => {
   // Check if current user can access admin (board member or developer)
   const isBoardMember = user?.isBoardMember && user?.isActive;
   const canAccessAdmin = Boolean(user?.isActive && (user?.isBoardMember || user?.isDev));
+  const { isReadOnly } = useIsTestUserReadOnly();
   const [accessDeniedCountdown, setAccessDeniedCountdown] = useState(5);
 
   // Keep local session in sync when resident record changes in Convex (e.g. isBoardMember toggled in dashboard)
@@ -1098,7 +1135,16 @@ const AdminScreen = () => {
     const patch: Partial<typeof user> = {};
     if (fresh.isBoardMember !== user.isBoardMember) patch.isBoardMember = fresh.isBoardMember;
     if ((fresh.isDev ?? false) !== (user.isDev ?? false)) patch.isDev = fresh.isDev ?? false;
+    if ((fresh.isTestUser ?? false) !== (user.isTestUser ?? false)) {
+      patch.isTestUser = fresh.isTestUser ?? false;
+    }
     if (fresh.isActive !== user.isActive) patch.isActive = fresh.isActive;
+    if (fresh.firstName !== user.firstName) patch.firstName = fresh.firstName;
+    if (fresh.lastName !== user.lastName) patch.lastName = fresh.lastName;
+    if (fresh.email !== user.email) patch.email = fresh.email;
+    if (fresh.isResident !== user.isResident) patch.isResident = fresh.isResident;
+    if (fresh.isRenter !== user.isRenter) patch.isRenter = fresh.isRenter;
+    if (fresh.address !== user.address) patch.address = fresh.address;
     if (Object.keys(patch).length > 0) {
       updateUser(patch).catch(() => {});
     }
@@ -1282,6 +1328,7 @@ const AdminScreen = () => {
       });
       Alert.alert('Success', `${resident.firstName} ${resident.lastName} has been unblocked.`);
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       Alert.alert('Error', 'Failed to unblock resident. Please try again.');
     }
   };
@@ -1311,6 +1358,7 @@ const AdminScreen = () => {
         setBlockReason('');
       });
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       Alert.alert('Error', 'Failed to block resident. Please try again.');
     }
   };
@@ -1335,6 +1383,7 @@ const AdminScreen = () => {
         setSelectedItem(null);
       });
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       Alert.alert('Error', 'Failed to remove resident. Please try again.');
     }
   };
@@ -1374,6 +1423,7 @@ const AdminScreen = () => {
         setSelectedItem(null);
       });
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       Alert.alert('Error', 'Failed to delete item. Please try again.');
     }
   };
@@ -1413,6 +1463,7 @@ const AdminScreen = () => {
         Alert.alert('Saved', 'Board page content updated successfully.');
       });
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error saving board content:', error);
       Alert.alert('Error', 'Failed to save board page content. Please try again.');
     }
@@ -1444,6 +1495,7 @@ const AdminScreen = () => {
 
       Alert.alert('Success', 'HOA information updated successfully.');
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error saving HOA info:', error);
       Alert.alert('Error', 'Failed to save HOA information. Please try again.');
     }
@@ -1454,6 +1506,7 @@ const AdminScreen = () => {
       await Clipboard.setStringAsync(value);
       Alert.alert('Copied', `${label} copied to clipboard.`);
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       Alert.alert('Copy failed', 'Could not copy this link. Please copy manually.');
     }
   };
@@ -1604,20 +1657,23 @@ const AdminScreen = () => {
       termEnd: '',
     });
     setBoardMemberImage(null);
+    resetBoardPositionFields('');
     setIsEditingBoardMember(false);
     setShowBoardMemberModal(true);
     animateIn('boardMember');
   };
 
   const handleEditBoardMember = (member: any) => {
+    const position = member.position || '';
     setBoardMemberForm({
       name: member.name || '',
-      position: member.position || '',
+      position,
       email: member.email || '',
       phone: member.phone || '',
       bio: member.bio || '',
       termEnd: member.termEnd || '',
     });
+    resetBoardPositionFields(position);
     setBoardMemberImage(member.image || null);
     setIsEditingBoardMember(true);
     setSelectedItem(member);
@@ -1626,23 +1682,31 @@ const AdminScreen = () => {
   };
 
   const handleSaveBoardMember = async () => {
-    if (!boardMemberForm.name.trim() || !boardMemberForm.position.trim() || !boardMemberForm.email.trim()) {
+    const position = resolveBoardPositionForSave();
+    if (!boardMemberForm.name.trim() || !position || !boardMemberForm.email.trim()) {
       Alert.alert('Error', 'Please fill in all required fields (Name, Position, Email).');
+      return;
+    }
+    if (boardPositionPreset === 'Other' && !boardPositionCustom.trim()) {
+      Alert.alert('Error', 'Please enter a custom position title.');
       return;
     }
 
     try {
-      let imageUrl: string | undefined;
-      
-      // Upload image if selected
-      if (boardMemberImage) {
-        imageUrl = await uploadImage(boardMemberImage);
-      }
-
-      const memberData = {
+      const memberData: Record<string, string | undefined> = {
         ...boardMemberForm,
-        image: imageUrl,
+        position,
       };
+
+      if (boardMemberImage && isLocalImageUri(boardMemberImage)) {
+        memberData.image = await uploadImage(boardMemberImage);
+      } else if (
+        isEditingBoardMember &&
+        !boardMemberImage &&
+        selectedItem?.image
+      ) {
+        memberData.image = '';
+      }
 
       if (isEditingBoardMember) {
         await updateBoardMember({
@@ -1650,10 +1714,22 @@ const AdminScreen = () => {
           ...memberData,
         });
         // Send notification for board member update
-        await notifyBoardUpdate('Board Member Updated', `${memberData.name} - ${memberData.position}`, convex);
+        await notifyBoardUpdate(
+          'Board Member Updated',
+          `${memberData.name} - ${memberData.position}`,
+          convex,
+        );
         Alert.alert('Success', 'Board member updated successfully.');
       } else {
-        await createBoardMember(memberData);
+        await createBoardMember({
+          name: boardMemberForm.name.trim(),
+          position,
+          email: boardMemberForm.email.trim(),
+          phone: boardMemberForm.phone.trim() || undefined,
+          bio: boardMemberForm.bio.trim() || undefined,
+          termEnd: boardMemberForm.termEnd.trim() || undefined,
+          ...(memberData.image ? { image: memberData.image } : {}),
+        });
         // Send notification for new board member
         await notifyBoardUpdate('New Board Member', `${memberData.name} - ${memberData.position}`, convex);
         Alert.alert('Success', 'Board member added successfully.');
@@ -1673,6 +1749,7 @@ const AdminScreen = () => {
         setSelectedItem(null);
       });
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       Alert.alert('Error', 'Failed to save board member. Please try again.');
     }
   };
@@ -1728,6 +1805,7 @@ const AdminScreen = () => {
         Alert.alert('Error', 'Failed to create year fees. Please try again.');
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error adding year fees:', error);
       Alert.alert('Error', 'Failed to add year fees. Please try again.');
     }
@@ -1781,6 +1859,7 @@ const AdminScreen = () => {
         Alert.alert('Error', 'Failed to add fine. Please try again.');
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error adding fine:', error);
       Alert.alert('Error', 'Failed to add fine. Please try again.');
     }
@@ -1842,6 +1921,7 @@ const AdminScreen = () => {
         Alert.alert('Error', 'Failed to record payment.');
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error recording payment:', error);
       Alert.alert('Error', 'Failed to record payment. Please try again.');
     }
@@ -1875,6 +1955,7 @@ const AdminScreen = () => {
         newAmount: '',
       });
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error updating dues:', error);
       Alert.alert('Error', 'Failed to update dues amount. Please try again.');
     }
@@ -1912,6 +1993,7 @@ const AdminScreen = () => {
         Alert.alert('Error', 'Failed to add past due amount. Please try again.');
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error adding past due amount:', error);
       Alert.alert('Error', 'Failed to add past due amount. Please try again.');
     }
@@ -1982,6 +2064,7 @@ const AdminScreen = () => {
         fileStorageId: '',
       });
     } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error creating covenant:', error);
       Alert.alert('Error', error?.message || 'Failed to create covenant. Please try again.');
     } finally {
@@ -2058,6 +2141,7 @@ const AdminScreen = () => {
         fileStorageId: '',
       });
     } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error updating covenant:', error);
       Alert.alert('Error', error?.message || 'Failed to update covenant. Please try again.');
     } finally {
@@ -2118,6 +2202,7 @@ const AdminScreen = () => {
       });
       animateOut('poll', () => {});
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error creating poll:', error);
       Alert.alert('Error', 'Failed to create poll. Please try again.');
     }
@@ -2168,6 +2253,7 @@ const AdminScreen = () => {
       });
       animateOut('poll', () => {});
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error updating poll:', error);
       Alert.alert('Error', 'Failed to update poll. Please try again.');
     }
@@ -2184,6 +2270,7 @@ const AdminScreen = () => {
       await togglePollActive({ id: poll._id });
       Alert.alert('Success', `Poll ${poll.isActive ? 'deactivated' : 'activated'} successfully!`);
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error toggling poll status:', error);
       Alert.alert('Error', 'Failed to update poll status. Please try again.');
     }
@@ -2259,6 +2346,62 @@ const AdminScreen = () => {
     ]).start();
   };
 
+  const animateBoardPositionDropdownIn = () => {
+    Animated.parallel([
+      Animated.timing(boardPositionDropdownOpacity, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+      Animated.timing(boardPositionDropdownScale, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+    ]).start();
+  };
+
+  const animateBoardPositionDropdownOut = () => {
+    Animated.parallel([
+      Animated.timing(boardPositionDropdownOpacity, {
+        toValue: 0,
+        duration: 150,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+      Animated.timing(boardPositionDropdownScale, {
+        toValue: 0.95,
+        duration: 150,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+    ]).start();
+  };
+
+  const resetBoardPositionFields = (position: string) => {
+    if (isBoardPositionPreset(position)) {
+      setBoardPositionPreset(position);
+      setBoardPositionCustom('');
+    } else if (position.trim()) {
+      setBoardPositionPreset('Other');
+      setBoardPositionCustom(position);
+    } else {
+      setBoardPositionPreset('President');
+      setBoardPositionCustom('');
+    }
+    setShowBoardPositionDropdown(false);
+  };
+
+  const resolveBoardPositionForSave = (): string => {
+    if (boardPositionPreset === 'Other') {
+      return boardPositionCustom.trim();
+    }
+    return boardPositionPreset;
+  };
+
+  const boardPositionPickerLabel =
+    boardPositionPreset === 'Other'
+      ? (boardPositionCustom.trim() || 'Other (custom title)')
+      : boardPositionPreset;
+
   // Image upload functions
   const pickImage = async () => {
     try {
@@ -2278,6 +2421,7 @@ const AdminScreen = () => {
         setBoardMemberImage(result.assets[0].uri);
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error picking image:', error);
       Alert.alert('Error', 'Failed to pick image. Please try again.');
     }
@@ -2301,6 +2445,7 @@ const AdminScreen = () => {
         setBoardMemberImage(result.assets[0].uri);
       }
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
       console.error('Error taking photo:', error);
       Alert.alert('Error', 'Failed to take photo. Please try again.');
     }
@@ -2320,6 +2465,7 @@ const AdminScreen = () => {
       const { storageId } = await uploadResponse.json();
       return storageId;
     } catch (error) {
+    if (isTestUserReadOnlyError(error)) throw error;
       console.error('Error uploading image:', error);
       throw new Error('Failed to upload image');
     }
@@ -2452,7 +2598,14 @@ const AdminScreen = () => {
                         placeholder: "e.g.,\nBoard Meeting - Next Tuesday at 7:00 PM\nCommunity Cleanup - This Saturday 9:00 AM",
                         multiline: true,
                       },
-                    ] as const).map((field) => {
+                    ] as Array<{
+                      key: 'name' | 'address' | 'phone' | 'email' | 'website' | 'officeHours' | 'emergencyContact' | 'eventText';
+                      label: string;
+                      placeholder: string;
+                      keyboardType?: 'default' | 'email-address' | 'numeric' | 'phone-pad' | 'url';
+                      autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
+                      multiline?: boolean;
+                    }>).map((field) => {
                       const isEditing = editingHoaField === field.key;
                       const rawValue = hoaInfoForm[field.key] ?? '';
                       const hasValue = rawValue.trim().length > 0;
@@ -2535,7 +2688,14 @@ const AdminScreen = () => {
                           placeholder: "e.g.,\nBoard Meeting - Next Tuesday at 7:00 PM\nCommunity Cleanup - This Saturday 9:00 AM",
                           multiline: true,
                         },
-                      ] as const).map((field) => {
+                      ] as Array<{
+                      key: 'name' | 'address' | 'phone' | 'email' | 'website' | 'officeHours' | 'emergencyContact' | 'eventText';
+                      label: string;
+                      placeholder: string;
+                      keyboardType?: 'default' | 'email-address' | 'numeric' | 'phone-pad' | 'url';
+                      autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
+                      multiline?: boolean;
+                    }>).map((field) => {
                         const isEditing = editingHoaField === field.key;
                         const rawValue = hoaInfoForm[field.key] ?? '';
                         const hasValue = rawValue.trim().length > 0;
@@ -2716,6 +2876,10 @@ const AdminScreen = () => {
                     primaryRole = 'Blocked';
                     roleIcon = 'ban';
                     roleColor = '#ef4444';
+                  } else if (item.isTestUser) {
+                    primaryRole = 'Test User';
+                    roleIcon = 'flask';
+                    roleColor = '#d97706';
                   } else if (item.isDev) {
                     primaryRole = 'Developer';
                     roleIcon = 'code-slash';
@@ -2894,28 +3058,7 @@ const AdminScreen = () => {
             ) : (
               <AdminGrid>
                 {boardMembers.map((item: any, index: number) => {
-                  // Determine role icon and color
-                  let roleIcon = 'person';
-                  let roleColor = '#6b7280';
-                  
-                  if (item.position) {
-                    if (item.position.toLowerCase().includes('president')) {
-                      roleIcon = 'star';
-                      roleColor = '#f59e0b';
-                    } else if (item.position.toLowerCase().includes('vice')) {
-                      roleIcon = 'star-half';
-                      roleColor = '#8b5cf6';
-                    } else if (item.position.toLowerCase().includes('treasurer')) {
-                      roleIcon = 'wallet';
-                      roleColor = '#10b981';
-                    } else if (item.position.toLowerCase().includes('secretary')) {
-                      roleIcon = 'document-text';
-                      roleColor = '#3b82f6';
-                    } else {
-                      roleIcon = 'people';
-                      roleColor = '#6b7280';
-                    }
-                  }
+                  const { roleIcon, roleColor } = getBoardRoleBadge(item.position);
 
                   return (
                     <AdminGridItem key={item._id} columnWidthPercent={columnWidthPercent}>
@@ -3072,6 +3215,7 @@ const AdminScreen = () => {
                         
                         Alert.alert('Success', 'CC&Rs PDF uploaded successfully!');
                       } catch (error: any) {
+    if (isTestUserReadOnlyError(error)) return;
                         console.error('Error uploading CC&Rs PDF:', error);
                         Alert.alert('Error', error?.message || 'Failed to upload CC&Rs PDF. Please try again.');
                       }
@@ -3218,82 +3362,65 @@ const AdminScreen = () => {
           </View>
         );
       
-      case 'Community':
+      case 'Community': {
+        const communityContentTabs: {
+          id: CommunitySubTab;
+          label: string;
+          icon: keyof typeof Ionicons.glyphMap;
+        }[] = [
+          { id: 'damage', label: 'Damage', icon: 'construct' },
+          { id: 'posts', label: 'Posts', icon: 'chatbubbles' },
+          { id: 'polls', label: 'Polls', icon: 'bar-chart' },
+          { id: 'pets', label: 'Pets', icon: 'paw' },
+          { id: 'complaints', label: 'Complaints', icon: 'warning' },
+          { id: 'comments', label: pendingCommentsCount > 0 ? `Comments (${pendingCommentsCount})` : 'Comments', icon: 'chatbox' },
+        ];
+
         return (
           <View style={styles.tabContent}>
             <View style={[styles.sectionHeader, useSidebar && styles.sectionHeaderDesktop]}>
               <Text style={styles.sectionTitle}>Community</Text>
             </View>
-            
-            {/* Community Sub-tabs */}
-            <ScrollView 
-              ref={communitySubTabsScrollRef}
-              horizontal 
-              showsHorizontalScrollIndicator={false}
-              style={styles.communitySubTabsContainer}
-              contentContainerStyle={styles.communitySubTabsContent}
-            >
-              <TouchableOpacity
-                style={[styles.communitySubTab, postsSubTab === 'posts' && styles.activeCommunitySubTab]}
-                onPress={() => setPostsSubTab('posts')}
-              >
-                <Ionicons name="chatbubbles" size={18} color={postsSubTab === 'posts' ? '#3b82f6' : '#6b7280'} />
-                <Text style={[styles.communitySubTabText, postsSubTab === 'posts' && styles.activeCommunitySubTabText]}>
-                  Posts
-                </Text>
-              </TouchableOpacity>
 
-              <TouchableOpacity
-                style={[styles.communitySubTab, postsSubTab === 'damage' && styles.activeCommunitySubTab]}
-                onPress={() => setPostsSubTab('damage')}
+            <View style={styles.communityContentSection}>
+              <ScrollView
+                ref={communitySubTabsScrollRef}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.communityContentTabs}
+                contentContainerStyle={styles.communityContentTabsContent}
               >
-                <Ionicons name="construct" size={18} color={postsSubTab === 'damage' ? '#3b82f6' : '#6b7280'} />
-                <Text style={[styles.communitySubTabText, postsSubTab === 'damage' && styles.activeCommunitySubTabText]}>
-                  Damage Reports
-                </Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity
-                style={[styles.communitySubTab, postsSubTab === 'polls' && styles.activeCommunitySubTab]}
-                onPress={() => setPostsSubTab('polls')}
-              >
-                <Ionicons name="bar-chart" size={18} color={postsSubTab === 'polls' ? '#3b82f6' : '#6b7280'} />
-                <Text style={[styles.communitySubTabText, postsSubTab === 'polls' && styles.activeCommunitySubTabText]}>
-                  Polls
-                </Text>
-              </TouchableOpacity>
+                {communityContentTabs.map((tab) => {
+                  const active = postsSubTab === tab.id;
+                  return (
+                    <TouchableOpacity
+                      key={tab.id}
+                      style={[
+                        styles.communityContentTab,
+                        active && styles.communityContentTabActive,
+                      ]}
+                      onPress={() => setPostsSubTab(tab.id)}
+                      activeOpacity={0.85}
+                    >
+                      <Ionicons
+                        name={tab.icon}
+                        size={16}
+                        color={active ? '#2563eb' : '#6b7280'}
+                      />
+                      <Text
+                        style={[
+                          styles.communityContentTabText,
+                          active && styles.communityContentTabTextActive,
+                        ]}
+                      >
+                        {tab.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
 
-              <TouchableOpacity
-                style={[styles.communitySubTab, postsSubTab === 'pets' && styles.activeCommunitySubTab]}
-                onPress={() => setPostsSubTab('pets')}
-              >
-                <Ionicons name="paw" size={18} color={postsSubTab === 'pets' ? '#3b82f6' : '#6b7280'} />
-                <Text style={[styles.communitySubTabText, postsSubTab === 'pets' && styles.activeCommunitySubTabText]}>
-                  Pets
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.communitySubTab, postsSubTab === 'complaints' && styles.activeCommunitySubTab]}
-                onPress={() => setPostsSubTab('complaints')}
-              >
-                <Ionicons name="warning" size={18} color={postsSubTab === 'complaints' ? '#3b82f6' : '#6b7280'} />
-                <Text style={[styles.communitySubTabText, postsSubTab === 'complaints' && styles.activeCommunitySubTabText]}>
-                  Complaints
-                </Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity
-                style={[styles.communitySubTab, postsSubTab === 'comments' && styles.activeCommunitySubTab]}
-                onPress={() => setPostsSubTab('comments')}
-              >
-                <Ionicons name="chatbox" size={18} color={postsSubTab === 'comments' ? '#3b82f6' : '#6b7280'} />
-                <Text style={[styles.communitySubTabText, postsSubTab === 'comments' && styles.activeCommunitySubTabText]}>
-                  Comments
-                </Text>
-              </TouchableOpacity>
-            </ScrollView>
-
+              <View style={styles.communityContentBody}>
             {postsSubTab === 'damage' && (
               <DamageReportsPanel
                 damageReports={damageReports}
@@ -3380,77 +3507,244 @@ const AdminScreen = () => {
             )}
             
             {postsSubTab === 'comments' && (
-              comments.length === 0 ? (
-                <View style={styles.emptyState}>
-                  <Ionicons name="chatbubble" size={48} color="#9ca3af" />
-                  <Text style={styles.emptyStateText}>No comments found</Text>
-                </View>
-              ) : (
-                <AdminGrid>
-                  {comments.map((item: any) => (
-                    <AdminGridItem key={item._id} columnWidthPercent={columnWidthPercent}>
-                      <Animated.View 
-                        style={[
-                          styles.residentGridCard,
-                          {
-                            opacity: fadeAnim,
-                            transform: [{
-                              translateY: fadeAnim.interpolate({
-                                inputRange: [0, 1],
-                                outputRange: [50, 0],
-                              })
-                            }]
-                          }
-                        ]}
-                      >
-                        <View style={styles.residentGridCardContent}>
-                          {/* Main Info Row - Icon Left, Details Right */}
-                          <View style={styles.residentGridMainInfo}>
-                            <ProfileImage 
-                              source={item.authorProfileImage} 
-                              size={48}
-                              style={{ marginRight: 12 }}
-                            />
-                            
-                            <View style={styles.residentGridDetails}>
-                              {/* Post Title */}
-                              <Text style={styles.postTitleText}>
-                                {item.postTitle}
-                              </Text>
-                              
-                              {/* Date */}
-                              <Text style={styles.postDateText}>
-                                {formatDate(item.createdAt)}
-                              </Text>
-                              
-                              {/* Author */}
-                              <Text style={styles.residentGridEmail} numberOfLines={1}>
-                                By: {item.author}
-                              </Text>
-                              
-                              {/* Comment Content */}
-                              <Text style={styles.postContentText}>
-                                {item.content}
-                              </Text>
-                            </View>
-                          </View>
-                          
-                          {/* Action Button */}
-                          <View style={styles.residentGridActions}>
-                            <TouchableOpacity
-                              style={[styles.residentGridActionButton, styles.blockButton]}
-                              onPress={() => handleDeleteItem(item, 'comment')}
+              (() => {
+                const filteredComments = comments.filter((c: any) => {
+                  const status = c.status ?? 'approved';
+                  if (commentsStatusFilter === 'all') return true;
+                  return status === commentsStatusFilter;
+                });
+                const moderatorName = user
+                  ? `${user.firstName} ${user.lastName}`
+                  : 'board';
+
+                return (
+                  <>
+                    <View style={styles.commentFilterRow}>
+                      {(
+                        [
+                          { id: 'pending' as const, label: 'Pending' },
+                          { id: 'approved' as const, label: 'Live' },
+                          { id: 'declined' as const, label: 'Removed' },
+                          { id: 'all' as const, label: 'All' },
+                        ] as const
+                      ).map((tab) => {
+                        const active = commentsStatusFilter === tab.id;
+                        return (
+                          <TouchableOpacity
+                            key={tab.id}
+                            style={[
+                              styles.commentFilterChip,
+                              active && styles.commentFilterChipActive,
+                            ]}
+                            onPress={() => setCommentsStatusFilter(tab.id)}
+                          >
+                            <Text
+                              style={[
+                                styles.commentFilterChipText,
+                                active && styles.commentFilterChipTextActive,
+                              ]}
                             >
-                              <Ionicons name="trash" size={16} color="#ef4444" />
-                              <Text style={styles.residentGridActionText}>Delete</Text>
-                            </TouchableOpacity>
-                          </View>
-                        </View>
-                      </Animated.View>
-                    </AdminGridItem>
-                  ))}
-                </AdminGrid>
-              )
+                              {tab.label}
+                              {tab.id === 'pending' && pendingCommentsCount > 0
+                                ? ` (${pendingCommentsCount})`
+                                : ''}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+
+                    {filteredComments.length === 0 ? (
+                      <View style={styles.emptyState}>
+                        <Ionicons name="chatbubble" size={48} color="#9ca3af" />
+                        <Text style={styles.emptyStateText}>
+                          {commentsStatusFilter === 'pending'
+                            ? 'No comments awaiting approval'
+                            : commentsStatusFilter === 'declined'
+                              ? 'Removed bin is empty'
+                              : 'No comments found'}
+                        </Text>
+                      </View>
+                    ) : (
+                      <AdminGrid>
+                        {filteredComments.map((item: any) => {
+                          const status = item.status ?? 'approved';
+                          return (
+                            <AdminGridItem key={item._id} columnWidthPercent={columnWidthPercent}>
+                              <Animated.View
+                                style={[
+                                  styles.commentAdminCard,
+                                  {
+                                    opacity: fadeAnim,
+                                    transform: [
+                                      {
+                                        translateY: fadeAnim.interpolate({
+                                          inputRange: [0, 1],
+                                          outputRange: [50, 0],
+                                        }),
+                                      },
+                                    ],
+                                  },
+                                ]}
+                              >
+                                <View style={styles.commentAdminCardHeader}>
+                                  <ProfileImage
+                                    source={item.authorProfileImage}
+                                    size={44}
+                                    style={styles.commentAdminAvatar}
+                                  />
+                                  <View style={styles.commentAdminHeaderText}>
+                                    <Text style={styles.commentAdminPostTitle} numberOfLines={2}>
+                                      {item.postTitle}
+                                    </Text>
+                                    <Text style={styles.commentAdminDate}>
+                                      {formatDate(item.createdAt)}
+                                      {status === 'declined' && item.declinedAt
+                                        ? ` · Removed ${formatDate(item.declinedAt)}`
+                                        : ''}
+                                    </Text>
+                                    <Text style={styles.commentAdminAuthor} numberOfLines={1}>
+                                      By: {item.author}
+                                    </Text>
+                                  </View>
+                                  <View
+                                    style={[
+                                      styles.commentAdminStatusBadge,
+                                      status === 'pending' && styles.commentAdminStatusPending,
+                                      status === 'approved' && styles.commentAdminStatusApproved,
+                                      status === 'declined' && styles.commentAdminStatusDeclined,
+                                    ]}
+                                  >
+                                    <Text style={styles.commentAdminStatusBadgeText}>
+                                      {status === 'pending'
+                                        ? 'Pending'
+                                        : status === 'declined'
+                                          ? 'Removed'
+                                          : 'Live'}
+                                    </Text>
+                                  </View>
+                                </View>
+
+                                <Text style={styles.commentAdminBody}>{item.content}</Text>
+
+                                {status === 'declined' && item.declineReason ? (
+                                  <Text style={styles.commentDeclineReasonText}>
+                                    Reason: {item.declineReason}
+                                  </Text>
+                                ) : null}
+
+                                <View style={styles.commentAdminActions}>
+                                  {status === 'pending' && (
+                                    <>
+                                      <TouchableOpacity
+                                        disabled={isReadOnly}
+                                        style={[
+                                          styles.commentAdminActionButton,
+                                          styles.commentAdminApproveButton,
+                                          isReadOnly && { opacity: 0.45 },
+                                        ]}
+                                        onPress={async () => {
+                                          try {
+                                            await approveComment({
+                                              id: item._id,
+                                              moderatorName,
+                                            });
+                                          } catch (e) {
+                                            if (isTestUserReadOnlyError(e)) return;
+                                            Alert.alert('Error', 'Failed to approve comment.');
+                                          }
+                                        }}
+                                      >
+                                        <Ionicons name="checkmark" size={16} color="#059669" />
+                                        <Text style={styles.commentAdminApproveText}>Approve</Text>
+                                      </TouchableOpacity>
+                                      <TouchableOpacity
+                                        disabled={isReadOnly}
+                                        style={[
+                                          styles.commentAdminActionButton,
+                                          styles.commentAdminDeclineButton,
+                                          isReadOnly && { opacity: 0.45 },
+                                        ]}
+                                        onPress={() => {
+                                          setDeclineCommentTarget(item);
+                                          setDeclineReasonKey('no_reason');
+                                          setDeclineCustomReason('');
+                                          setShowDeclineCommentModal(true);
+                                        }}
+                                      >
+                                        <Ionicons name="close" size={16} color="#ef4444" />
+                                        <Text style={styles.commentAdminDeclineText}>Decline</Text>
+                                      </TouchableOpacity>
+                                    </>
+                                  )}
+                                  {status === 'declined' && (
+                                    <>
+                                      <TouchableOpacity
+                                        disabled={isReadOnly}
+                                        style={[
+                                          styles.commentAdminActionButton,
+                                          styles.commentAdminRestoreButton,
+                                          isReadOnly && { opacity: 0.45 },
+                                        ]}
+                                        onPress={async () => {
+                                          try {
+                                            await restoreComment({ id: item._id });
+                                            Alert.alert(
+                                              'Restored',
+                                              'Comment moved back to Pending for re-review.',
+                                            );
+                                          } catch (e) {
+                                            if (isTestUserReadOnlyError(e)) return;
+                                            Alert.alert('Error', 'Failed to restore comment.');
+                                          }
+                                        }}
+                                      >
+                                        <Ionicons name="refresh" size={16} color="#2563eb" />
+                                        <Text style={styles.commentAdminRestoreText}>Restore</Text>
+                                      </TouchableOpacity>
+                                      <TouchableOpacity
+                                        style={[
+                                          styles.commentAdminActionButton,
+                                          styles.commentAdminDeclineButton,
+                                        ]}
+                                        onPress={() => handleDeleteItem(item, 'comment')}
+                                      >
+                                        <Ionicons name="trash" size={16} color="#ef4444" />
+                                        <Text style={styles.commentAdminDeclineText}>
+                                          Delete forever
+                                        </Text>
+                                      </TouchableOpacity>
+                                    </>
+                                  )}
+                                  {status === 'approved' && (
+                                    <TouchableOpacity
+                                      disabled={isReadOnly}
+                                      style={[
+                                        styles.commentAdminActionButton,
+                                        styles.commentAdminDeclineButton,
+                                        isReadOnly && { opacity: 0.45 },
+                                      ]}
+                                      onPress={() => {
+                                        setDeclineCommentTarget(item);
+                                        setDeclineReasonKey('no_reason');
+                                        setDeclineCustomReason('');
+                                        setShowDeclineCommentModal(true);
+                                      }}
+                                    >
+                                      <Ionicons name="trash" size={16} color="#ef4444" />
+                                      <Text style={styles.commentAdminDeclineText}>Remove</Text>
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              </Animated.View>
+                            </AdminGridItem>
+                          );
+                        })}
+                      </AdminGrid>
+                    )}
+                  </>
+                );
+              })()
             )}
             
             {postsSubTab === 'polls' && (
@@ -3769,8 +4063,11 @@ const AdminScreen = () => {
                 );
               })()
             )}
+              </View>
+            </View>
           </View>
         );
+      }
       
       case 'fees':
         return (
@@ -4539,9 +4836,11 @@ const AdminScreen = () => {
               Manage community content and residents
             </Text>
             <View style={styles.indicatorsContainer}>
+              <TestUserIndicator />
               <DeveloperIndicator />
               <BoardMemberIndicator />
             </View>
+            <TestUserReadOnlyBanner />
           </View>
         </View>
       </ImageBackground>
@@ -4885,14 +5184,15 @@ const AdminScreen = () => {
               
               <View style={styles.modalActions}>
                 <TouchableOpacity
-                  style={styles.cancelButton}
+                    style={styles.cancelButton}
                   onPress={() => animateOut('block', () => setShowBlockModal(false))}
                 >
                   <Text style={styles.cancelButtonText}>Cancel</Text>
                 </TouchableOpacity>
                 
                 <TouchableOpacity
-                  style={styles.confirmButton}
+                    disabled={isReadOnly}
+                  style={[styles.confirmButton, isReadOnly && { opacity: 0.45 }]}
                   onPress={confirmBlockResident}
                 >
                   <Text style={styles.confirmButtonText}>Block Resident</Text>
@@ -4933,7 +5233,8 @@ const AdminScreen = () => {
                   </TouchableOpacity>
 
                   <TouchableOpacity
-                    style={[styles.confirmButton, styles.removeConfirmButton]}
+                    disabled={isReadOnly}
+                    style={[styles.confirmButton, isReadOnly && { opacity: 0.45 }, styles.removeConfirmButton]}
                     onPress={confirmRemoveResident}
                   >
                     <Text style={styles.confirmButtonText}>Remove Resident</Text>
@@ -4971,7 +5272,7 @@ const AdminScreen = () => {
               
               <View style={styles.modalActions}>
                 <TouchableOpacity
-                  style={styles.cancelButton}
+                    style={styles.cancelButton}
                   onPress={() => animateOut('delete', () => setShowDeleteModal(false))}
                 >
                   <Text style={styles.cancelButtonText}>Cancel</Text>
@@ -4998,6 +5299,142 @@ const AdminScreen = () => {
           }}
           addressGroup={selectedHomeownerGroup}
         />
+
+        {/* Decline Comment Modal */}
+        <Modal
+          visible={showDeclineCommentModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => {
+            setShowDeclineCommentModal(false);
+            setDeclineCommentTarget(null);
+          }}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.boardMemberModalContent, { maxWidth: 480 }]}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Decline comment</Text>
+                <TouchableOpacity
+                  style={styles.closeButton}
+                  onPress={() => {
+                    setShowDeclineCommentModal(false);
+                    setDeclineCommentTarget(null);
+                  }}
+                >
+                  <Ionicons name="close" size={24} color="#6b7280" />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView
+                style={styles.modalForm}
+                contentContainerStyle={styles.modalFormContent}
+                showsVerticalScrollIndicator={false}
+              >
+                {declineCommentTarget ? (
+                  <Text style={styles.commentDeclinePreview} numberOfLines={4}>
+                    “{declineCommentTarget.content}”
+                  </Text>
+                ) : null}
+
+                <Text style={styles.inputLabel}>Reason for the resident</Text>
+                {COMMENT_DECLINE_REASONS.map((reason) => (
+                  <TouchableOpacity
+                    key={reason.key}
+                    style={[
+                      styles.declineReasonOption,
+                      declineReasonKey === reason.key && styles.declineReasonOptionSelected,
+                    ]}
+                    onPress={() => setDeclineReasonKey(reason.key)}
+                  >
+                    <Ionicons
+                      name={
+                        declineReasonKey === reason.key
+                          ? 'radio-button-on'
+                          : 'radio-button-off'
+                      }
+                      size={18}
+                      color={declineReasonKey === reason.key ? '#2563eb' : '#9ca3af'}
+                    />
+                    <Text
+                      style={[
+                        styles.declineReasonOptionText,
+                        declineReasonKey === reason.key && styles.declineReasonOptionTextSelected,
+                      ]}
+                    >
+                      {reason.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+
+                {declineReasonKey === 'custom' && (
+                  <TextInput
+                    style={[styles.textInput, styles.textArea, { marginTop: 8 }]}
+                    placeholder="Enter custom reason shown to the resident"
+                    value={declineCustomReason}
+                    onChangeText={setDeclineCustomReason}
+                    multiline
+                    numberOfLines={3}
+                    textAlignVertical="top"
+                  />
+                )}
+
+                <Text style={styles.commentDeclinePreviewHint}>
+                  Resident will see:{' '}
+                  {resolveDeclineMessage(
+                    declineReasonKey,
+                    declineReasonKey === 'custom' ? declineCustomReason : undefined,
+                  )}
+                </Text>
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    style={styles.cancelButton}
+                    onPress={() => {
+                      setShowDeclineCommentModal(false);
+                      setDeclineCommentTarget(null);
+                    }}
+                  >
+                    <Text style={styles.cancelButtonText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    disabled={isReadOnly}
+                    style={[styles.confirmButton, { backgroundColor: '#ef4444' }, isReadOnly && { opacity: 0.45 }]}
+                    onPress={async () => {
+                      if (!declineCommentTarget) return;
+                      if (
+                        declineReasonKey === 'custom' &&
+                        !declineCustomReason.trim()
+                      ) {
+                        Alert.alert('Error', 'Please enter a custom reason, or choose No reason.');
+                        return;
+                      }
+                      try {
+                        await declineComment({
+                          id: declineCommentTarget._id,
+                          reasonKey: declineReasonKey,
+                          customReason:
+                            declineReasonKey === 'custom'
+                              ? declineCustomReason.trim()
+                              : undefined,
+                          moderatorName: user
+                            ? `${user.firstName} ${user.lastName}`
+                            : 'board',
+                        });
+                        setShowDeclineCommentModal(false);
+                        setDeclineCommentTarget(null);
+                      } catch (e) {
+                        if (isTestUserReadOnlyError(e)) return;
+                        Alert.alert('Error', 'Failed to decline comment.');
+                      }
+                    }}
+                  >
+                    <Text style={styles.confirmButtonText}>Decline</Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
 
         {/* Board Member Modal */}
         <Modal
@@ -5048,11 +5485,24 @@ const AdminScreen = () => {
                     <View style={styles.imageContainer}>
                       {boardMemberImage ? (
                         <View style={styles.imageWrapper}>
-                          <Image 
-                            source={{ uri: boardMemberImage }} 
-                            style={styles.previewImage}
-                            resizeMode="cover"
-                          />
+                          {isLocalImageUri(boardMemberImage) ? (
+                            <Image
+                              source={{ uri: boardMemberImage }}
+                              style={styles.previewImage}
+                              resizeMode="cover"
+                            />
+                          ) : (
+                            <ProfileImage
+                              source={boardMemberImage}
+                              size={100}
+                              style={styles.previewImage}
+                              initials={boardMemberForm.name
+                                .split(' ')
+                                .map((n) => n.charAt(0))
+                                .join('')
+                                .substring(0, 2)}
+                            />
+                          )}
                           <TouchableOpacity 
                             style={styles.removeImageButton}
                             onPress={() => setBoardMemberImage(null)}
@@ -5081,13 +5531,78 @@ const AdminScreen = () => {
 
                 <View style={formInputGroupStyle}>
                   <Text style={styles.inputLabel}>Position *</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    placeholder="e.g., President, Vice President, Treasurer"
-                    value={boardMemberForm.position}
-                    onChangeText={(text) => setBoardMemberForm(prev => ({ ...prev, position: text }))}
-                    autoCapitalize="words"
-                  />
+                  <TouchableOpacity
+                    style={styles.categoryPicker}
+                    onPress={() => {
+                      if (showBoardPositionDropdown) {
+                        setShowBoardPositionDropdown(false);
+                        animateBoardPositionDropdownOut();
+                      } else {
+                        setShowBoardPositionDropdown(true);
+                        animateBoardPositionDropdownIn();
+                      }
+                    }}
+                  >
+                    <Text style={styles.categoryPickerText}>{boardPositionPickerLabel}</Text>
+                    <Ionicons
+                      name={showBoardPositionDropdown ? 'chevron-up' : 'chevron-down'}
+                      size={20}
+                      color="#6b7280"
+                    />
+                  </TouchableOpacity>
+
+                  {showBoardPositionDropdown && (
+                    <Animated.View
+                      style={[
+                        styles.boardPositionDropdown,
+                        {
+                          opacity: boardPositionDropdownOpacity,
+                          transform: [{ scale: boardPositionDropdownScale }],
+                        },
+                      ]}
+                    >
+                      {[...BOARD_POSITION_PRESETS, 'Other' as const].map((option) => (
+                        <TouchableOpacity
+                          key={option}
+                          style={[
+                            styles.categoryOption,
+                            boardPositionPreset === option && styles.categoryOptionSelected,
+                          ]}
+                          onPress={() => {
+                            setBoardPositionPreset(option);
+                            if (option !== 'Other') {
+                              setBoardPositionCustom('');
+                              setBoardMemberForm((prev) => ({ ...prev, position: option }));
+                            }
+                            setShowBoardPositionDropdown(false);
+                            animateBoardPositionDropdownOut();
+                          }}
+                        >
+                          <Text
+                            style={[
+                              styles.categoryOptionText,
+                              boardPositionPreset === option && styles.categoryOptionTextSelected,
+                            ]}
+                          >
+                            {option}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </Animated.View>
+                  )}
+
+                  {boardPositionPreset === 'Other' && (
+                    <TextInput
+                      style={[styles.textInput, { marginTop: 8 }]}
+                      placeholder="Enter custom position title"
+                      value={boardPositionCustom}
+                      onChangeText={(text) => {
+                        setBoardPositionCustom(text);
+                        setBoardMemberForm((prev) => ({ ...prev, position: text }));
+                      }}
+                      autoCapitalize="words"
+                    />
+                  )}
                 </View>
 
                 <View style={formInputGroupStyle}>
@@ -5145,7 +5660,8 @@ const AdminScreen = () => {
                     <Text style={styles.cancelButtonText}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={styles.confirmButton}
+                    disabled={isReadOnly}
+                    style={[styles.confirmButton, isReadOnly && { opacity: 0.45 }]}
                     onPress={handleSaveBoardMember}
                   >
                     <Text style={styles.confirmButtonText}>
@@ -5231,7 +5747,8 @@ const AdminScreen = () => {
                     <Text style={styles.cancelButtonText}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={styles.confirmButton}
+                    disabled={isReadOnly}
+                    style={[styles.confirmButton, isReadOnly && { opacity: 0.45 }]}
                     onPress={handleAddYearFees}
                   >
                     <Text style={styles.confirmButtonText}>Add Year Fees</Text>
@@ -5358,7 +5875,8 @@ const AdminScreen = () => {
                     <Text style={styles.cancelButtonText}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={styles.confirmButton}
+                    disabled={isReadOnly}
+                    style={[styles.confirmButton, isReadOnly && { opacity: 0.45 }]}
                     onPress={handleAddFine}
                   >
                     <Text style={styles.confirmButtonText}>Add Fine</Text>
@@ -5421,7 +5939,8 @@ const AdminScreen = () => {
                     <Text style={styles.cancelButtonText}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={styles.confirmButton}
+                    disabled={isReadOnly}
+                    style={[styles.confirmButton, isReadOnly && { opacity: 0.45 }]}
                     onPress={handleUpdateDues}
                   >
                     <Text style={styles.confirmButtonText}>Update Amount</Text>
@@ -5545,7 +6064,8 @@ const AdminScreen = () => {
                     <Text style={styles.cancelButtonText}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={styles.confirmButton}
+                    disabled={isReadOnly}
+                    style={[styles.confirmButton, isReadOnly && { opacity: 0.45 }]}
                     onPress={handleAddPastDue}
                   >
                     <Text style={styles.confirmButtonText}>Add Past Due</Text>
@@ -5764,7 +6284,8 @@ const AdminScreen = () => {
                     <Text style={styles.cancelButtonText}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={styles.confirmButton}
+                    disabled={isReadOnly}
+                    style={[styles.confirmButton, isReadOnly && { opacity: 0.45 }]}
                     onPress={handleRecordPayment}
                   >
                     <Text style={styles.confirmButtonText}>Record Payment</Text>
@@ -6202,6 +6723,7 @@ const AdminScreen = () => {
                           setCorrectionNotes('');
                           await handleRefresh();
                         } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
                           console.error('Correction error:', error);
                           Alert.alert('Error', 'Failed to correct payment amount.');
                         }
@@ -6404,6 +6926,7 @@ const AdminScreen = () => {
                           setCorrectionNotes('');
                           await handleRefresh();
                         } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
                           console.error('Correction error:', error);
                           Alert.alert('Error', 'Failed to correct payment amount.');
                         }
@@ -6630,7 +7153,7 @@ const AdminScreen = () => {
                 <View style={styles.modalFooter}>
                   <View style={styles.modalActions}>
                     <TouchableOpacity
-                      style={styles.cancelButton}
+                    style={styles.cancelButton}
                       onPress={handleCancelCovenant}
                       disabled={covenantUploading}
                     >
@@ -6782,7 +7305,8 @@ const AdminScreen = () => {
                   </TouchableOpacity>
                   
                   <TouchableOpacity
-                    style={styles.confirmButton}
+                    disabled={isReadOnly}
+                    style={[styles.confirmButton, isReadOnly && { opacity: 0.45 }]}
                     onPress={isEditingPoll ? handleUpdatePoll : handleCreatePoll}
                   >
                     <Text style={styles.confirmButtonText}>
@@ -7001,6 +7525,7 @@ const AdminScreen = () => {
                         setAdjustedPaymentAmount('');
                         await handleRefresh();
                       } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
                         Alert.alert('Error', 'Failed to reject payment.');
                       }
                     }}
@@ -7067,6 +7592,7 @@ const AdminScreen = () => {
                         setAdjustedPaymentAmount('');
                         await handleRefresh();
                       } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
                         console.error('Verification error:', error);
                         Alert.alert('Error', 'Failed to verify payment.');
                       }
@@ -7251,6 +7777,7 @@ const AdminScreen = () => {
                           setAdjustedPaymentAmount('');
                           await handleRefresh();
                         } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
                           Alert.alert('Error', 'Failed to reject payment.');
                         }
                       }}
@@ -7317,6 +7844,7 @@ const AdminScreen = () => {
                           setAdjustedPaymentAmount('');
                           await handleRefresh();
                         } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
                           console.error('Verification error:', error);
                           Alert.alert('Error', 'Failed to verify payment.');
                         }
@@ -7669,7 +8197,50 @@ const styles = StyleSheet.create({
     color: '#3b82f6',
     fontWeight: '600',
   },
-  // Community sub-tabs styles (separate for consistency)
+  // Community content tabs (inside content section)
+  communityContentSection: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    overflow: 'hidden',
+  },
+  communityContentTabs: {
+    maxHeight: 52,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
+  communityContentTabsContent: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    paddingHorizontal: 8,
+  },
+  communityContentTab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+  },
+  communityContentTabActive: {
+    borderBottomColor: '#2563eb',
+  },
+  communityContentTabText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#6b7280',
+  },
+  communityContentTabTextActive: {
+    color: '#2563eb',
+    fontWeight: '600',
+  },
+  communityContentBody: {
+    padding: 12,
+  },
+  // Community sub-tabs styles (legacy — kept for any remaining references)
   communitySubTabsContainer: {
     backgroundColor: '#f8fafc',
     borderBottomWidth: 1,
@@ -9000,6 +9571,23 @@ const styles = StyleSheet.create({
     maxHeight: 200,
     overflow: 'hidden',
   },
+  // Board positions are few — expand fully so every option is visible (no scroll/clip)
+  boardPositionDropdown: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    marginTop: 8,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 5,
+    overflow: 'visible',
+  },
   categoryOption: {
     paddingHorizontal: 16,
     paddingVertical: 12,
@@ -9015,6 +9603,199 @@ const styles = StyleSheet.create({
     fontWeight: '400',
   },
   categoryOptionTextSelected: {
+    color: '#2563eb',
+    fontWeight: '500',
+  },
+  commentFilterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 16,
+    paddingHorizontal: 4,
+  },
+  commentFilterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#f3f4f6',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  commentFilterChipActive: {
+    backgroundColor: '#eff6ff',
+    borderColor: '#2563eb',
+  },
+  commentFilterChipText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#6b7280',
+  },
+  commentFilterChipTextActive: {
+    color: '#2563eb',
+  },
+  commentAdminStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 2,
+  },
+  commentAdminCard: {
+    width: '100%',
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    padding: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  commentAdminCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 10,
+  },
+  commentAdminAvatar: {
+    marginTop: 2,
+  },
+  commentAdminHeaderText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  commentAdminPostTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111827',
+    lineHeight: 20,
+    marginBottom: 2,
+  },
+  commentAdminDate: {
+    fontSize: 12,
+    color: '#9ca3af',
+    lineHeight: 16,
+    marginBottom: 2,
+  },
+  commentAdminAuthor: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    lineHeight: 18,
+  },
+  commentAdminBody: {
+    fontSize: 14,
+    color: '#1f2937',
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  commentAdminActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  commentAdminActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    flexGrow: 1,
+    flexBasis: '40%',
+    minHeight: 40,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  commentAdminApproveButton: {
+    backgroundColor: '#d1fae5',
+    borderColor: '#a7f3d0',
+  },
+  commentAdminDeclineButton: {
+    backgroundColor: '#fee2e2',
+    borderColor: '#fecaca',
+  },
+  commentAdminRestoreButton: {
+    backgroundColor: '#dbeafe',
+    borderColor: '#bfdbfe',
+  },
+  commentAdminApproveText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#059669',
+  },
+  commentAdminDeclineText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#ef4444',
+  },
+  commentAdminRestoreText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#2563eb',
+  },
+  commentAdminStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    backgroundColor: '#e5e7eb',
+    alignSelf: 'flex-start',
+    flexShrink: 0,
+  },
+  commentAdminStatusPending: {
+    backgroundColor: '#fef3c7',
+  },
+  commentAdminStatusApproved: {
+    backgroundColor: '#d1fae5',
+  },
+  commentAdminStatusDeclined: {
+    backgroundColor: '#fee2e2',
+  },
+  commentAdminStatusBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  commentDeclineReasonText: {
+    marginTop: -4,
+    marginBottom: 10,
+    fontSize: 12,
+    color: '#b91c1c',
+    fontStyle: 'italic',
+  },
+  commentDeclinePreview: {
+    fontSize: 14,
+    color: '#4b5563',
+    fontStyle: 'italic',
+    marginBottom: 12,
+    lineHeight: 20,
+  },
+  commentDeclinePreviewHint: {
+    marginTop: 12,
+    fontSize: 12,
+    color: '#6b7280',
+    lineHeight: 18,
+  },
+  declineReasonOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    marginTop: 4,
+  },
+  declineReasonOptionSelected: {
+    backgroundColor: '#eff6ff',
+  },
+  declineReasonOptionText: {
+    fontSize: 14,
+    color: '#374151',
+    flex: 1,
+  },
+  declineReasonOptionTextSelected: {
     color: '#2563eb',
     fontWeight: '500',
   },
