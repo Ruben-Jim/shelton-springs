@@ -67,6 +67,8 @@ import {
   getIosAppStoreUrl,
 } from '../constants/publicLinks';
 import { useAdminLayout } from '../hooks/useAdminLayout';
+import CcrsDocumentActions from '../components/admin/CcrsDocumentActions';
+import AttachmentViewButton from '../components/admin/AttachmentViewButton';
 import AdminNav, { AdminMobileMoreSheet, ADMIN_MOBILE_TAB_BAR_HEIGHT } from '../components/admin/AdminNav';
 import AdminOverview from '../components/admin/AdminOverview';
 import { AdminGrid, AdminGridItem } from '../components/admin/AdminGrid';
@@ -3167,67 +3169,26 @@ const AdminScreen = () => {
       case 'covenants':
         return (
           <View style={styles.tabContent}>
-            <View style={[styles.sectionHeader, useSidebar && styles.sectionHeaderDesktop]}>
+            <View
+              style={[
+                styles.sectionHeader,
+                useSidebar ? styles.sectionHeaderDesktop : styles.covenantsHeaderMobile,
+              ]}
+            >
               <Text style={styles.sectionTitle}>Covenants & Rules</Text>
-              <View style={styles.sectionHeaderActions}>
+              <View style={useSidebar ? styles.sectionHeaderActions : styles.covenantsHeaderActionsMobile}>
+                <CcrsDocumentActions
+                  generateUploadUrl={generateUploadUrl}
+                  updateCcrsPdf={updateCcrsPdf}
+                  fill={!useSidebar}
+                />
                 <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
                   <TouchableOpacity
-                    style={[styles.addButton, { backgroundColor: '#2563eb' }]}
-                    onPress={async () => {
-                      try {
-                        const result = await DocumentPicker.getDocumentAsync({
-                          type: 'application/pdf',
-                          copyToCacheDirectory: true,
-                        });
-                        
-                        if (result.canceled) {
-                          return;
-                        }
-                        
-                        const file = result.assets[0];
-                        if (!file) {
-                          Alert.alert('Error', 'No file selected.');
-                          return;
-                        }
-                        
-                        // Generate upload URL
-                        const uploadUrl = await generateUploadUrl();
-                        
-                        // Read file and upload
-                        const fileResponse = await fetch(file.uri);
-                        const blob = await fileResponse.blob();
-                        
-                        // Upload file to Convex storage
-                        const uploadResponse = await fetch(uploadUrl, {
-                          method: 'POST',
-                          headers: { 'Content-Type': file.mimeType || 'application/pdf' },
-                          body: blob,
-                        });
-                        
-                        if (!uploadResponse.ok) {
-                          throw new Error('Upload failed');
-                        }
-                        
-                        const { storageId } = await uploadResponse.json();
-                        
-                        // Update CC&Rs PDF
-                        await updateCcrsPdf({ ccrsPdfStorageId: storageId });
-                        
-                        Alert.alert('Success', 'CC&Rs PDF uploaded successfully!');
-                      } catch (error: any) {
-    if (isTestUserReadOnlyError(error)) return;
-                        console.error('Error uploading CC&Rs PDF:', error);
-                        Alert.alert('Error', error?.message || 'Failed to upload CC&Rs PDF. Please try again.');
-                      }
-                    }}
-                  >
-                    <Ionicons name="document-attach" size={20} color="#ffffff" />
-                    <Text style={styles.addButtonText}>Upload CC&Rs</Text>
-                  </TouchableOpacity>
-                </Animated.View>
-                <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
-                  <TouchableOpacity
-                    style={[styles.addButton, { backgroundColor: '#22c55e' }]}
+                    style={[
+                      styles.addButton,
+                      { backgroundColor: '#22c55e' },
+                      !useSidebar && styles.covenantsAddButtonMobile,
+                    ]}
                     onPress={() => {
                       animateButtonPress();
                       setIsEditingCovenant(false);
@@ -3336,6 +3297,12 @@ const AdminScreen = () => {
                           {/* Action Buttons */}
                           <View style={[styles.residentGridActions, styles.covenantGridActions]}>
                             <View style={styles.boardActionButtons}>
+                              <AttachmentViewButton
+                                fileStorageId={item.fileStorageId}
+                                pdfUrl={item.pdfUrl}
+                                style={[styles.boardActionButton, styles.editButton]}
+                                textStyle={styles.residentGridActionText}
+                              />
                               <TouchableOpacity
                                 style={[styles.boardActionButton, styles.editButton]}
                                 onPress={() => handleEditCovenant(item)}
@@ -8797,6 +8764,17 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     borderBottomWidth: 0,
     marginBottom: 12,
+  },
+  covenantsHeaderMobile: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 10,
+  },
+  covenantsHeaderActionsMobile: {
+    gap: 8,
+  },
+  covenantsAddButtonMobile: {
+    justifyContent: 'center',
   },
   sectionHeaderActions: {
     flexDirection: 'row',

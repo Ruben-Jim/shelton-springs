@@ -15,6 +15,7 @@ import { useQuery } from 'convex/react';
 import { api } from '../../../convex/_generated/api';
 import { useCachedHoaInfo } from '../../context/QueryCacheContext';
 import { useStorageUrl } from '../../hooks/useStorageUrl';
+import { openDocument } from '../../utils/openDocument';
 
 function CovenantAttachmentButton({
   fileStorageId,
@@ -30,12 +31,12 @@ function CovenantAttachmentButton({
   const open = () => {
     if (fileStorageId) {
       if (resolvedUrl) {
-        Linking.openURL(resolvedUrl);
+        openDocument(resolvedUrl);
       } else {
         Alert.alert('Please wait', 'Loading document link…');
       }
     } else if (pdfUrl) {
-      Linking.openURL(pdfUrl);
+      openDocument(pdfUrl);
     }
   };
 
@@ -118,7 +119,7 @@ const CovenantsContent = ({ isActive }: CovenantsContentProps) => {
             style={styles.ccrsButton}
             onPress={() =>
               ccrsPdfUrl
-                ? Linking.openURL(ccrsPdfUrl).catch(() =>
+                ? openDocument(ccrsPdfUrl).catch(() =>
                     Alert.alert('Error', 'Unable to open PDF. Please try again.')
                   )
                 : undefined

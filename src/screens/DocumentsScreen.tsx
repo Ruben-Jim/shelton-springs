@@ -36,6 +36,7 @@ import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
 import { ensurePhotoLibraryAccess } from '../utils/ensurePhotoLibraryAccess';
 import { getUploadReadyImage } from '../utils/imageUpload';
+import { openDocument } from '../utils/openDocument';
 import {
   HERO_TAB_CONTAINER_STYLE,
   HERO_TAB_SAFE_AREA_EDGES,
@@ -353,7 +354,7 @@ const DocumentsScreen = () => {
         style={styles.viewButton}
         onPress={() => {
           if (fileUrl) {
-            Linking.openURL(fileUrl);
+            openDocument(fileUrl);
           } else {
             Alert.alert('Error', 'Document URL not available.');
           }

@@ -18,6 +18,7 @@ import { useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
 import { useCachedHoaInfo } from '../context/QueryCacheContext';
+import { openDocument } from '../utils/openDocument';
 import { useStorageUrl } from '../hooks/useStorageUrl';
 import { Linking, ActivityIndicator } from 'react-native';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
@@ -49,12 +50,12 @@ function CovenantAttachmentButton({
   const open = () => {
     if (fileStorageId) {
       if (resolvedUrl) {
-        Linking.openURL(resolvedUrl);
+        openDocument(resolvedUrl);
       } else {
         Alert.alert('Please wait', 'Loading document link…');
       }
     } else if (pdfUrl) {
-      Linking.openURL(pdfUrl);
+      openDocument(pdfUrl);
     }
   };
 
@@ -252,7 +253,7 @@ const CovenantsScreen = () => {
             style={styles.ccrsButton}
             onPress={() => {
               if (ccrsPdfUrl) {
-                Linking.openURL(ccrsPdfUrl).catch((err) => {
+                openDocument(ccrsPdfUrl).catch((err) => {
                   console.error('Error opening CC&Rs PDF:', err);
                   Alert.alert('Error', 'Unable to open PDF. Please try again.');
                 });

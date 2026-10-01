@@ -26,6 +26,7 @@ import CustomAlert from '../CustomAlert';
 import { useCustomAlert } from '../../hooks/useCustomAlert';
 import { getUploadReadyImage } from '../../utils/imageUpload';
 import { ensurePhotoLibraryAccess } from '../../utils/ensurePhotoLibraryAccess';
+import { openDocument } from '../../utils/openDocument';
 
 const DocumentViewer = ({ storageId }: { storageId: string }) => {
   const fileUrl = useStorageUrl(storageId);
@@ -43,7 +44,7 @@ const DocumentViewer = ({ storageId }: { storageId: string }) => {
       style={styles.viewButton}
       onPress={() => {
         if (fileUrl) {
-          Linking.openURL(fileUrl);
+          openDocument(fileUrl);
         } else {
           Alert.alert('Error', 'Document URL not available.');
         }

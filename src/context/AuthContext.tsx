@@ -39,10 +39,51 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const createResident = useMutation(api.residents.create);
   const updateResident = useMutation(api.residents.update);
 
+  // The stored session is a login-time snapshot; subscribe to the live resident
+  // so role/status changes made by admins apply without signing out.
+  const liveResident = useQuery(
+    api.residents.getByEmail,
+    authState.user?.email ? { email: authState.user.email } : 'skip'
+  );
+
   useEffect(() => {
     // Check for existing login session on app start
     loadUserFromStorage();
   }, []);
+
+  useEffect(() => {
+    const current = authState.user;
+    if (!liveResident || !current || String(liveResident._id) !== String(current._id)) return;
+
+    const syncedKeys: (keyof User)[] = [
+      'firstName',
+      'lastName',
+      'phone',
+      'address',
+      'unitNumber',
+      'isResident',
+      'isBoardMember',
+      'isRenter',
+      'isDev',
+      'isTestUser',
+      'isActive',
+      'isBlocked',
+      'blockReason',
+      'profileImage',
+    ];
+    const live = liveResident as unknown as Partial<User>;
+    if (!syncedKeys.some((key) => live[key] !== current[key])) return;
+
+    const synced: User = { ...current };
+    for (const key of syncedKeys) {
+      (synced as any)[key] = live[key];
+    }
+
+    setAuthState((prev) => ({ ...prev, user: synced }));
+    AsyncStorage.setItem('user', JSON.stringify(synced)).catch((err) =>
+      console.log('Failed to persist synced user:', err)
+    );
+  }, [liveResident, authState.user]);
 
   const loadUserFromStorage = async () => {
     try {
