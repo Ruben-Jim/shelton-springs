@@ -69,6 +69,7 @@ import {
 import { useAdminLayout } from '../hooks/useAdminLayout';
 import CcrsDocumentActions from '../components/admin/CcrsDocumentActions';
 import AttachmentViewButton from '../components/admin/AttachmentViewButton';
+import LoadingState from '../components/LoadingState';
 import AdminNav, { AdminMobileMoreSheet, ADMIN_MOBILE_TAB_BAR_HEIGHT } from '../components/admin/AdminNav';
 import AdminOverview from '../components/admin/AdminOverview';
 import { AdminGrid, AdminGridItem } from '../components/admin/AdminGrid';
@@ -3211,7 +3212,9 @@ const AdminScreen = () => {
                 </Animated.View>
               </View>
             </View>
-            {covenants.length === 0 ? (
+            {covenantsData === undefined ? (
+              <LoadingState message="Loading covenants…" />
+            ) : covenants.length === 0 ? (
               <View style={styles.emptyState}>
                 <Ionicons name="document-text" size={48} color="#9ca3af" />
                 <Text style={styles.emptyStateText}>No covenants found</Text>

@@ -37,6 +37,7 @@ import { useMessaging } from '../context/MessagingContext';
 import { ensurePhotoLibraryAccess } from '../utils/ensurePhotoLibraryAccess';
 import { getUploadReadyImage } from '../utils/imageUpload';
 import { openDocument } from '../utils/openDocument';
+import LoadingState from '../components/LoadingState';
 import {
   HERO_TAB_CONTAINER_STYLE,
   HERO_TAB_SAFE_AREA_EDGES,
@@ -485,7 +486,9 @@ const DocumentsScreen = () => {
 
           {/* Documents List */}
           <View style={styles.documentsContainer}>
-            {documents.length === 0 ? (
+            {documentsData === undefined ? (
+              <LoadingState message="Loading documents…" />
+            ) : documents.length === 0 ? (
               <View style={styles.emptyState}>
                 <Ionicons 
                   name={activeType === 'Minutes' ? 'clipboard-outline' : 'cash-outline'} 

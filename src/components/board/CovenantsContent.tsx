@@ -15,6 +15,7 @@ import { useQuery } from 'convex/react';
 import { api } from '../../../convex/_generated/api';
 import { useCachedHoaInfo } from '../../context/QueryCacheContext';
 import { useStorageUrl } from '../../hooks/useStorageUrl';
+import LoadingState from '../LoadingState';
 import { openDocument } from '../../utils/openDocument';
 
 function CovenantAttachmentButton({
@@ -200,7 +201,9 @@ const CovenantsContent = ({ isActive }: CovenantsContentProps) => {
 
       {/* Covenants List */}
       <View style={styles.covenantsContainer}>
-        {filteredCovenants.length === 0 ? (
+        {covenantsData === undefined ? (
+          <LoadingState message="Loading covenants…" />
+        ) : filteredCovenants.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="document-text-outline" size={48} color="#9ca3af" />
             <Text style={styles.emptyStateText}>No covenants found</Text>

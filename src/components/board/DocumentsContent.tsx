@@ -27,6 +27,7 @@ import { useCustomAlert } from '../../hooks/useCustomAlert';
 import { getUploadReadyImage } from '../../utils/imageUpload';
 import { ensurePhotoLibraryAccess } from '../../utils/ensurePhotoLibraryAccess';
 import { openDocument } from '../../utils/openDocument';
+import LoadingState from '../LoadingState';
 
 const DocumentViewer = ({ storageId }: { storageId: string }) => {
   const fileUrl = useStorageUrl(storageId);
@@ -323,7 +324,9 @@ const DocumentsContent = ({ isActive }: DocumentsContentProps) => {
 
       {/* Documents List */}
       <View style={styles.documentsContainer}>
-        {documents.length === 0 ? (
+        {documentsData === undefined ? (
+          <LoadingState message="Loading documents…" />
+        ) : documents.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons
               name={activeType === 'Minutes' ? 'clipboard-outline' : 'cash-outline'}

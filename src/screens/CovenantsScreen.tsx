@@ -18,6 +18,7 @@ import { useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../context/AuthContext';
 import { useCachedHoaInfo } from '../context/QueryCacheContext';
+import LoadingState from '../components/LoadingState';
 import { openDocument } from '../utils/openDocument';
 import { useStorageUrl } from '../hooks/useStorageUrl';
 import { Linking, ActivityIndicator } from 'react-native';
@@ -335,7 +336,9 @@ const CovenantsScreen = () => {
 
       {/* Covenants List */}
       <View style={styles.covenantsContainer}>
-        {filteredCovenants.length === 0 ? (
+        {covenantsData === undefined ? (
+          <LoadingState message="Loading covenants…" />
+        ) : filteredCovenants.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="document-text-outline" size={48} color="#9ca3af" />
             <Text style={styles.emptyStateText}>No covenants found</Text>
