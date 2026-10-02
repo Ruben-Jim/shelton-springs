@@ -253,7 +253,8 @@ export default defineSchema({
       v.literal("Minutes"),
       v.literal("Financial")
     ),
-    fileStorageId: v.string(), // Storage ID for document file (PDF, etc.)
+    fileStorageId: v.string(), // Storage ID for document file (PDF, etc.); first page for multi-photo docs
+    imageStorageIds: v.optional(v.array(v.string())), // Ordered photo pages (page 1, 2, ...) for multi-photo docs
     uploadedBy: v.string(), // User who uploaded the document
     createdAt: v.number(),
     updatedAt: v.number(),

@@ -2,6 +2,8 @@ import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { api } from "./_generated/api";
 
+const MAX_DOCUMENT_PAGES = 10;
+
 export const getAll = query({
   args: {},
   handler: async (ctx) => {
@@ -58,15 +60,21 @@ export const create = mutation({
     description: v.optional(v.string()),
     type: v.union(v.literal("Minutes"), v.literal("Financial")),
     fileStorageId: v.string(),
+    // Ordered photo pages; fileStorageId should be the first page so older clients still show page 1
+    imageStorageIds: v.optional(v.array(v.string())),
     uploadedBy: v.string(),
   },
   handler: async (ctx, args) => {
+    if (args.imageStorageIds && args.imageStorageIds.length > MAX_DOCUMENT_PAGES) {
+      throw new Error(`A document can have at most ${MAX_DOCUMENT_PAGES} photos.`);
+    }
     const now = Date.now();
     const documentId = await ctx.db.insert("documents", {
       title: args.title,
       description: args.description,
       type: args.type,
       fileStorageId: args.fileStorageId,
+      imageStorageIds: args.imageStorageIds?.length ? args.imageStorageIds : undefined,
       uploadedBy: args.uploadedBy,
       createdAt: now,
       updatedAt: now,
@@ -96,13 +104,18 @@ export const remove = mutation({
     // Get the document to retrieve file storage ID before deletion
     const document = await ctx.db.get(args.id);
     
-    // Delete the storage file associated with the document
-    if (document?.fileStorageId) {
+    // Delete every storage file associated with the document (main file + photo pages)
+    const storageIds = new Set<string>(
+      [document?.fileStorageId, ...(document?.imageStorageIds ?? [])].filter(
+        (id): id is string => !!id
+      )
+    );
+    for (const storageId of storageIds) {
       try {
-        await ctx.storage.delete(document.fileStorageId as any);
+        await ctx.storage.delete(storageId as any);
       } catch (error) {
         // Log but don't fail if storage deletion fails (file may not exist)
-        console.log(`Failed to delete storage file ${document.fileStorageId}:`, error);
+        console.log(`Failed to delete storage file ${storageId}:`, error);
       }
     }
     

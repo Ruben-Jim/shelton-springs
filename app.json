@@ -2,7 +2,7 @@
   "expo": {
     "name": "Shelton Springs",
     "slug": "shelton-springs",
-    "version": "2.10.0",
+    "version": "2.10.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "sheltonsprings",

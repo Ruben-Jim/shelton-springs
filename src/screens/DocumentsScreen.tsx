@@ -12,9 +12,7 @@ import {
   Animated,
   Dimensions,
   Platform,
-  Linking,
   ActivityIndicator,
-  Image,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
@@ -29,14 +27,14 @@ import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
 import { DesktopTabBarSlot, useDesktopTabBarScrollSync } from '../components/DesktopTabBarLayer';
 import MobileTabBar from '../components/MobileTabBar';
-import { useStorageUrl } from '../hooks/useStorageUrl';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
 import { ensurePhotoLibraryAccess } from '../utils/ensurePhotoLibraryAccess';
-import { getUploadReadyImage } from '../utils/imageUpload';
-import { openDocument } from '../utils/openDocument';
+import { MAX_DOCUMENT_PHOTOS, uploadBlobToStorage, uploadDocumentPhotos } from '../utils/documentUpload';
+import DocumentViewButton, { PageCountBadge } from '../components/documents/DocumentViewButton';
+import DocumentPhotoPicker from '../components/documents/DocumentPhotoPicker';
 import LoadingState from '../components/LoadingState';
 import {
   HERO_TAB_CONTAINER_STYLE,
@@ -63,7 +61,7 @@ const DocumentsScreen = () => {
     type: 'Minutes' as 'Minutes' | 'Financial',
   });
   const [selectedFile, setSelectedFile] = useState<DocumentPicker.DocumentPickerAsset | null>(null);
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [fileType, setFileType] = useState<'document' | 'image' | null>(null);
 
   // State for dynamic responsive behavior (only for web/desktop)
@@ -178,7 +176,7 @@ const DocumentsScreen = () => {
 
       if (!result.canceled && result.assets[0]) {
         setSelectedFile(result.assets[0]);
-        setSelectedImage(null);
+        setSelectedImages([]);
         setFileType('document');
       }
     } catch (error) {
@@ -193,14 +191,22 @@ const DocumentsScreen = () => {
       const allowed = await ensurePhotoLibraryAccess();
       if (!allowed) return;
 
+      const remainingSlots = MAX_DOCUMENT_PHOTOS - selectedImages.length;
+      if (remainingSlots <= 0) {
+        Alert.alert('Limit reached', `You can attach up to ${MAX_DOCUMENT_PHOTOS} photos per document.`);
+        return;
+      }
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: false,
+        allowsMultipleSelection: true,
+        orderedSelection: true,
+        selectionLimit: remainingSlots,
         quality: 1,
       });
-
-      if (!result.canceled && result.assets[0]) {
-        setSelectedImage(result.assets[0].uri);
+      if (!result.canceled && result.assets.length > 0) {
+        const newUris = result.assets.map((asset) => asset.uri);
+        setSelectedImages((prev) => [...prev, ...newUris].slice(0, MAX_DOCUMENT_PHOTOS));
         setSelectedFile(null);
         setFileType('image');
       }
@@ -217,7 +223,7 @@ const DocumentsScreen = () => {
       return;
     }
 
-    if (!selectedFile && !selectedImage) {
+    if (!selectedFile && !selectedImages.length) {
       Alert.alert('Error', 'Please select a document or photo.');
       return;
     }
@@ -231,48 +237,26 @@ const DocumentsScreen = () => {
       setUploading(true);
 
       // Upload file to Convex storage
-      const uploadUrl = await generateUploadUrl();
-      let blob: Blob;
-      let mimeType: string;
-
+      let storageIds: string[];
       if (selectedFile) {
-        // Handle document upload
         const response = await fetch(selectedFile.uri);
-        blob = await response.blob();
-        mimeType = blob.type || selectedFile.mimeType || 'application/pdf';
-        
-        // Check file size limit (10MB for documents)
+        const blob = await response.blob();
         const sizeMB = blob.size / (1024 * 1024);
-        if (sizeMB > 10) {
-          throw new Error('Document too large. Maximum 10MB allowed.');
-        }
-      } else if (selectedImage) {
-        // Handle image upload with compression
-        const { blob: optimizedBlob, mimeType: optimizedMimeType } = await getUploadReadyImage(selectedImage);
-        blob = optimizedBlob;
-        mimeType = optimizedMimeType;
+        if (sizeMB > 10) throw new Error('Document too large. Maximum 10MB allowed.');
+        const mimeType = blob.type || selectedFile.mimeType || 'application/pdf';
+        storageIds = [await uploadBlobToStorage(generateUploadUrl, blob, mimeType)];
       } else {
-        throw new Error('No file selected');
+        // Photos keep their picked order: page 1, 2, ...
+        storageIds = await uploadDocumentPhotos(generateUploadUrl, selectedImages);
       }
-      
-      const uploadResponse = await fetch(uploadUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': mimeType },
-        body: blob,
-      });
-
-      if (!uploadResponse.ok) {
-        throw new Error('Upload failed');
-      }
-
-      const { storageId } = await uploadResponse.json();
 
       // Create document record (notification with push sent by Convex)
       await createDocument({
         title: documentForm.title.trim(),
         description: documentForm.description.trim() || undefined,
         type: documentForm.type,
-        fileStorageId: storageId,
+        fileStorageId: storageIds[0],
+        imageStorageIds: selectedImages.length > 1 ? storageIds : undefined,
         uploadedBy: `${user.firstName} ${user.lastName}`,
       });
 
@@ -285,7 +269,7 @@ const DocumentsScreen = () => {
         type: 'Minutes',
       });
       setSelectedFile(null);
-      setSelectedImage(null);
+      setSelectedImages([]);
       setFileType(null);
       
       animateModalOut(() => {
@@ -337,35 +321,6 @@ const DocumentsScreen = () => {
   };
 
 
-  // Helper component to get document URL
-  const DocumentViewer = ({ storageId }: { storageId: string }) => {
-    // Use cached storage URL hook to reduce API calls
-    const fileUrl = useStorageUrl(storageId);
-
-    if (fileUrl === undefined) {
-      return (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="small" color="#2563eb" />
-        </View>
-      );
-    }
-
-    return (
-      <TouchableOpacity
-        style={styles.viewButton}
-        onPress={() => {
-          if (fileUrl) {
-            openDocument(fileUrl);
-          } else {
-            Alert.alert('Error', 'Document URL not available.');
-          }
-        }}
-      >
-        <Ionicons name="eye" size={16} color="#2563eb" />
-        <Text style={styles.viewButtonText}>View</Text>
-      </TouchableOpacity>
-    );
-  };
 
   const formatDate = (timestamp: number) => {
     return new Date(timestamp).toLocaleDateString('en-US', {
@@ -523,11 +478,12 @@ const DocumentsScreen = () => {
                           {document.description}
                         </Text>
                       )}
+                  <PageCountBadge document={document} />
                     </View>
                   </View>
                   
                   <View style={styles.documentActions}>
-                    <DocumentViewer storageId={document.fileStorageId} />
+                    <DocumentViewButton document={document} />
                     {isBoardMember && (
                       <TouchableOpacity
                         style={styles.deleteButton}
@@ -670,24 +626,16 @@ const DocumentsScreen = () => {
                       </TouchableOpacity>
                     </View>
                   )}
-                  {selectedImage && (
-                    <View style={styles.selectedFileContainer}>
-                      <Ionicons name="checkmark-circle" size={20} color="#10b981" />
-                      <Text style={styles.selectedFileText} numberOfLines={1}>
-                        Photo selected
-                      </Text>
-                      <TouchableOpacity onPress={() => {
-                        setSelectedImage(null);
-                        setFileType(null);
-                      }}>
-                        <Ionicons name="close-circle" size={20} color="#ef4444" />
-                      </TouchableOpacity>
-                      <Image
-                        source={{ uri: selectedImage }}
-                        style={styles.selectedImagePreview}
-                      />
-                    </View>
-                  )}
+                  <DocumentPhotoPicker
+                  uris={selectedImages}
+                  max={MAX_DOCUMENT_PHOTOS}
+                  onAdd={handlePickImage}
+                  onRemove={(index) => {
+                    const next = selectedImages.filter((_, i) => i !== index);
+                    setSelectedImages(next);
+                    if (!next.length) setFileType(null);
+                  }}
+                />
                 </View>
               </ScrollView>
 
@@ -697,6 +645,7 @@ const DocumentsScreen = () => {
                   onPress={() => animateModalOut(() => {
                     setShowUploadModal(false);
                     setSelectedFile(null);
+                    setSelectedImages([]);
                     setDocumentForm({ title: '', description: '', type: 'Minutes' });
                   })}
                 >
