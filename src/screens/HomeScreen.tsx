@@ -30,6 +30,8 @@ import DeveloperIndicator from '../components/DeveloperIndicator';
 import TestUserIndicator from '../components/TestUserIndicator';
 import TestUserReadOnlyBanner from '../components/TestUserReadOnlyBanner';
 import { DesktopTabBarSlot, useDesktopTabBarScrollSync } from '../components/DesktopTabBarLayer';
+import { useWindowWidth } from '../hooks/useWindowWidth';
+import { DESKTOP_CONTENT_MAX_WIDTH } from '../constants/hoaTheme';
 import MobileTabBar from '../components/MobileTabBar';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
@@ -47,9 +49,12 @@ import {
   HERO_TAB_CONTAINER_STYLE,
   HERO_TAB_SAFE_AREA_EDGES,
   HERO_TAB_SAFE_AREA_STYLE,
-  HERO_HEADER_IMAGE,
+  getHeroImage,
   useHeroHeaderLayout,
 } from '../hooks/useHeroHeaderPadding';
+import { switchMainTab } from '../navigation/mainTabs';
+import Reanimated from 'react-native-reanimated';
+import TabEntrance, { useHeroHeightStyle, useTabEntranceStyle } from '../components/motion/TabEntrance';
 
 const RAINBOW_COLORS = [
   '#ef4444', // Red
@@ -92,6 +97,9 @@ const HomeScreen = () => {
   const { setShowOverlay } = useMessaging();
   const isBoardMember = user?.isBoardMember && user?.isActive;
   const heroHeaderLayout = useHeroHeaderLayout();
+  // Header frame morphs from the previous tab's height; header text cross-dissolves in
+  const heroHeightStyle = useHeroHeightStyle(heroHeaderLayout.height);
+  const heroTextStyle = useTabEntranceStyle(0, 6);
   const isDev = user?.isDev ?? false;
   const isTestUser = user?.isTestUser === true;
   const isHomeowner = Boolean(user?.isResident && !user?.isRenter);
@@ -134,13 +142,15 @@ const HomeScreen = () => {
   const { alertState, showAlert, hideAlert } = useCustomAlert();
   
   // State for dynamic responsive behavior (only for web/desktop)
-  const [screenWidth, setScreenWidth] = useState(Dimensions.get('window').width);
+  // Shared, frame-throttled width; paused while this screen sits under another one
+  const screenWidth = useWindowWidth(isFocused);
   
   // Dynamic responsive check - show mobile nav when screen is too narrow for desktop nav
   // On mobile, always show mobile nav regardless of screen size
   const isMobileDevice = Platform.OS === 'ios' || Platform.OS === 'android';
   const showMobileNav = isMobileDevice || screenWidth < 1024; // Always mobile on mobile devices, responsive on web
   const showDesktopNav = !isMobileDevice && screenWidth >= 1024; // Only desktop nav on web when wide enough
+  const heroImage = getHeroImage(screenWidth);
 
   // Animation values
   const fadeAnim = useRef(new Animated.Value(1)).current; // Start at 1 to avoid white flash
@@ -170,40 +180,22 @@ const HomeScreen = () => {
 
   // Animation functions
 
+  // Same soft spring and short rise as the other tabs' entrance (see motion/TabEntrance)
   const animateStaggeredContent = () => {
-    Animated.stagger(200, [
-      Animated.timing(quickActionsAnim, {
+    const spring = (value: Animated.Value) =>
+      Animated.spring(value, {
         toValue: 1,
-        duration: 500,
+        stiffness: 160,
+        damping: 18,
+        mass: 1,
         useNativeDriver: Platform.OS !== 'web',
-      }),
-      Animated.timing(postsAnim, {
-        toValue: 1,
-        duration: 500,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-      Animated.timing(officeAnim, {
-        toValue: 1,
-        duration: 500,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-    ]).start();
+      });
+    Animated.stagger(70, [spring(quickActionsAnim), spring(postsAnim), spring(officeAnim)]).start();
   };
 
   // Initialize animations on component mount
   useEffect(() => {
     animateStaggeredContent();
-  }, []);
-
-  // Listen for window size changes (only on web/desktop)
-  useEffect(() => {
-    if (Platform.OS === 'web') {
-      const subscription = Dimensions.addEventListener('change', ({ window }) => {
-        setScreenWidth(window.width);
-      });
-
-      return () => subscription?.remove();
-    }
   }, []);
 
   // Set initial cursor and cleanup on unmount (web only)
@@ -226,7 +218,9 @@ const HomeScreen = () => {
         document.body.style.cursor = 'default';
       };
     }
-  }, [screenWidth, showMobileNav, showDesktopNav]);
+    // Mount only: re-running on resize scrolled the page back to the top
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Update selectedPollVotes when userVotes data is available
   useEffect(() => {
@@ -317,7 +311,7 @@ const HomeScreen = () => {
 
   const handlePetRegistrationNotYet = () => {
     setShowPetRegistrationModal(false);
-    (navigation as any).navigate('Community', { activeSubTab: 'pets' });
+    switchMainTab(navigation, 'Community', { activeSubTab: 'pets' });
   };
 
   const handlePetRegistrationYes = async () => {
@@ -334,11 +328,11 @@ const HomeScreen = () => {
   };
 
   const navigateCommunity = (activeSubTab?: 'posts' | 'polls' | 'notifications' | 'pets' | 'damage') => {
-    (navigation as any).navigate('Community', activeSubTab ? { activeSubTab } : undefined);
+    switchMainTab(navigation, 'Community', activeSubTab ? { activeSubTab } : undefined);
   };
 
   const navigateBoard = (activeSubTab?: 'board' | 'covenants' | 'documents') => {
-    (navigation as any).navigate('Board', activeSubTab ? { activeSubTab } : undefined);
+    switchMainTab(navigation, 'Board', activeSubTab ? { activeSubTab } : undefined);
   };
 
   const filteredPosts = useMemo(
@@ -389,7 +383,7 @@ const HomeScreen = () => {
         id: 'fees',
         label: 'Fees',
         icon: 'card',
-        onPress: () => navigation.navigate('Fees' as never),
+        onPress: () => switchMainTab(navigation, 'Fees'),
       });
     }
 
@@ -398,7 +392,7 @@ const HomeScreen = () => {
         id: 'admin',
         label: 'Admin',
         icon: 'settings',
-        onPress: () => navigation.navigate('Admin' as never),
+        onPress: () => switchMainTab(navigation, 'Admin'),
       });
     }
 
@@ -460,7 +454,7 @@ const HomeScreen = () => {
         label: 'Unpaid annual dues',
         icon: 'card',
         color: '#ec4899',
-        onPress: () => navigation.navigate('Fees' as never),
+        onPress: () => switchMainTab(navigation, 'Fees'),
       });
     }
 
@@ -647,8 +641,9 @@ const HomeScreen = () => {
           { width: screenWidth }
         ]}
       >
+        <Reanimated.View style={[styles.heroClip, heroHeightStyle]}>
         <ImageBackground
-          source={HERO_HEADER_IMAGE}
+          source={heroImage.source}
           style={[
             styles.header,
             {
@@ -660,7 +655,7 @@ const HomeScreen = () => {
             styles.headerImage,
             { width: screenWidth, height: heroHeaderLayout.imageHeight },
           ]}
-          resizeMode="stretch"
+          resizeMode={heroImage.resizeMode}
         >
         <View style={styles.headerOverlay} />
         <View style={styles.headerTop}>
@@ -674,17 +669,17 @@ const HomeScreen = () => {
             </TouchableOpacity>
           )}
           
-          <View style={styles.headerLeft}>
+          <Reanimated.View style={[styles.headerLeft, heroTextStyle]}>
             <Text style={styles.welcomeText}>Welcome to</Text>
             <Text style={styles.hoaName}>{hoaInfo?.name ?? 'HOA'}</Text>
             <Text style={styles.subtitle}>Your Community Connection</Text>
-          </View>
+          </Reanimated.View>
 
           {/* Spacer for non-board members to center the text */}
-          {!isBoardMember && <View style={styles.headerSpacer} />}
+          {!(isBoardMember || isDev) && <View style={styles.headerSpacer} />}
 
-          {/* Messaging Button - Board Members Only */}
-          {isBoardMember && (
+          {/* Messaging Button - Board Members and Developers */}
+          {(isBoardMember || isDev) && (
             <View style={styles.headerRight}>
               <MessagingButton onPress={() => setShowOverlay(true)} />
             </View>
@@ -692,7 +687,7 @@ const HomeScreen = () => {
         </View>
               
         {user && (
-          <View style={styles.userInfo}>
+          <Reanimated.View style={[styles.userInfo, heroTextStyle]}>
             <View style={styles.userNameContainer}>
               <Text style={styles.userName}>
                 Welcome back, {user.firstName} {user.lastName}
@@ -714,9 +709,10 @@ const HomeScreen = () => {
                       : 'Resident'}
               {isTestUser ? '' : ` • ${user.address}`}
             </Text>
-          </View>
+          </Reanimated.View>
         )}
         </ImageBackground>
+        </Reanimated.View>
       </Animated.View>
 
       {/* Custom Tab Bar - Only when screen is wide enough */}
@@ -737,7 +733,7 @@ const HomeScreen = () => {
             transform: [{
               translateY: quickActionsAnim.interpolate({
                 inputRange: [0, 1],
-                outputRange: [30, 0],
+                outputRange: [16, 0],
               }),
             }],
           },
@@ -761,7 +757,7 @@ const HomeScreen = () => {
               transform: [{
                 translateY: quickActionsAnim.interpolate({
                   inputRange: [0, 1],
-                  outputRange: [30, 0],
+                  outputRange: [16, 0],
                 }),
               }],
             },
@@ -785,7 +781,7 @@ const HomeScreen = () => {
           transform: [{
             translateY: officeAnim.interpolate({
               inputRange: [0, 1],
-              outputRange: [50, 0],
+              outputRange: [16, 0],
             })
           }]
         }
@@ -814,7 +810,7 @@ const HomeScreen = () => {
           transform: [{
             translateY: postsAnim.interpolate({
               inputRange: [0, 1],
-              outputRange: [50, 0],
+              outputRange: [16, 0],
             })
           }]
         }
@@ -889,7 +885,7 @@ const HomeScreen = () => {
             transform: [{
               translateY: postsAnim.interpolate({
                 inputRange: [0, 1],
-                outputRange: [50, 0],
+                outputRange: [16, 0],
               })
             }]
           }
@@ -912,7 +908,7 @@ const HomeScreen = () => {
                   transform: [{
                     translateY: postsAnim.interpolate({
                       inputRange: [0, 1],
-                      outputRange: [30, 0],
+                      outputRange: [16, 0],
                     })
                   }]
                 }
@@ -1031,7 +1027,7 @@ const HomeScreen = () => {
             transform: [{
               translateY: officeAnim.interpolate({
                 inputRange: [0, 1],
-                outputRange: [50, 0],
+                outputRange: [16, 0],
               })
             }]
           }
@@ -1073,7 +1069,7 @@ const HomeScreen = () => {
           transform: [{
             translateY: officeAnim.interpolate({
               inputRange: [0, 1],
-              outputRange: [50, 0],
+              outputRange: [16, 0],
             })
           }]
         }
@@ -1223,6 +1219,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f3f4f6',
   },
+  heroClip: {
+    overflow: 'hidden',
+  },
   headerContainerIOS: {
     width: Dimensions.get('window').width,
     alignSelf: 'stretch',
@@ -1364,7 +1363,7 @@ const styles = StyleSheet.create({
   },
   sectionDesktop: {
     width: '100%',
-    maxWidth: 1120,
+    maxWidth: DESKTOP_CONTENT_MAX_WIDTH,
     alignSelf: 'center',
     marginHorizontal: 0,
     marginBottom: 16,
@@ -1389,7 +1388,7 @@ const styles = StyleSheet.create({
   },
   dashboardPanelDesktop: {
     width: '100%',
-    maxWidth: 1120,
+    maxWidth: DESKTOP_CONTENT_MAX_WIDTH,
     alignSelf: 'center',
     marginHorizontal: 0,
     marginTop: 16,

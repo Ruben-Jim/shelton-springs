@@ -1,10 +1,10 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { View, Platform, Dimensions, StyleSheet } from 'react-native';
+import React, { createContext, useCallback, useContext } from 'react';
+import { View, Platform, StyleSheet } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
 import CustomTabBar from './CustomTabBar';
+import { useIsWindowAtLeast } from '../hooks/useWindowWidth';
 
 const DESKTOP_BREAKPOINT = 1024;
-const { width: initialWidth } = Dimensions.get('window');
 
 /** Routes that should show the public desktop navbar. Admin uses its own sidebar. */
 const PUBLIC_TAB_BAR_ROUTES = new Set([
@@ -31,18 +31,12 @@ export function DesktopTabBarProvider({
   activeRouteName: string;
   onNavigate: (routeName: string) => void;
 }) {
-  const [screenWidth, setScreenWidth] = useState(initialWidth);
-
-  useEffect(() => {
-    const sub = Dimensions.addEventListener('change', ({ window }) => {
-      setScreenWidth(window.width);
-    });
-    return () => sub?.remove();
-  }, []);
+  // Only re-renders the whole app tree when the breakpoint flips, not on every resize
+  const isDesktopWidth = useIsWindowAtLeast(DESKTOP_BREAKPOINT);
 
   const showPublicTabBar =
     Platform.OS === 'web' &&
-    screenWidth >= DESKTOP_BREAKPOINT &&
+    isDesktopWidth &&
     PUBLIC_TAB_BAR_ROUTES.has(activeRouteName);
 
   return (

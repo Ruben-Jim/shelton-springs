@@ -1,79 +1,76 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import DocumentViewer from './DocumentViewer';
+import { canPreviewInline, DocumentLike, getDocumentPages } from './documentPages';
 import { useStorageUrl } from '../../hooks/useStorageUrl';
 import { openDocument } from '../../utils/openDocument';
-import DocumentGalleryModal from './DocumentGalleryModal';
 
-interface DocumentLike {
-  title: string;
-  fileStorageId: string;
-  imageStorageIds?: string[];
-}
+export { getDocumentPages } from './documentPages';
 
-/** Photo pages for multi-photo documents, or an empty list for single-file documents. */
-export const getDocumentPages = (document: DocumentLike): string[] =>
-  document.imageStorageIds && document.imageStorageIds.length > 1 ? document.imageStorageIds : [];
+type DocumentViewParts = {
+  /** "N documents" pill for multi-page documents (null otherwise) */
+  pagesBadge: React.ReactNode;
+  /** View button */
+  viewButton: React.ReactNode;
+};
 
-/** "View" for a Minutes/Financial document: swipeable gallery for multi-photo docs, in-app browser otherwise. */
-const DocumentViewButton = ({ document }: { document: DocumentLike }) => {
+const openUrl = (url: string | undefined) => {
+  if (!url) {
+    Alert.alert('Please wait', 'Loading document…');
+    return;
+  }
+  openDocument(url).catch(() => Alert.alert('Error', 'Unable to open this document. Please try again.'));
+};
+
+/**
+ * View behavior for a Minutes/Financial document card, as render-prop parts.
+ * - Single page on phones (or one web can't show inline): View opens the in-app browser.
+ * - Multi-page: View opens the viewer on page 1 (in-app-browser-style page sheet on phones,
+ *   page rail on desktop), where you swipe or page through the rest.
+ */
+export function DocumentView({
+  document,
+  children,
+}: {
+  document: DocumentLike;
+  children: (parts: DocumentViewParts) => React.ReactNode;
+}) {
   const pages = getDocumentPages(document);
-  const fileUrl = useStorageUrl(pages.length ? null : document.fileStorageId);
-  const [galleryOpen, setGalleryOpen] = useState(false);
+  const multiPage = pages.length > 1;
+  const opensDirectly = !multiPage && (Platform.OS !== 'web' || !canPreviewInline(pages[0]));
+  const directUrl = useStorageUrl(opensDirectly ? pages[0].storageId : null);
+  const [viewerOpen, setViewerOpen] = useState(false);
 
-  if (pages.length) {
-    return (
-      <>
-        <TouchableOpacity style={styles.viewButton} onPress={() => setGalleryOpen(true)}>
-          <Ionicons name="images" size={16} color="#2563eb" />
-          <Text style={styles.viewButtonText}>View</Text>
-        </TouchableOpacity>
-        <DocumentGalleryModal
-          visible={galleryOpen}
-          title={document.title}
-          storageIds={pages}
-          onClose={() => setGalleryOpen(false)}
-        />
-      </>
-    );
-  }
+  const handleView = () => {
+    if (opensDirectly) openUrl(directUrl);
+    else setViewerOpen(true);
+  };
 
-  if (fileUrl === undefined) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="small" color="#2563eb" />
-      </View>
-    );
-  }
-
-  return (
-    <TouchableOpacity
-      style={styles.viewButton}
-      onPress={() => {
-        if (fileUrl) {
-          openDocument(fileUrl);
-        } else {
-          Alert.alert('Error', 'Document URL not available.');
-        }
-      }}
-    >
-      <Ionicons name="eye" size={16} color="#2563eb" />
-      <Text style={styles.viewButtonText}>View</Text>
-    </TouchableOpacity>
+  const viewButton = (
+    <>
+      <TouchableOpacity style={styles.viewButton} onPress={handleView}>
+        <Ionicons name="eye" size={16} color="#2563eb" />
+        <Text style={styles.viewButtonText}>View</Text>
+      </TouchableOpacity>
+      <DocumentViewer
+        visible={viewerOpen}
+        title={document.title}
+        pages={pages}
+        onClose={() => setViewerOpen(false)}
+      />
+    </>
   );
-};
 
-/** Small "2 pages" pill shown on multi-photo document cards. */
-export const PageCountBadge = ({ document }: { document: DocumentLike }) => {
-  const count = getDocumentPages(document).length;
-  if (!count) return null;
-  return (
+  const pagesBadge = multiPage ? (
     <View style={styles.badge}>
-      <Ionicons name="images-outline" size={12} color="#047857" />
-      <Text style={styles.badgeText}>{count} pages</Text>
+      <Ionicons name="documents-outline" size={12} color="#047857" />
+      <Text style={styles.badgeText}>{pages.length} documents</Text>
     </View>
-  );
-};
+  ) : null;
+
+  return <>{children({ pagesBadge, viewButton })}</>;
+}
 
 const styles = StyleSheet.create({
   viewButton: {
@@ -89,10 +86,6 @@ const styles = StyleSheet.create({
     color: '#2563eb',
     fontSize: 14,
     fontWeight: '600',
-  },
-  loadingContainer: {
-    padding: 8,
-    alignItems: 'center',
   },
   badge: {
     flexDirection: 'row',
@@ -111,5 +104,3 @@ const styles = StyleSheet.create({
     color: '#047857',
   },
 });
-
-export default DocumentViewButton;

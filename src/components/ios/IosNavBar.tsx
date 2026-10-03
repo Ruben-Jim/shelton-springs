@@ -10,6 +10,7 @@ type IosNavBarProps = {
   confirmLabel?: string;
   confirmDisabled?: boolean;
   loading?: boolean;
+  loadingLabel?: string;
 };
 
 export default function IosNavBar({
@@ -20,6 +21,7 @@ export default function IosNavBar({
   confirmLabel = 'Send',
   confirmDisabled = false,
   loading = false,
+  loadingLabel = 'Sending…',
 }: IosNavBarProps) {
   return (
     <View style={styles.header}>
@@ -39,7 +41,7 @@ export default function IosNavBar({
               (confirmDisabled || loading) && styles.confirmTextDisabled,
             ]}
           >
-            {loading ? 'Sending…' : confirmLabel}
+            {loading ? loadingLabel : confirmLabel}
           </Text>
         </TouchableOpacity>
       ) : (

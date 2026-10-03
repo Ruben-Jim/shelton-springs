@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Dimensions, Platform } from 'react-native';
+import { Platform } from 'react-native';
+import { useWindowWidth } from './useWindowWidth';
 
 const DESKTOP_BREAKPOINT = 1024;
 const TABLET_BREAKPOINT = 640;
@@ -15,14 +15,7 @@ function getColumnCount(screenWidth: number, useSidebar: boolean) {
 }
 
 export function useAdminLayout() {
-  const [screenWidth, setScreenWidth] = useState(Dimensions.get('window').width);
-
-  useEffect(() => {
-    const subscription = Dimensions.addEventListener('change', ({ window }) => {
-      setScreenWidth(window.width);
-    });
-    return () => subscription?.remove();
-  }, []);
+  const screenWidth = useWindowWidth();
 
   const isMobileDevice = Platform.OS === 'ios' || Platform.OS === 'android';
   const isDesktop = !isMobileDevice && screenWidth >= DESKTOP_BREAKPOINT;

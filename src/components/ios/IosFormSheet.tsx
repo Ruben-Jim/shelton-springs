@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Modal,
@@ -10,10 +10,12 @@ import {
 } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
+  Easing,
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
+  withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { IOS_FORM_THEME as theme } from './iosFormTheme';
@@ -28,11 +30,17 @@ type IosFormSheetProps = {
   minHeightPercent?: number;
   /** Lift sheet content when the software keyboard is open (native mobile). */
   keyboardAware?: boolean;
+  /** When false, backdrop taps, drag-down and Android back don't close the sheet (e.g. while saving). */
+  dismissEnabled?: boolean;
 };
 
-const OPEN_SPRING = { damping: 22, stiffness: 240 };
-const SETTLE_SPRING = { damping: 24, stiffness: 280 };
-const DISMISS_SPRING = { damping: 26, stiffness: 320 };
+// Present/dismiss slide the sheet (translateY) with eased timing so it never bounces past the screen edge;
+// height is only used for drag-resizing between min and max.
+const PRESENT_TIMING = { duration: 320, easing: Easing.out(Easing.cubic) };
+const DISMISS_TIMING = { duration: 240, easing: Easing.in(Easing.cubic) };
+const SETTLE_SPRING = { damping: 24, stiffness: 280, overshootClamping: true };
+const DRAG_DISMISS_DISTANCE = 110;
+const DRAG_DISMISS_VELOCITY = 850;
 
 function SheetBackdrop() {
   if (canUseBlurView) {
@@ -50,6 +58,7 @@ export default function IosFormSheet({
   defaultHeightPercent = 0.9,
   minHeightPercent = 0.28,
   keyboardAware = true,
+  dismissEnabled = true,
 }: IosFormSheetProps) {
   const insets = useSafeAreaInsets();
   const { height: screenHeight } = useWindowDimensions();
@@ -85,23 +94,50 @@ export default function IosFormSheet({
       maxHeight,
       Math.max(minHeight, screenHeight * defaultHeightPercent)
     );
-    const dismissHeight = Math.max(100, screenHeight * 0.16);
-    return { maxHeight, minHeight, defaultHeight, dismissHeight };
+    return { maxHeight, minHeight, defaultHeight };
   }, [screenHeight, maxHeightPercent, defaultHeightPercent, minHeightPercent]);
 
   const sheetHeight = useSharedValue(bounds.defaultHeight);
   const dragStartHeight = useSharedValue(bounds.defaultHeight);
+  // 0 = fully presented; positive = pushed down off screen
+  const translateY = useSharedValue(screenHeight);
+
+  // Keep the Modal mounted while the slide-out animation runs
+  const [mounted, setMounted] = useState(visible);
+  // Set once a drag/backdrop dismissal has already slid the sheet off screen
+  const dismissedRef = useRef(false);
+
+  const unmount = () => {
+    setMounted(false);
+    setKeyboardInset(0);
+  };
+
+  const finishDismiss = () => {
+    dismissedRef.current = true;
+    onClose();
+  };
 
   useEffect(() => {
     if (visible) {
-      sheetHeight.value = withSpring(bounds.defaultHeight, OPEN_SPRING);
+      dismissedRef.current = false;
+      setMounted(true);
+      sheetHeight.value = bounds.defaultHeight;
       dragStartHeight.value = bounds.defaultHeight;
+      translateY.value = bounds.defaultHeight + 40;
+      translateY.value = withTiming(0, PRESENT_TIMING);
       return;
     }
-    sheetHeight.value = bounds.defaultHeight;
-    dragStartHeight.value = bounds.defaultHeight;
-    setKeyboardInset(0);
-  }, [visible, bounds.defaultHeight, dragStartHeight, sheetHeight]);
+    if (!mounted) return;
+    if (dismissedRef.current) {
+      unmount();
+      return;
+    }
+    // Closed by the parent (Cancel, after submit): slide out, then unmount
+    translateY.value = withTiming(sheetHeight.value + 40, DISMISS_TIMING, (finished) => {
+      if (finished) runOnJS(unmount)();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
 
   useEffect(() => {
     if (!keyboardAware || keyboardInset <= 0 || !visible) return;
@@ -110,10 +146,9 @@ export default function IosFormSheet({
   }, [keyboardAware, keyboardInset, visible, bounds.maxHeight, dragStartHeight, sheetHeight]);
 
   const dismissSheet = () => {
-    sheetHeight.value = withSpring(0, DISMISS_SPRING, (finished) => {
-      if (finished) {
-        runOnJS(onClose)();
-      }
+    if (!dismissEnabled) return;
+    translateY.value = withTiming(sheetHeight.value + 40, DISMISS_TIMING, (finished) => {
+      if (finished) runOnJS(finishDismiss)();
     });
   };
 
@@ -124,52 +159,47 @@ export default function IosFormSheet({
     })
     .onUpdate((event) => {
       const next = dragStartHeight.value - event.translationY;
-      sheetHeight.value = Math.min(bounds.maxHeight + 12, Math.max(0, next));
+      if (next >= bounds.minHeight) {
+        // Resize between min and max
+        sheetHeight.value = Math.min(bounds.maxHeight + 12, next);
+        translateY.value = 0;
+      } else {
+        // Below min height the sheet slides down instead of shrinking
+        sheetHeight.value = bounds.minHeight;
+        translateY.value = bounds.minHeight - next;
+      }
     })
     .onEnd((event) => {
-      const current = sheetHeight.value;
-      const shouldDismiss =
-        current < bounds.dismissHeight || event.velocityY > 850;
-
-      if (shouldDismiss) {
-        sheetHeight.value = withSpring(0, DISMISS_SPRING, (finished) => {
-          if (finished) {
-            runOnJS(onClose)();
-          }
+      const wantsDismiss =
+        translateY.value > DRAG_DISMISS_DISTANCE || event.velocityY > DRAG_DISMISS_VELOCITY;
+      if (dismissEnabled && wantsDismiss) {
+        translateY.value = withTiming(sheetHeight.value + 40, DISMISS_TIMING, (finished) => {
+          if (finished) runOnJS(finishDismiss)();
         });
         return;
       }
 
-      if (current < bounds.minHeight) {
-        sheetHeight.value = withSpring(bounds.minHeight, SETTLE_SPRING);
-        return;
-      }
-
-      if (current > bounds.maxHeight) {
+      translateY.value = withSpring(0, SETTLE_SPRING);
+      if (sheetHeight.value > bounds.maxHeight) {
         sheetHeight.value = withSpring(bounds.maxHeight, SETTLE_SPRING);
-        return;
       }
-
-      sheetHeight.value = withSpring(current, SETTLE_SPRING);
     });
 
   const sheetAnimatedStyle = useAnimatedStyle(() => ({
     height: sheetHeight.value,
+    transform: [{ translateY: translateY.value }],
   }));
 
   const backdropAnimatedStyle = useAnimatedStyle(() => {
-    const progress = Math.min(
-      1,
-      sheetHeight.value / Math.max(bounds.defaultHeight, 1)
-    );
+    const progress = 1 - Math.min(1, translateY.value / Math.max(sheetHeight.value, 1));
     return {
-      opacity: 0.2 + progress * 0.35,
+      opacity: 0.55 * progress,
     };
   });
 
   return (
     <Modal
-      visible={visible}
+      visible={mounted}
       transparent
       animationType="none"
       onRequestClose={dismissSheet}

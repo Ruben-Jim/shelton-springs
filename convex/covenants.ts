@@ -1,5 +1,22 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation, QueryCtx } from "./_generated/server";
+import { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
+
+/**
+ * Adds the attachment's content type so clients can tell a photo from a PDF (covenants only
+ * store fileStorageId). Extra field; older clients ignore it.
+ */
+async function withFileContentType(ctx: QueryCtx, covenants: Doc<"covenants">[]) {
+  return Promise.all(
+    covenants.map(async (covenant) => {
+      const fileId = covenant.fileStorageId
+        ? ctx.db.system.normalizeId("_storage", covenant.fileStorageId)
+        : null;
+      const file = fileId ? await ctx.db.system.get(fileId) : null;
+      return { ...covenant, fileContentType: file?.contentType ?? null };
+    })
+  );
+}
 
 export const getAll = query({
   args: {},
@@ -33,7 +50,7 @@ export const getPaginated = query({
     const covenants = allCovenants.slice(offset, offset + limit);
     
     return {
-      items: covenants,
+      items: await withFileContentType(ctx, covenants),
       total,
     };
   },

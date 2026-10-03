@@ -84,11 +84,13 @@ import TabHeroHeader from '../components/TabHeroHeader';
 import {
   HERO_BASE_HEIGHT,
   HERO_HEADER_EXTRA_PADDING,
-  HERO_HEADER_IMAGE,
+  getHeroImage,
   HERO_TAB_CONTAINER_STYLE,
   HERO_TAB_SAFE_AREA_EDGES,
   HERO_TAB_SAFE_AREA_STYLE,
 } from '../hooks/useHeroHeaderPadding';
+import { switchMainTab } from '../navigation/mainTabs';
+import TabEntrance from '../components/motion/TabEntrance';
 
 const AdminScreen = () => {
   const { user, updateUser } = useAuth();
@@ -96,7 +98,7 @@ const AdminScreen = () => {
   const navigation = useNavigation();
 
   const handleNavigateHome = () => {
-    navigation.navigate('Home' as never);
+    switchMainTab(navigation, 'Home');
   };
   
   const {
@@ -106,6 +108,7 @@ const AdminScreen = () => {
     isPhone,
     showMobileNav,
     useSidebar,
+    columns,
     columnWidthPercent,
     contentMaxWidth,
   } = useAdminLayout();
@@ -3339,11 +3342,11 @@ const AdminScreen = () => {
           icon: keyof typeof Ionicons.glyphMap;
         }[] = [
           { id: 'damage', label: 'Damage', icon: 'construct' },
+          { id: 'complaints', label: 'Complaints', icon: 'warning' },
           { id: 'posts', label: 'Posts', icon: 'chatbubbles' },
+          { id: 'comments', label: pendingCommentsCount > 0 ? `Comments (${pendingCommentsCount})` : 'Comments', icon: 'chatbox' },
           { id: 'polls', label: 'Polls', icon: 'bar-chart' },
           { id: 'pets', label: 'Pets', icon: 'paw' },
-          { id: 'complaints', label: 'Complaints', icon: 'warning' },
-          { id: 'comments', label: pendingCommentsCount > 0 ? `Comments (${pendingCommentsCount})` : 'Comments', icon: 'chatbox' },
         ];
 
         return (
@@ -4354,16 +4357,9 @@ const AdminScreen = () => {
                       totalAssessed,
                     } = addressGroup;
                     const paymentMethod = latestPayment?.paymentMethod;
-                    // Responsive breakpoints: sm (< 640px), md (640-1023px), lg (1024-1279px), xl (>= 1280px)
-                    const isSingleColumn = isMobileDevice || screenWidth < 640;
-                    const numColumns = isSingleColumn 
-                      ? 1 
-                      : screenWidth >= 1280 
-                        ? 4  // xl: 4 columns
-                        : screenWidth >= 1024 
-                          ? 3  // lg: 3 columns
-                          : 2; // md: 2 columns
-                    const itemWidth = isSingleColumn ? ('100%' as const) : (`${100 / numColumns}%` as const);
+                    // Columns from useAdminLayout, which measures the content area beside the sidebar
+                    const isSingleColumn = columns <= 1;
+                    const itemWidth = isSingleColumn ? ('100%' as const) : (`${columnWidthPercent}%` as const);
                     
                     // Create display name for multiple residents
                     // Format: "John & Jane" for 2, "John, Jane & Bob" for 3+, or one per line
@@ -4771,7 +4767,7 @@ const AdminScreen = () => {
         <TabHeroHeader
           screenWidth={screenWidth}
           showMobileNav={showMobileNav}
-          isBoardMember
+          hasBoardAccess
           onOpenMenu={() => setIsMenuOpen(true)}
           title="Admin Dashboard"
           subtitle="Manage community content and residents"
@@ -4782,7 +4778,7 @@ const AdminScreen = () => {
     return (
     <View style={[styles.headerContainerIOS, { width: screenWidth }]}>
       <ImageBackground
-        source={HERO_HEADER_IMAGE}
+        source={getHeroImage(screenWidth).source}
         style={[styles.header, styles.headerCompact]}
         imageStyle={styles.headerImageCover}
         resizeMode="cover"
@@ -4904,6 +4900,7 @@ const AdminScreen = () => {
             />
           ) : null}
 
+        <TabEntrance style={useSidebar ? styles.contentAreaDesktop : undefined}>
         <View style={[
           styles.contentArea,
           useSidebar && styles.contentAreaDesktop,
@@ -4911,6 +4908,7 @@ const AdminScreen = () => {
         ]}>
           {renderTabContent()}
         </View>
+        </TabEntrance>
 
         {/* Board Page Content Modal */}
         <Modal

@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useMessaging } from '../context/MessagingContext';
+import { useMessaging, getStaffLabel, BOARD_SENDER_NAME, DEV_SENDER_NAME } from '../context/MessagingContext';
 import { useAuth } from '../context/AuthContext';
 import { useCachedResidents } from '../context/QueryCacheContext';
 import { useQuery } from 'convex/react';
@@ -46,7 +46,8 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
   const insets = useSafeAreaInsets();
   const screenWidth = Dimensions.get('window').width;
   const isDesktop = screenWidth >= 1024;
-  const isBoardMember = user?.isBoardMember && user?.isActive;
+  const isMessagingStaff = Boolean(user?.isActive && (user?.isBoardMember || user?.isDev));
+  const staffLabel = getStaffLabel((currentConversation ?? conversations[0])?.otherParticipant);
 
   const [messageText, setMessageText] = useState('');
   const [showUserSelector, setShowUserSelector] = useState(false);
@@ -96,11 +97,11 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
 
   // Auto-open conversation for non-board members when they have messages
   useEffect(() => {
-    if (visible && !isBoardMember && conversations.length > 0 && !activeConversationId) {
+    if (visible && !isMessagingStaff && conversations.length > 0 && !activeConversationId) {
       openConversation(conversations[0]._id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, isBoardMember, conversations.length, activeConversationId]);
+  }, [visible, isMessagingStaff, conversations.length, activeConversationId]);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -263,7 +264,7 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
             {/* Header */}
             <View style={styles.header}>
               <View style={styles.headerLeft}>
-                {isBoardMember && !activeConversationId && (
+                {isMessagingStaff && !activeConversationId && (
                   <TouchableOpacity
                     style={styles.newMessageButton}
                     onPress={() => setShowUserSelector(true)}
@@ -274,7 +275,7 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                 )}
                 {activeConversationId && (
                   <>
-                    {isBoardMember && (
+                    {isMessagingStaff && (
                       <TouchableOpacity
                         style={styles.backButton}
                         onPress={() => {
@@ -285,7 +286,7 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                         <Ionicons name="arrow-back" size={24} color="#1f2937" />
                       </TouchableOpacity>
                     )}
-                    {otherParticipant && isBoardMember && (
+                    {otherParticipant && isMessagingStaff && (
                       <View style={[styles.conversationHeader, styles.conversationHeaderCentered]}>
                         <ProfileImage
                           source={
@@ -310,28 +311,28 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                         </View>
                       </View>
                     )}
-                    {(!otherParticipant || !isBoardMember) && (
-                      <View style={[styles.conversationHeader, !isBoardMember && styles.conversationHeaderCentered]}>
+                    {(!otherParticipant || !isMessagingStaff) && (
+                      <View style={[styles.conversationHeader, !isMessagingStaff && styles.conversationHeaderCentered]}>
                         <View style={styles.boardIconContainer}>
                           <Ionicons name="shield" size={20} color="#2563eb" />
                         </View>
-                        <View style={[styles.conversationHeaderInfo, !isBoardMember && styles.conversationHeaderInfoCentered]}>
+                        <View style={[styles.conversationHeaderInfo, !isMessagingStaff && styles.conversationHeaderInfoCentered]}>
                           <Text style={styles.conversationHeaderName}>
-                            Shelton Springs Board
+                            {staffLabel}
                           </Text>
                         </View>
                       </View>
                     )}
                   </>
                 )}
-                {!isBoardMember && !activeConversationId && (
+                {!isMessagingStaff && !activeConversationId && (
                   <View style={[styles.conversationHeader, styles.conversationHeaderCentered]}>
                     <View style={styles.boardIconContainer}>
                       <Ionicons name="shield" size={20} color="#2563eb" />
                     </View>
                     <View style={[styles.conversationHeaderInfo, styles.conversationHeaderInfoCentered]}>
                       <Text style={styles.conversationHeaderName}>
-                        Shelton Springs Board
+                        {staffLabel}
                       </Text>
                     </View>
                   </View>
@@ -343,7 +344,7 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
             </View>
 
             {/* User Selector (Board Members Only) */}
-            {isBoardMember && showUserSelector && (
+            {isMessagingStaff && showUserSelector && (
               <View style={styles.userSelector}>
                 <View style={styles.searchContainer}>
                   <Ionicons name="search" size={20} color="#6b7280" style={styles.searchIcon} />
@@ -382,6 +383,11 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                               <Text style={styles.badgeText}>Board</Text>
                             </View>
                           )}
+                          {resident.isDev && (
+                            <View style={styles.badge}>
+                              <Text style={styles.badgeText}>Dev</Text>
+                            </View>
+                          )}
                           {resident.isRenter && (
                             <View style={[styles.badge, styles.renterBadge]}>
                               <Text style={styles.badgeText}>Renter</Text>
@@ -401,7 +407,7 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
             )}
 
             {/* Conversation List (Board Members Only, when no active conversation) */}
-            {isBoardMember && !activeConversationId && !showUserSelector && (
+            {isMessagingStaff && !activeConversationId && !showUserSelector && (
               <ScrollView style={styles.conversationList}>
                 {conversations.length === 0 ? (
                   <View style={styles.emptyState}>
@@ -474,7 +480,8 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                     </View>
                   ) : (
                     activeConversationMessages.map((message) => {
-                      const isFromBoard = message.senderName === 'Shelton Springs Board';
+                      const isFromBoard =
+                        message.senderName === BOARD_SENDER_NAME || message.senderName === DEV_SENDER_NAME;
                       const isCurrentUser = message.senderId === user?._id;
 
                       return (
@@ -485,7 +492,7 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                             isCurrentUser ? styles.messageBubbleRight : styles.messageBubbleLeft,
                           ]}
                         >
-                          {!isCurrentUser && isBoardMember && (
+                          {!isCurrentUser && isMessagingStaff && (
                             <ProfileImage
                               source={
                                 isFromBoard
@@ -497,7 +504,7 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                               size={32}
                               initials={
                                 isFromBoard
-                                  ? 'BS'
+                                  ? (message.senderName === DEV_SENDER_NAME ? 'SD' : 'BS')
                                   : currentConversation?.otherParticipant?.name
                                       .split(' ')
                                       .map((n) => n[0])
@@ -507,7 +514,7 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                               style={styles.messageAvatar}
                             />
                           )}
-                          {isCurrentUser && isBoardMember && (
+                          {isCurrentUser && isMessagingStaff && (
                             <ProfileImage
                               source={
                                 user?.profileImage
@@ -529,7 +536,7 @@ const MessagingOverlay: React.FC<MessagingOverlayProps> = ({ visible, onClose })
                           >
                             {!isCurrentUser && (
                               <Text style={styles.messageSender}>
-                                {isFromBoard ? 'Shelton Springs Board' : message.senderName}
+                                {message.senderName}
                               </Text>
                             )}
                             {isFromBoard && !isCurrentUser && (

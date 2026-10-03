@@ -20,11 +20,13 @@ import { useAuth } from '../context/AuthContext';
 import { useCachedHoaInfo } from '../context/QueryCacheContext';
 import LoadingState from '../components/LoadingState';
 import { openDocument } from '../utils/openDocument';
-import { useStorageUrl } from '../hooks/useStorageUrl';
+import FileViewerTrigger from '../components/documents/FileViewerTrigger';
 import { Linking, ActivityIndicator } from 'react-native';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
 import { DesktopTabBarSlot, useDesktopTabBarScrollSync } from '../components/DesktopTabBarLayer';
+import { useWindowWidth } from '../hooks/useWindowWidth';
+import DesktopContentWidth from '../components/DesktopContentWidth';
 import MobileTabBar from '../components/MobileTabBar';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
@@ -35,43 +37,47 @@ import {
 } from '../hooks/useHeroHeaderPadding';
 import TabHeroHeader from '../components/TabHeroHeader';
 
+/** Opens a covenant's attachment in the shared document viewer (legacy external links open the in-app browser). */
 function CovenantAttachmentButton({
   fileStorageId,
+  fileContentType,
   pdfUrl,
+  title,
 }: {
   fileStorageId?: string;
+  fileContentType?: string | null;
   pdfUrl?: string;
+  title: string;
 }) {
-  const resolvedUrl = useStorageUrl(fileStorageId || null);
+  const label = (
+    <>
+      <Ionicons name="document" size={16} color="#2563eb" />
+      <Text style={styles.pdfButtonText}>View attachment</Text>
+    </>
+  );
 
-  if (!fileStorageId && !pdfUrl) {
-    return null;
+  if (fileStorageId) {
+    return (
+      <FileViewerTrigger storageId={fileStorageId} contentType={fileContentType} title={title}>
+        {(open) => (
+          <TouchableOpacity style={styles.pdfButton} onPress={open}>
+            {label}
+          </TouchableOpacity>
+        )}
+      </FileViewerTrigger>
+    );
   }
 
-  const open = () => {
-    if (fileStorageId) {
-      if (resolvedUrl) {
-        openDocument(resolvedUrl);
-      } else {
-        Alert.alert('Please wait', 'Loading document link…');
-      }
-    } else if (pdfUrl) {
-      openDocument(pdfUrl);
-    }
-  };
-
-  const loading = !!fileStorageId && resolvedUrl === undefined;
-
+  if (!pdfUrl) return null;
+  // Legacy external link: no stored file for the viewer, so use the in-app browser
   return (
-    <TouchableOpacity style={styles.pdfButton} onPress={open} disabled={loading}>
-      {loading ? (
-        <ActivityIndicator size="small" color="#2563eb" />
-      ) : (
-        <>
-          <Ionicons name="document" size={16} color="#2563eb" />
-          <Text style={styles.pdfButtonText}>View attachment</Text>
-        </>
-      )}
+    <TouchableOpacity
+      style={styles.pdfButton}
+      onPress={() =>
+        openDocument(pdfUrl).catch(() => Alert.alert('Error', 'Unable to open this attachment. Please try again.'))
+      }
+    >
+      {label}
     </TouchableOpacity>
   );
 }
@@ -80,15 +86,15 @@ const CovenantsScreen = () => {
   const { user } = useAuth();
   const isFocused = useIsFocused();
   const { setShowOverlay } = useMessaging();
-  const isBoardMember = user?.isBoardMember && user?.isActive;
+  const hasBoardAccess = Boolean(user?.isActive && (user?.isBoardMember || user?.isDev));
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const hoaInfo = useCachedHoaInfo();
-  const ccrsPdfUrl = useStorageUrl(hoaInfo?.ccrsPdfStorageId || null);
 
   // State for dynamic responsive behavior (only for web/desktop)
-  const [screenWidth, setScreenWidth] = useState(Dimensions.get('window').width);
+  // Shared, frame-throttled width; paused while this screen sits under another one
+  const screenWidth = useWindowWidth(isFocused);
   
   // Dynamic responsive check - show mobile nav when screen is too narrow for desktop nav
   // On mobile, always show mobile nav regardless of screen size
@@ -99,17 +105,6 @@ const CovenantsScreen = () => {
   // ScrollView ref for better control
   const scrollViewRef = useRef<ScrollView>(null);
   const syncDesktopTabBar = useDesktopTabBarScrollSync();
-
-  // Listen for window size changes (only on web/desktop)
-  useEffect(() => {
-    if (Platform.OS === 'web') {
-      const subscription = Dimensions.addEventListener('change', ({ window }) => {
-        setScreenWidth(window.width);
-      });
-
-      return () => subscription?.remove();
-    }
-  }, []);
 
   // Set initial cursor and cleanup on unmount (web only)
   useEffect(() => {
@@ -129,7 +124,9 @@ const CovenantsScreen = () => {
         document.body.style.cursor = 'default';
       };
     }
-  }, [screenWidth, showMobileNav, showDesktopNav]);
+    // Mount only: re-running on resize scrolled the page back to the top
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const categories = ['Architecture', 'Landscaping', 'Minutes', 'Caveats', 'General'];
   const [covenantsLimit, setCovenantsLimit] = useState(50);
@@ -235,7 +232,7 @@ const CovenantsScreen = () => {
         <TabHeroHeader
           screenWidth={screenWidth}
           showMobileNav={showMobileNav}
-          isBoardMember={!!isBoardMember}
+          hasBoardAccess={hasBoardAccess}
           onOpenMenu={() => setIsMenuOpen(true)}
           onOpenMessaging={() => setShowOverlay(true)}
           title="Covenants & Rules"
@@ -246,24 +243,24 @@ const CovenantsScreen = () => {
         {showDesktopNav && (
           <DesktopTabBarSlot />
         )}
+
+      <DesktopContentWidth enabled={showDesktopNav}>
       
       {/* CC&Rs PDF View Button */}
-      {ccrsPdfUrl && (
+      {hoaInfo?.ccrsPdfStorageId && (
         <View style={styles.ccrsContainer}>
-          <TouchableOpacity
-            style={styles.ccrsButton}
-            onPress={() => {
-              if (ccrsPdfUrl) {
-                openDocument(ccrsPdfUrl).catch((err) => {
-                  console.error('Error opening CC&Rs PDF:', err);
-                  Alert.alert('Error', 'Unable to open PDF. Please try again.');
-                });
-              }
-            }}
+          <FileViewerTrigger
+            storageId={hoaInfo.ccrsPdfStorageId}
+            contentType="application/pdf"
+            title="Shelton Springs CC&Rs"
           >
-            <Ionicons name="document-text" size={20} color="#2563eb" />
-            <Text style={styles.ccrsButtonText}>View CC&Rs PDF</Text>
-          </TouchableOpacity>
+            {(open) => (
+              <TouchableOpacity style={styles.ccrsButton} onPress={open}>
+                <Ionicons name="document-text" size={20} color="#2563eb" />
+                <Text style={styles.ccrsButtonText}>View CC&Rs PDF</Text>
+              </TouchableOpacity>
+            )}
+          </FileViewerTrigger>
         </View>
       )}
 
@@ -379,7 +376,9 @@ const CovenantsScreen = () => {
                 </Text>
                 <CovenantAttachmentButton
                   fileStorageId={covenant.fileStorageId}
+                  fileContentType={covenant.fileContentType}
                   pdfUrl={covenant.pdfUrl}
+                  title={covenant.title}
                 />
               </View>
             </View>
@@ -404,6 +403,7 @@ const CovenantsScreen = () => {
           please contact the architectural committee or HOA board.
         </Text>
       </View>
+      </DesktopContentWidth>
       </ScrollView>
       </View>
     </SafeAreaView>

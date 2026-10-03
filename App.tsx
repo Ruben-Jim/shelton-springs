@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect, useState, useRef, useCallback } from 'react';
 import DynamicStatusBar from './src/components/DynamicStatusBar';
-import { StyleSheet, Text, View, Platform, ScrollView } from 'react-native';
+import { StyleSheet, Text, View, Platform, ScrollView, BackHandler } from 'react-native';
 import {
   NavigationContainer,
   createNavigationContainerRef,
@@ -17,6 +17,7 @@ import { QueryCacheProvider } from './src/context/QueryCacheContext';
 import AuthNavigator from './src/navigation/AuthNavigator';
 import { defaultStackScreenOptions } from './src/navigation/screenTransitionOptions';
 import { getActiveRouteName } from './src/navigation/getActiveRouteName';
+import { mainTabScreenOptions, isMainTabRoute, switchMainTab } from './src/navigation/mainTabs';
 import enhancedUnifiedNotificationManager from './src/services/EnhancedUnifiedNotificationManager';
 import MessagingOverlay from './src/components/MessagingOverlay';
 import MinimizedMessageBubble from './src/components/MinimizedMessageBubble';
@@ -55,6 +56,20 @@ const MainAppContent = ({ activeRouteName, onTabNavigate }: MainAppContentProps)
   useUserNotifications();
   useNotificationNavigation(isAuthenticated);
 
+  // Main tabs don't keep back history, so Android back on any other tab returns to Home
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !isAuthenticated) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (!navigationRef.isReady()) return false;
+      const state = navigationRef.getRootState();
+      const onlyRoute = state?.routes.length === 1 ? state.routes[0].name : null;
+      if (!onlyRoute || onlyRoute === 'Home') return false;
+      switchMainTab(navigationRef as any, 'Home');
+      return true;
+    });
+    return () => sub.remove();
+  }, [isAuthenticated]);
+
   if (isLoading) {
     if (Platform.OS === 'web') {
       return (
@@ -87,17 +102,18 @@ const MainAppContent = ({ activeRouteName, onTabNavigate }: MainAppContentProps)
         detachInactiveScreens={false}
         screenOptions={defaultStackScreenOptions}
       >
-        <Stack.Screen name="Home" component={HomeScreen} />
-        <Stack.Screen name="Board" component={BoardScreen} />
+        <Stack.Screen name="Home" component={HomeScreen} options={mainTabScreenOptions} />
+        <Stack.Screen name="Board" component={BoardScreen} options={mainTabScreenOptions} />
         <Stack.Screen name="Covenants" component={CovenantsScreen} />
-        <Stack.Screen name="Community" component={CommunityScreen} />
+        <Stack.Screen name="Community" component={CommunityScreen} options={mainTabScreenOptions} />
         <Stack.Screen name="Documents" component={DocumentsScreen} />
-        <Stack.Screen name="Fees" component={FeesScreen} />
+        <Stack.Screen name="Fees" component={FeesScreen} options={mainTabScreenOptions} />
         <Stack.Screen name="ResidentNotice" component={ResidentNoticeScreen} />
         {(isBoardMember || isDev) && (
-          <Stack.Screen 
-            name="Admin" 
+          <Stack.Screen
+            name="Admin"
             component={AdminScreen}
+            options={mainTabScreenOptions}
           />
         )}
       </Stack.Navigator>
@@ -301,8 +317,8 @@ export default function App() {
   }, []);
 
   const handleTabNavigate = useCallback((routeName: string) => {
-    if (navigationRef.isReady()) {
-      navigationRef.navigate(routeName as never);
+    if (navigationRef.isReady() && isMainTabRoute(routeName)) {
+      switchMainTab(navigationRef as any, routeName);
     }
   }, []);
 

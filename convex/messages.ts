@@ -73,6 +73,7 @@ export const getUserConversations = query({
               email: otherParticipant.email,
               profileImage,
               isBoardMember: otherParticipant.isBoardMember,
+              isDev: otherParticipant.isDev ?? false,
             }
           : null,
       };

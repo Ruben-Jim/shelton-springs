@@ -5,17 +5,11 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Alert,
-  Modal,
-  TextInput,
   ImageBackground,
   Animated,
   Dimensions,
   Platform,
-  ActivityIndicator,
 } from 'react-native';
-import * as DocumentPicker from 'expo-document-picker';
-import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
@@ -26,15 +20,15 @@ import { useAuth } from '../context/AuthContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
 import { DesktopTabBarSlot, useDesktopTabBarScrollSync } from '../components/DesktopTabBarLayer';
+import { useWindowWidth } from '../hooks/useWindowWidth';
+import DesktopContentWidth from '../components/DesktopContentWidth';
 import MobileTabBar from '../components/MobileTabBar';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
 import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
-import { ensurePhotoLibraryAccess } from '../utils/ensurePhotoLibraryAccess';
-import { MAX_DOCUMENT_PHOTOS, uploadBlobToStorage, uploadDocumentPhotos } from '../utils/documentUpload';
-import DocumentViewButton, { PageCountBadge } from '../components/documents/DocumentViewButton';
-import DocumentPhotoPicker from '../components/documents/DocumentPhotoPicker';
+import { DocumentView } from '../components/documents/DocumentViewButton';
+import UploadDocumentSheet from '../components/documents/UploadDocumentSheet';
 import LoadingState from '../components/LoadingState';
 import {
   HERO_TAB_CONTAINER_STYLE,
@@ -47,25 +41,17 @@ const DocumentsScreen = () => {
   const { user } = useAuth();
   const isFocused = useIsFocused();
   const { setShowOverlay } = useMessaging();
-  const isBoardMember = user?.isBoardMember && user?.isActive;
+  const hasBoardAccess = Boolean(user?.isActive && (user?.isBoardMember || user?.isDev));
   const { alertState, showAlert, hideAlert } = useCustomAlert();
   const [activeType, setActiveType] = useState<'Minutes' | 'Financial'>('Minutes');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
   const [documentToDelete, setDocumentToDelete] = useState<any>(null);
-  const [documentForm, setDocumentForm] = useState({
-    title: '',
-    description: '',
-    type: 'Minutes' as 'Minutes' | 'Financial',
-  });
-  const [selectedFile, setSelectedFile] = useState<DocumentPicker.DocumentPickerAsset | null>(null);
-  const [selectedImages, setSelectedImages] = useState<string[]>([]);
-  const [fileType, setFileType] = useState<'document' | 'image' | null>(null);
 
   // State for dynamic responsive behavior (only for web/desktop)
-  const [screenWidth, setScreenWidth] = useState(Dimensions.get('window').width);
+  // Shared, frame-throttled width; paused while this screen sits under another one
+  const screenWidth = useWindowWidth(isFocused);
   
   // Dynamic responsive check - show mobile nav when screen is too narrow for desktop nav
   // On mobile, always show mobile nav regardless of screen size
@@ -74,23 +60,9 @@ const DocumentsScreen = () => {
   const showDesktopNav = !isMobileDevice && screenWidth >= 1024;
 
   // Animation values
-  const uploadModalOpacity = useRef(new Animated.Value(0)).current;
-  const uploadModalTranslateY = useRef(new Animated.Value(300)).current;
-  const overlayOpacity = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const scrollViewRef = useRef<ScrollView>(null);
   const syncDesktopTabBar = useDesktopTabBarScrollSync();
-
-  // Listen for window size changes (only on web/desktop)
-  useEffect(() => {
-    if (Platform.OS === 'web') {
-      const subscription = Dimensions.addEventListener('change', ({ window }) => {
-        setScreenWidth(window.width);
-      });
-
-      return () => subscription?.remove();
-    }
-  }, []);
 
   // Set initial cursor and cleanup on unmount (web only)
   useEffect(() => {
@@ -107,51 +79,10 @@ const DocumentsScreen = () => {
         document.body.style.cursor = 'default';
       };
     }
-  }, [screenWidth, showMobileNav, showDesktopNav]);
+    // Mount only: re-running on resize scrolled the page back to the top
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Animation functions
-  const animateModalIn = () => {
-    Animated.parallel([
-      Animated.timing(overlayOpacity, {
-        toValue: 1,
-        duration: 300,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-      Animated.timing(uploadModalOpacity, {
-        toValue: 1,
-        duration: 300,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-      Animated.spring(uploadModalTranslateY, {
-        toValue: 0,
-        tension: 100,
-        friction: 8,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-    ]).start();
-  };
-
-  const animateModalOut = (callback: () => void) => {
-    Animated.parallel([
-      Animated.timing(overlayOpacity, {
-        toValue: 0,
-        duration: 250,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-      Animated.timing(uploadModalOpacity, {
-        toValue: 0,
-        duration: 250,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-      Animated.timing(uploadModalTranslateY, {
-        toValue: 300,
-        duration: 250,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-    ]).start(() => {
-      callback();
-    });
-  };
 
   // Convex queries (conditional based on screen focus)
   const [documentsLimit, setDocumentsLimit] = useState(50);
@@ -163,126 +94,7 @@ const DocumentsScreen = () => {
   const documents = allDocuments.filter((doc: any) => doc.type === activeType);
 
   // Convex mutations
-  const createDocument = useGuardedMutation(api.documents.create);
   const deleteDocument = useGuardedMutation(api.documents.remove);
-  const generateUploadUrl = useGuardedMutation(api.storage.generateUploadUrl);
-
-  const handlePickDocument = async () => {
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
-        copyToCacheDirectory: true,
-      });
-
-      if (!result.canceled && result.assets[0]) {
-        setSelectedFile(result.assets[0]);
-        setSelectedImages([]);
-        setFileType('document');
-      }
-    } catch (error) {
-    if (isTestUserReadOnlyError(error)) return;
-      console.error('Error picking document:', error);
-      Alert.alert('Error', 'Failed to pick document. Please try again.');
-    }
-  };
-
-  const handlePickImage = async () => {
-    try {
-      const allowed = await ensurePhotoLibraryAccess();
-      if (!allowed) return;
-
-      const remainingSlots = MAX_DOCUMENT_PHOTOS - selectedImages.length;
-      if (remainingSlots <= 0) {
-        Alert.alert('Limit reached', `You can attach up to ${MAX_DOCUMENT_PHOTOS} photos per document.`);
-        return;
-      }
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: false,
-        allowsMultipleSelection: true,
-        orderedSelection: true,
-        selectionLimit: remainingSlots,
-        quality: 1,
-      });
-      if (!result.canceled && result.assets.length > 0) {
-        const newUris = result.assets.map((asset) => asset.uri);
-        setSelectedImages((prev) => [...prev, ...newUris].slice(0, MAX_DOCUMENT_PHOTOS));
-        setSelectedFile(null);
-        setFileType('image');
-      }
-    } catch (error) {
-    if (isTestUserReadOnlyError(error)) return;
-      console.error('Error picking image:', error);
-      Alert.alert('Error', 'Failed to pick image. Please try again.');
-    }
-  };
-
-  const handleUploadDocument = async () => {
-    if (!documentForm.title.trim()) {
-      Alert.alert('Error', 'Please enter a document title.');
-      return;
-    }
-
-    if (!selectedFile && !selectedImages.length) {
-      Alert.alert('Error', 'Please select a document or photo.');
-      return;
-    }
-
-    if (!user) {
-      Alert.alert('Error', 'Please sign in to upload documents.');
-      return;
-    }
-
-    try {
-      setUploading(true);
-
-      // Upload file to Convex storage
-      let storageIds: string[];
-      if (selectedFile) {
-        const response = await fetch(selectedFile.uri);
-        const blob = await response.blob();
-        const sizeMB = blob.size / (1024 * 1024);
-        if (sizeMB > 10) throw new Error('Document too large. Maximum 10MB allowed.');
-        const mimeType = blob.type || selectedFile.mimeType || 'application/pdf';
-        storageIds = [await uploadBlobToStorage(generateUploadUrl, blob, mimeType)];
-      } else {
-        // Photos keep their picked order: page 1, 2, ...
-        storageIds = await uploadDocumentPhotos(generateUploadUrl, selectedImages);
-      }
-
-      // Create document record (notification with push sent by Convex)
-      await createDocument({
-        title: documentForm.title.trim(),
-        description: documentForm.description.trim() || undefined,
-        type: documentForm.type,
-        fileStorageId: storageIds[0],
-        imageStorageIds: selectedImages.length > 1 ? storageIds : undefined,
-        uploadedBy: `${user.firstName} ${user.lastName}`,
-      });
-
-      Alert.alert('Success', 'Document uploaded successfully!');
-      
-      // Reset form
-      setDocumentForm({
-        title: '',
-        description: '',
-        type: 'Minutes',
-      });
-      setSelectedFile(null);
-      setSelectedImages([]);
-      setFileType(null);
-      
-      animateModalOut(() => {
-        setShowUploadModal(false);
-      });
-    } catch (error) {
-    if (isTestUserReadOnlyError(error)) return;
-      console.error('Error uploading document:', error);
-      Alert.alert('Error', 'Failed to upload document. Please try again.');
-    } finally {
-      setUploading(false);
-    }
-  };
 
   const handleDeleteDocument = (document: any) => {
     setDocumentToDelete(document);
@@ -376,7 +188,7 @@ const DocumentsScreen = () => {
           <TabHeroHeader
             screenWidth={screenWidth}
             showMobileNav={showMobileNav}
-            isBoardMember={!!isBoardMember}
+            hasBoardAccess={hasBoardAccess}
             onOpenMenu={() => setIsMenuOpen(true)}
             onOpenMessaging={() => setShowOverlay(true)}
             title="Documents"
@@ -390,6 +202,8 @@ const DocumentsScreen = () => {
               <DesktopTabBarSlot />
             </Animated.View>
           )}
+
+          <DesktopContentWidth enabled={showDesktopNav}>
 
           {/* Type Tabs */}
           <View style={styles.typeTabsContainer}>
@@ -423,15 +237,11 @@ const DocumentsScreen = () => {
           </View>
 
           {/* Upload Button - Only for Board Members */}
-          {isBoardMember && (
+          {hasBoardAccess && (
             <View style={styles.uploadButtonContainer}>
               <TouchableOpacity
                 style={styles.uploadButton}
-                onPress={() => {
-                  setDocumentForm({ ...documentForm, type: activeType });
-                  setShowUploadModal(true);
-                  animateModalIn();
-                }}
+                onPress={() => setShowUploadModal(true)}
               >
                 <Ionicons name="cloud-upload" size={20} color="#ffffff" />
                 <Text style={styles.uploadButtonText}>Upload Document</Text>
@@ -452,14 +262,16 @@ const DocumentsScreen = () => {
                 />
                 <Text style={styles.emptyStateText}>No {activeType === 'Minutes' ? 'meeting minutes' : 'financial records'} found</Text>
                 <Text style={styles.emptyStateSubtext}>
-                  {isBoardMember 
+                  {hasBoardAccess
                     ? 'Upload documents to share with the community'
                     : 'Documents will appear here once uploaded by board members'}
                 </Text>
               </View>
             ) : (
               documents.map((document: any) => (
-                <View key={document._id} style={styles.documentCard}>
+                <DocumentView key={document._id} document={document}>
+                {({ pagesBadge, viewButton }) => (
+                <View style={styles.documentCard}>
                   <View style={styles.documentCardHeader}>
                     <View style={styles.documentIconContainer}>
                       <Ionicons 
@@ -478,13 +290,13 @@ const DocumentsScreen = () => {
                           {document.description}
                         </Text>
                       )}
-                  <PageCountBadge document={document} />
+                  {pagesBadge}
                     </View>
                   </View>
                   
                   <View style={styles.documentActions}>
-                    <DocumentViewButton document={document} />
-                    {isBoardMember && (
+                    {viewButton}
+                    {hasBoardAccess && (
                       <TouchableOpacity
                         style={styles.deleteButton}
                         onPress={() => handleDeleteDocument(document)}
@@ -496,179 +308,31 @@ const DocumentsScreen = () => {
                     )}
                   </View>
                 </View>
+                )}
+                </DocumentView>
               ))
             )}
           </View>
+
+          </DesktopContentWidth>
 
           {/* Spacer */}
           <View style={styles.spacer} />
         </ScrollView>
 
-        {/* Upload Document Modal */}
-        <Modal
+        <UploadDocumentSheet
           visible={showUploadModal}
-          transparent={true}
-          animationType="none"
-          onRequestClose={() => animateModalOut(() => setShowUploadModal(false))}
-        >
-          <Animated.View style={[styles.modalOverlay, { opacity: overlayOpacity }]}>
-            <Animated.View style={[
-              styles.modalContent,
-              {
-                opacity: uploadModalOpacity,
-                transform: [{ translateY: uploadModalTranslateY }],
-              }
-            ]}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Upload Document</Text>
-                <TouchableOpacity
-                  style={styles.closeButton}
-                  onPress={() => animateModalOut(() => setShowUploadModal(false))}
-                >
-                  <Ionicons name="close" size={24} color="#6b7280" />
-                </TouchableOpacity>
-              </View>
-              
-              <ScrollView style={styles.modalForm} showsVerticalScrollIndicator={false}>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Document Type *</Text>
-                  <View style={styles.typeSelector}>
-                    <TouchableOpacity
-                      style={[
-                        styles.typeButton,
-                        documentForm.type === 'Minutes' && styles.typeButtonSelected
-                      ]}
-                      onPress={() => setDocumentForm({ ...documentForm, type: 'Minutes' })}
-                    >
-                      <Ionicons name="clipboard" size={18} color={documentForm.type === 'Minutes' ? '#ffffff' : '#6b7280'} />
-                      <Text style={[
-                        styles.typeButtonText,
-                        documentForm.type === 'Minutes' && styles.typeButtonTextSelected
-                      ]}>
-                        Meeting Minutes
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.typeButton,
-                        documentForm.type === 'Financial' && styles.typeButtonSelected
-                      ]}
-                      onPress={() => setDocumentForm({ ...documentForm, type: 'Financial' })}
-                    >
-                      <Ionicons name="cash" size={18} color={documentForm.type === 'Financial' ? '#ffffff' : '#6b7280'} />
-                      <Text style={[
-                        styles.typeButtonText,
-                        documentForm.type === 'Financial' && styles.typeButtonTextSelected
-                      ]}>
-                        Financial
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Title *</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    placeholder="Enter document title"
-                    value={documentForm.title}
-                    onChangeText={(text) => setDocumentForm({ ...documentForm, title: text })}
-                    autoCapitalize="words"
-                  />
-                </View>
-
-                <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Description (Optional)</Text>
-                  <TextInput
-                    style={[styles.textInput, styles.textArea]}
-                    placeholder="Enter document description"
-                    value={documentForm.description}
-                    onChangeText={(text) => setDocumentForm({ ...documentForm, description: text })}
-                    multiline
-                    numberOfLines={3}
-                    textAlignVertical="top"
-                  />
-                </View>
-
-                <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>File or Photo *</Text>
-                  <View style={styles.filePickerRow}>
-                    <TouchableOpacity
-                      style={[styles.filePickerButton, styles.filePickerButtonHalf]}
-                      onPress={handlePickDocument}
-                    >
-                      <Ionicons name="document-attach" size={20} color="#2563eb" />
-                      <Text style={styles.filePickerText}>
-                        Document
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.filePickerButton, styles.filePickerButtonHalf]}
-                      onPress={handlePickImage}
-                    >
-                      <Ionicons name="image" size={20} color="#2563eb" />
-                      <Text style={styles.filePickerText}>
-                        Photo
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                  {selectedFile && (
-                    <View style={styles.selectedFileContainer}>
-                      <Ionicons name="checkmark-circle" size={20} color="#10b981" />
-                      <Text style={styles.selectedFileText} numberOfLines={1}>
-                        {selectedFile.name}
-                      </Text>
-                      <TouchableOpacity onPress={() => {
-                        setSelectedFile(null);
-                        setFileType(null);
-                      }}>
-                        <Ionicons name="close-circle" size={20} color="#ef4444" />
-                      </TouchableOpacity>
-                    </View>
-                  )}
-                  <DocumentPhotoPicker
-                  uris={selectedImages}
-                  max={MAX_DOCUMENT_PHOTOS}
-                  onAdd={handlePickImage}
-                  onRemove={(index) => {
-                    const next = selectedImages.filter((_, i) => i !== index);
-                    setSelectedImages(next);
-                    if (!next.length) setFileType(null);
-                  }}
-                />
-                </View>
-              </ScrollView>
-
-              <View style={styles.modalFooter}>
-                <TouchableOpacity
-                  style={styles.cancelButton}
-                  onPress={() => animateModalOut(() => {
-                    setShowUploadModal(false);
-                    setSelectedFile(null);
-                    setSelectedImages([]);
-                    setDocumentForm({ title: '', description: '', type: 'Minutes' });
-                  })}
-                >
-                  <Text style={styles.cancelButtonText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.submitButton, uploading && styles.submitButtonDisabled]}
-                  onPress={handleUploadDocument}
-                  disabled={uploading}
-                >
-                  {uploading ? (
-                    <ActivityIndicator size="small" color="#ffffff" />
-                  ) : (
-                    <>
-                      <Ionicons name="cloud-upload" size={16} color="#ffffff" />
-                      <Text style={styles.submitButtonText}>Upload</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              </View>
-            </Animated.View>
-          </Animated.View>
-        </Modal>
+          onClose={() => setShowUploadModal(false)}
+          initialType={activeType}
+          onUploaded={() =>
+            showAlert({
+              title: 'Success',
+              message: 'Document uploaded successfully!',
+              buttons: [{ text: 'OK', onPress: () => {} }],
+              type: 'success',
+            })
+          }
+        />
 
         {/* Delete Confirmation Alert */}
         <CustomAlert
@@ -1011,181 +675,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
     textAlign: 'center',
     paddingHorizontal: 40,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    backgroundColor: '#ffffff',
-    borderRadius: 20,
-    width: '90%',
-    maxHeight: '80%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.25,
-    shadowRadius: 20,
-    elevation: 10,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#1f2937',
-  },
-  closeButton: {
-    padding: 4,
-  },
-  modalForm: {
-    maxHeight: 400,
-    padding: 20,
-  },
-  inputGroup: {
-    marginBottom: 20,
-  },
-  inputLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 8,
-  },
-  typeSelector: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  typeButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    borderWidth: 2,
-    borderColor: '#e5e7eb',
-    backgroundColor: '#f9fafb',
-    gap: 8,
-  },
-  typeButtonSelected: {
-    backgroundColor: '#2563eb',
-    borderColor: '#2563eb',
-  },
-  typeButtonText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#6b7280',
-  },
-  typeButtonTextSelected: {
-    color: '#ffffff',
-    fontWeight: '600',
-  },
-  textInput: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    backgroundColor: '#ffffff',
-    color: '#374151',
-  },
-  textArea: {
-    height: 80,
-    textAlignVertical: 'top',
-  },
-  filePickerRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  filePickerButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    borderWidth: 2,
-    borderColor: '#d1d5db',
-    borderStyle: 'dashed',
-    backgroundColor: '#f9fafb',
-    gap: 8,
-  },
-  filePickerButtonHalf: {
-    flex: 1,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-  },
-  filePickerText: {
-    fontSize: 14,
-    color: '#2563eb',
-    fontWeight: '500',
-  },
-  selectedFileContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 8,
-    padding: 8,
-    backgroundColor: '#f0fdf4',
-    borderRadius: 6,
-    gap: 8,
-  },
-  selectedImagePreview: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    marginTop: 8,
-    marginLeft: 8,
-  },
-  selectedFileText: {
-    flex: 1,
-    fontSize: 14,
-    color: '#059669',
-    fontWeight: '500',
-  },
-  modalFooter: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 12,
-    padding: 20,
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-  },
-  cancelButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-  },
-  cancelButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#6b7280',
-  },
-  submitButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    backgroundColor: '#2563eb',
-    gap: 6,
-  },
-  submitButtonDisabled: {
-    opacity: 0.6,
-  },
-  submitButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#ffffff',
   },
 });
 

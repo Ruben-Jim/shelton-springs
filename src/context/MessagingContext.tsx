@@ -5,6 +5,13 @@ import { api } from '../../convex/_generated/api';
 import { useAuth } from './AuthContext';
 import { Id } from '../../convex/_generated/dataModel';
 
+export const BOARD_SENDER_NAME = 'Shelton Springs Board';
+export const DEV_SENDER_NAME = 'Shelton Springs Dev';
+
+/** Display name for the staff side of a conversation (developer vs board). */
+export const getStaffLabel = (participant?: { isDev?: boolean } | null) =>
+  participant?.isDev ? DEV_SENDER_NAME : BOARD_SENDER_NAME;
+
 interface Conversation {
   _id: Id<"conversations">;
   participants: string[];
@@ -26,6 +33,7 @@ interface Conversation {
     email: string;
     profileImage?: string | null;
     isBoardMember: boolean;
+    isDev?: boolean;
   } | null;
 }
 
@@ -62,7 +70,9 @@ export const MessagingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   // Queries - only poll conversations when overlay is visible or for non-board members (to show unread indicator)
   // This reduces operations by ~400K/month for board members not actively using messaging
-  const shouldQueryConversations = showOverlay || (!user?.isBoardMember && user);
+  // Board members and developers use the staff inbox; everyone else sees the resident bubble
+  const isMessagingStaff = Boolean(user && (user.isBoardMember || user.isDev));
+  const shouldQueryConversations = showOverlay || (!isMessagingStaff && user);
   const conversations = useQuery(
     api.messages.getUserConversations,
     shouldQueryConversations && user ? { userId: user._id } : "skip"
@@ -79,11 +89,11 @@ export const MessagingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   // Check for unread messages (for non-board users) - optimized to reduce re-computations
   const hasUnreadMessages = React.useMemo(() => {
-    if (!user || user.isBoardMember) return false;
+    if (!user || isMessagingStaff) return false;
     // For now, consider any conversation as "unread" for non-board users
     // This could be enhanced with actual read tracking later
     return conversations.length > 0;
-  }, [conversations.length, user]);
+  }, [conversations.length, user, isMessagingStaff]);
 
   // Get latest message preview for minimized bubble - optimized
   const latestMessagePreview = React.useMemo(() => {
@@ -98,7 +108,7 @@ export const MessagingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, []);
 
   const createConversationWithUser = useCallback(async (recipientId: string): Promise<Id<"conversations"> | null> => {
-    if (!user || !user.isBoardMember) return null;
+    if (!user || !isMessagingStaff) return null;
 
     try {
       const conversationId = await createConversation({
@@ -113,17 +123,19 @@ export const MessagingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       console.error('Error creating conversation:', error);
       return null;
     }
-  }, [user, createConversation]);
+  }, [user, isMessagingStaff, createConversation]);
 
   const sendMessage = useCallback(async (content: string) => {
     if (!activeConversationId || !user || !content.trim()) return;
 
     try {
-      const senderName = user.isBoardMember
-        ? "Shelton Springs Board"
+      const senderName = user.isDev
+        ? DEV_SENDER_NAME
+        : user.isBoardMember
+        ? BOARD_SENDER_NAME
         : `${user.firstName} ${user.lastName}`;
       
-      const senderRole = user.isBoardMember
+      const senderRole = isMessagingStaff
         ? `${user.firstName} ${user.lastName}`
         : user.isRenter
         ? "Renter"
@@ -145,7 +157,7 @@ export const MessagingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       console.error('Error sending message:', error);
       throw error;
     }
-  }, [activeConversationId, user, sendMessageMutation]);
+  }, [activeConversationId, user, isMessagingStaff, sendMessageMutation]);
 
   // Note: New message notifications are created server-side in messages.sendMessage
   // and delivered via Expo Push (when app closed) or useUserNotifications (when app open)

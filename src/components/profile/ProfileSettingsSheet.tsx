@@ -7,17 +7,14 @@ import {
   ScrollView,
   Platform,
   ActivityIndicator,
-  Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ProfileImage from '../ProfileImage';
 import { PROFILE_SECTION_FOOTER, PROFILE_SETTINGS_THEME as theme } from './profileSettingsTheme';
 
+/** Account settings content; presented inside the shared IosFormSheet by the nav menu. */
 type ProfileSettingsSheetProps = {
   onClose: () => void;
-  modalOpacity: Animated.Value;
-  modalTranslateY: Animated.Value;
   currentUser?: {
     firstName?: string;
     lastName?: string;
@@ -105,8 +102,6 @@ function SettingsRow({
 
 export default function ProfileSettingsSheet({
   onClose,
-  modalOpacity,
-  modalTranslateY,
   currentUser,
   profileImage,
   displayImage,
@@ -125,7 +120,6 @@ export default function ProfileSettingsSheet({
   onSignOut,
   onDeleteAccount,
 }: ProfileSettingsSheetProps) {
-  const insets = useSafeAreaInsets();
   const busy = uploading || removing || deleting;
   const initials = currentUser
     ? `${currentUser.firstName?.[0] || ''}${currentUser.lastName?.[0] || ''}`
@@ -147,20 +141,7 @@ export default function ProfileSettingsSheet({
     : '';
 
   return (
-    <Animated.View
-      style={[
-        styles.sheet,
-        Platform.OS !== 'web' && styles.sheetMobile,
-        {
-          opacity: modalOpacity,
-          transform: [{ translateY: modalTranslateY }],
-          paddingBottom: Math.max(insets.bottom, 12),
-        },
-      ]}
-      pointerEvents="box-none"
-    >
-      {Platform.OS !== 'web' ? <View style={styles.grabber} /> : null}
-
+    <View style={styles.sheet}>
       <View style={styles.sheetHeader}>
         <View style={styles.sheetHeaderSide} />
         <Text style={styles.sheetTitle}>Account</Text>
@@ -305,34 +286,13 @@ export default function ProfileSettingsSheet({
           />
         </GroupedCard>
       </ScrollView>
-    </Animated.View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   sheet: {
-    backgroundColor: theme.groupedBackground,
-    borderRadius: theme.sheetRadius,
-    overflow: 'hidden',
-    width: '90%',
-    maxHeight: '90%',
-    minHeight: '76%',
-  },
-  sheetMobile: {
-    width: '100%',
-    maxHeight: '92%',
-    minHeight: '68%',
-    borderBottomLeftRadius: 0,
-    borderBottomRightRadius: 0,
-  },
-  grabber: {
-    alignSelf: 'center',
-    width: 36,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: theme.grabber,
-    marginTop: 8,
-    marginBottom: 4,
+    flex: 1,
   },
   sheetHeader: {
     flexDirection: 'row',

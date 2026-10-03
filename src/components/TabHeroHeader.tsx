@@ -14,15 +14,18 @@ import TestUserIndicator from './TestUserIndicator';
 import TestUserReadOnlyBanner from './TestUserReadOnlyBanner';
 import MessagingButton from './MessagingButton';
 import {
-  HERO_HEADER_IMAGE,
+  getHeroImage,
+  HERO_READ_ONLY_BANNER_HEIGHT,
   useHeroHeaderLayout,
 } from '../hooks/useHeroHeaderPadding';
 import { useIsTestUserReadOnly } from '../hooks/useGuardedMutation';
+import Reanimated from 'react-native-reanimated';
+import { useHeroHeightStyle, useTabEntranceStyle } from './motion/TabEntrance';
 
 type TabHeroHeaderProps = {
   screenWidth: number;
   showMobileNav: boolean;
-  isBoardMember: boolean;
+  hasBoardAccess: boolean;
   onOpenMenu: () => void;
   onOpenMessaging?: () => void;
   title: string;
@@ -35,7 +38,7 @@ type TabHeroHeaderProps = {
 export default function TabHeroHeader({
   screenWidth,
   showMobileNav,
-  isBoardMember,
+  hasBoardAccess,
   onOpenMenu,
   onOpenMessaging,
   title,
@@ -44,16 +47,29 @@ export default function TabHeroHeader({
   animatedOpacity,
   footer,
 }: TabHeroHeaderProps) {
-  const { paddingTop, height } = useHeroHeaderLayout();
+  const { paddingTop, height: compactHeight } = useHeroHeaderLayout({ compact: true });
+  // Draw the photo at Home's full hero size so framing matches Home; the shorter header trims the bottom
+  const { imageHeight } = useHeroHeaderLayout();
   const { isReadOnly } = useIsTestUserReadOnly();
+  const height = compactHeight + (isReadOnly ? HERO_READ_ONLY_BANNER_HEIGHT : 0);
+  // Header frame morphs from the previous tab's height; the title cross-dissolves in
+  const heightStyle = useHeroHeightStyle(height);
+  const titleStyle = useTabEntranceStyle(0, 6);
+  const heroImage = getHeroImage(screenWidth);
+  const fullHeight = Math.max(height, imageHeight);
 
   const header = (
-    <View style={[styles.headerContainer, { width: screenWidth, height }]}>
+    <Reanimated.View style={[styles.headerContainer, { width: screenWidth }, heightStyle]}>
       <ImageBackground
-        source={HERO_HEADER_IMAGE}
-        style={[styles.header, { paddingTop, height }]}
-        imageStyle={[styles.headerImage, { width: screenWidth, height }]}
-        resizeMode="stretch"
+        source={heroImage.source}
+        // Full photo height; the animated container clips it to the current header height
+        style={[styles.header, { paddingTop, height: fullHeight }]}
+        imageStyle={[
+          styles.headerImage,
+          // Desktop: cover the visible header so the wide crop centers on the mountains and lake
+          { width: screenWidth, height: heroImage.isDesktop ? height : imageHeight },
+        ]}
+        resizeMode={heroImage.resizeMode}
       >
         <View style={styles.headerOverlay} />
         <View style={styles.headerTop}>
@@ -65,7 +81,7 @@ export default function TabHeroHeader({
             <View style={styles.headerSpacer} />
           )}
 
-          <View style={styles.headerLeft}>
+          <Reanimated.View style={[styles.headerLeft, titleStyle]}>
             <Text style={styles.headerTitle} numberOfLines={1}>
               {title}
             </Text>
@@ -80,9 +96,9 @@ export default function TabHeroHeader({
               </View>
             ) : null}
             {isReadOnly ? <TestUserReadOnlyBanner /> : null}
-          </View>
+          </Reanimated.View>
 
-          {isBoardMember && onOpenMessaging ? (
+          {hasBoardAccess && onOpenMessaging ? (
             <View style={styles.headerRight}>
               <MessagingButton onPress={onOpenMessaging} />
             </View>
@@ -92,12 +108,12 @@ export default function TabHeroHeader({
         </View>
         {footer}
       </ImageBackground>
-    </View>
+    </Reanimated.View>
   );
 
   if (animatedOpacity) {
     return (
-      <Animated.View style={{ opacity: animatedOpacity, height }}>
+      <Animated.View style={{ opacity: animatedOpacity }}>
         {header}
       </Animated.View>
     );

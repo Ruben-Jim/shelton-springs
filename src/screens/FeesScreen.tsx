@@ -26,6 +26,8 @@ import { useCachedResidents } from '../context/QueryCacheContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
 import { DesktopTabBarSlot, useDesktopTabBarScrollSync } from '../components/DesktopTabBarLayer';
+import { useWindowWidth } from '../hooks/useWindowWidth';
+import DesktopContentWidth from '../components/DesktopContentWidth';
 import MobileTabBar from '../components/MobileTabBar';
 import PaymentModal from '../components/PaymentModal';
 import ProfileImage from '../components/ProfileImage';
@@ -44,7 +46,7 @@ const FeesScreen = () => {
   const { user } = useAuth();
   const isFocused = useIsFocused();
   const { setShowOverlay } = useMessaging();
-  const isBoardMember = user?.isBoardMember && user?.isActive;
+  const hasBoardAccess = Boolean(user?.isActive && (user?.isBoardMember || user?.isDev));
   const [activeTab, setActiveTab] = useState<'fees' | 'fines'>('fees');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [hasPaidAnnualFee, setHasPaidAnnualFee] = useState(false);
@@ -53,7 +55,8 @@ const FeesScreen = () => {
   const [selectedPaymentType, setSelectedPaymentType] = useState<'fee' | 'fine'>('fee');
 
   // State for dynamic responsive behavior (only for web/desktop)
-  const [screenWidth, setScreenWidth] = useState(Dimensions.get('window').width);
+  // Shared, frame-throttled width; paused while this screen sits under another one
+  const screenWidth = useWindowWidth(isFocused);
   
   // Dynamic responsive check - show mobile nav when screen is too narrow for desktop nav
   // On mobile, always show mobile nav regardless of screen size
@@ -78,17 +81,6 @@ const FeesScreen = () => {
     [baseHandleScroll, syncDesktopTabBar]
   );
 
-  // Listen for window size changes (only on web/desktop)
-  useEffect(() => {
-    if (Platform.OS === 'web') {
-      const subscription = Dimensions.addEventListener('change', ({ window }) => {
-        setScreenWidth(window.width);
-      });
-
-      return () => subscription?.remove();
-    }
-  }, []);
-
   // Set initial cursor and cleanup on unmount (web only)
   useEffect(() => {
     if (Platform.OS === 'web') {
@@ -109,22 +101,22 @@ const FeesScreen = () => {
         document.body.style.cursor = 'default';
       };
     }
-  }, [screenWidth, showMobileNav, showDesktopNav]);
+    // Mount only: re-running on resize scrolled the page back to the top
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Animation functions
+  // Same soft spring and short rise as the other tabs' entrance (see motion/TabEntrance)
   const animateStaggeredContent = () => {
-    Animated.stagger(200, [
-      Animated.timing(summaryAnim, {
+    const spring = (value: Animated.Value) =>
+      Animated.spring(value, {
         toValue: 1,
-        duration: 500,
+        stiffness: 160,
+        damping: 18,
+        mass: 1,
         useNativeDriver: Platform.OS !== 'web',
-      }),
-      Animated.timing(contentAnim, {
-        toValue: 1,
-        duration: 500,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-    ]).start();
+      });
+    Animated.stagger(70, [spring(summaryAnim), spring(contentAnim)]).start();
   };
 
   // Initialize animations on component mount
@@ -351,7 +343,7 @@ const FeesScreen = () => {
         <TabHeroHeader
           screenWidth={screenWidth}
           showMobileNav={showMobileNav}
-          isBoardMember={!!isBoardMember}
+          hasBoardAccess={hasBoardAccess}
           onOpenMenu={() => setIsMenuOpen(true)}
           onOpenMessaging={() => setShowOverlay(true)}
           title="Fees & Fines"
@@ -368,6 +360,8 @@ const FeesScreen = () => {
           </Animated.View>
         )}
 
+        <DesktopContentWidth enabled={showDesktopNav}>
+
         {/* User Status Section - Compact */}
         {user && (
           <Animated.View style={[
@@ -377,7 +371,7 @@ const FeesScreen = () => {
               transform: [{
                 translateY: contentAnim.interpolate({
                   inputRange: [0, 1],
-                  outputRange: [50, 0],
+                  outputRange: [16, 0],
                 })
               }]
             }
@@ -450,7 +444,7 @@ const FeesScreen = () => {
             transform: [{
               translateY: summaryAnim.interpolate({
                 inputRange: [0, 1],
-                outputRange: [50, 0],
+                outputRange: [16, 0],
               })
             }]
           }
@@ -486,7 +480,7 @@ const FeesScreen = () => {
             transform: [{
               translateY: contentAnim.interpolate({
                 inputRange: [0, 1],
-                outputRange: [50, 0],
+                outputRange: [16, 0],
               })
             }]
           }
@@ -530,7 +524,7 @@ const FeesScreen = () => {
             transform: [{
               translateY: contentAnim.interpolate({
                 inputRange: [0, 1],
-                outputRange: [50, 0],
+                outputRange: [16, 0],
               })
             }]
           }
@@ -744,7 +738,7 @@ const FeesScreen = () => {
             transform: [{
               translateY: contentAnim.interpolate({
                 inputRange: [0, 1],
-                outputRange: [50, 0],
+                outputRange: [16, 0],
               })
             }]
           }
@@ -773,6 +767,8 @@ const FeesScreen = () => {
           </Text>
         </Animated.View>
         
+        </DesktopContentWidth>
+
         {/* Additional content to ensure scrollable content */}
         <View style={styles.spacer} />
         </ScrollView>

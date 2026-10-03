@@ -14,45 +14,51 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from 'convex/react';
 import { api } from '../../../convex/_generated/api';
 import { useCachedHoaInfo } from '../../context/QueryCacheContext';
-import { useStorageUrl } from '../../hooks/useStorageUrl';
 import LoadingState from '../LoadingState';
 import { openDocument } from '../../utils/openDocument';
+import FileViewerTrigger from '../documents/FileViewerTrigger';
 
+/** Opens a covenant's attachment in the shared document viewer (legacy external links open the in-app browser). */
 function CovenantAttachmentButton({
   fileStorageId,
+  fileContentType,
   pdfUrl,
+  title,
 }: {
   fileStorageId?: string;
+  fileContentType?: string | null;
   pdfUrl?: string;
+  title: string;
 }) {
-  const resolvedUrl = useStorageUrl(fileStorageId || null);
+  const label = (
+    <>
+      <Ionicons name="document" size={16} color="#2563eb" />
+      <Text style={styles.pdfButtonText}>View attachment</Text>
+    </>
+  );
 
-  if (!fileStorageId && !pdfUrl) return null;
+  if (fileStorageId) {
+    return (
+      <FileViewerTrigger storageId={fileStorageId} contentType={fileContentType} title={title}>
+        {(open) => (
+          <TouchableOpacity style={styles.pdfButton} onPress={open}>
+            {label}
+          </TouchableOpacity>
+        )}
+      </FileViewerTrigger>
+    );
+  }
 
-  const open = () => {
-    if (fileStorageId) {
-      if (resolvedUrl) {
-        openDocument(resolvedUrl);
-      } else {
-        Alert.alert('Please wait', 'Loading document link…');
-      }
-    } else if (pdfUrl) {
-      openDocument(pdfUrl);
-    }
-  };
-
-  const loading = !!fileStorageId && resolvedUrl === undefined;
-
+  if (!pdfUrl) return null;
+  // Legacy external link: no stored file for the viewer, so use the in-app browser
   return (
-    <TouchableOpacity style={styles.pdfButton} onPress={open} disabled={loading}>
-      {loading ? (
-        <ActivityIndicator size="small" color="#2563eb" />
-      ) : (
-        <>
-          <Ionicons name="document" size={16} color="#2563eb" />
-          <Text style={styles.pdfButtonText}>View attachment</Text>
-        </>
-      )}
+    <TouchableOpacity
+      style={styles.pdfButton}
+      onPress={() =>
+        openDocument(pdfUrl).catch(() => Alert.alert('Error', 'Unable to open this attachment. Please try again.'))
+      }
+    >
+      {label}
     </TouchableOpacity>
   );
 }
@@ -63,7 +69,6 @@ interface CovenantsContentProps {
 
 const CovenantsContent = ({ isActive }: CovenantsContentProps) => {
   const hoaInfo = useCachedHoaInfo();
-  const ccrsPdfUrl = useStorageUrl(hoaInfo?.ccrsPdfStorageId || null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [covenantsLimit] = useState(50);
@@ -114,21 +119,20 @@ const CovenantsContent = ({ isActive }: CovenantsContentProps) => {
   return (
     <View>
       {/* CC&Rs PDF Button */}
-      {ccrsPdfUrl && (
+      {hoaInfo?.ccrsPdfStorageId && (
         <View style={styles.ccrsContainer}>
-          <TouchableOpacity
-            style={styles.ccrsButton}
-            onPress={() =>
-              ccrsPdfUrl
-                ? openDocument(ccrsPdfUrl).catch(() =>
-                    Alert.alert('Error', 'Unable to open PDF. Please try again.')
-                  )
-                : undefined
-            }
+          <FileViewerTrigger
+            storageId={hoaInfo.ccrsPdfStorageId}
+            contentType="application/pdf"
+            title="Shelton Springs CC&Rs"
           >
-            <Ionicons name="document-text" size={20} color="#2563eb" />
-            <Text style={styles.ccrsButtonText}>View CC&Rs PDF</Text>
-          </TouchableOpacity>
+            {(open) => (
+              <TouchableOpacity style={styles.ccrsButton} onPress={open}>
+                <Ionicons name="document-text" size={20} color="#2563eb" />
+                <Text style={styles.ccrsButtonText}>View CC&Rs PDF</Text>
+              </TouchableOpacity>
+            )}
+          </FileViewerTrigger>
         </View>
       )}
 
@@ -236,7 +240,9 @@ const CovenantsContent = ({ isActive }: CovenantsContentProps) => {
                 </Text>
                 <CovenantAttachmentButton
                   fileStorageId={covenant.fileStorageId}
+                  fileContentType={covenant.fileContentType}
                   pdfUrl={covenant.pdfUrl}
+                  title={covenant.title}
                 />
               </View>
             </View>

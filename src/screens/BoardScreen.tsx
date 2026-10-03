@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRoute } from '@react-navigation/native';
+import { useRoute, useIsFocused } from '@react-navigation/native';
 import { useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 
@@ -26,6 +26,7 @@ import { useCachedResidents } from '../context/QueryCacheContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
 import { DesktopTabBarSlot, useDesktopTabBarScrollSync } from '../components/DesktopTabBarLayer';
+import { useWindowWidth } from '../hooks/useWindowWidth';
 import MobileTabBar from '../components/MobileTabBar';
 import ProfileImage from '../components/ProfileImage';
 import { getBoardMemberPhoto } from '../utils/boardMemberPhoto';
@@ -33,6 +34,10 @@ import MessagingButton from '../components/MessagingButton';
 import { useMessaging } from '../context/MessagingContext';
 import CovenantsContent from '../components/board/CovenantsContent';
 import DocumentsContent from '../components/board/DocumentsContent';
+import { HOA_TAB_ACCENT, DESKTOP_CONTENT_STYLE, SECTION_ACCENTS } from '../constants/hoaTheme';
+import SubTabBar from '../components/SubTabBar';
+import { BOARD_SUB_TABS, BoardSubTabId } from '../navigation/mainTabs';
+import TabEntrance from '../components/motion/TabEntrance';
 import ScrollToTopButton from '../components/ScrollToTopButton';
 import { useScrollToTop } from '../hooks/useScrollToTop';
 import {
@@ -42,20 +47,26 @@ import {
 } from '../hooks/useHeroHeaderPadding';
 import TabHeroHeader from '../components/TabHeroHeader';
 
-type BoardSubTab = 'board' | 'covenants' | 'documents';
+type BoardSubTab = BoardSubTabId;
 
-const HOA_TAB_ACCENT = '#f97316';
+
+const MIN_MEMBER_CARD_WIDTH = 320;
+const MEMBER_GRID_GAP = 15;
+/** memberGrid's horizontal padding; onLayout width includes it, so subtract it before sizing cards. */
+const MEMBER_GRID_PADDING = 15;
 
 const BoardScreen = () => {
   const { user } = useAuth();
   const route = useRoute();
+  const isFocused = useIsFocused();
   const { setShowOverlay } = useMessaging();
-  const isBoardMember = user?.isBoardMember && user?.isActive;
+  const hasBoardAccess = Boolean(user?.isActive && (user?.isBoardMember || user?.isDev));
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [activeSubTab, setActiveSubTab] = useState<BoardSubTab>('board');
   
   // State for dynamic responsive behavior (only for web/desktop)
-  const [screenWidth, setScreenWidth] = useState(Dimensions.get('window').width);
+  // Shared, frame-throttled width; paused while this screen sits under another one
+  const screenWidth = useWindowWidth(isFocused);
   
   // Dynamic responsive check - show mobile nav when screen is too narrow for desktop nav
   // On mobile, always show mobile nav regardless of screen size
@@ -65,8 +76,8 @@ const BoardScreen = () => {
 
   // Animation values
   const fadeAnim = useRef(new Animated.Value(1)).current; // Start at 1 to avoid white flash
-  const membersAnim = useRef(new Animated.Value(0)).current;
-  const infoAnim = useRef(new Animated.Value(0)).current;
+  const membersAnim = useRef(new Animated.Value(1)).current;
+  const infoAnim = useRef(new Animated.Value(1)).current;
   
   // ScrollView ref for better control
   const scrollViewRef = useRef<ScrollView>(null);
@@ -80,6 +91,10 @@ const BoardScreen = () => {
     [baseHandleScroll, syncDesktopTabBar]
   );
   
+  // Emails/phones compared ignoring case, spaces and punctuation (e.g. ALL-CAPS copies of the HOA email)
+  const sameContact = (a?: string | null, b?: string | null) =>
+    !!a && !!b && a.toLowerCase().replace(/[^a-z0-9@.]/g, '') === b.toLowerCase().replace(/[^a-z0-9@.]/g, '');
+
   const handleContact = (member: any, type: 'phone' | 'email') => {
     if (type === 'phone') {
       Linking.openURL(`tel:${member.phone}`);
@@ -100,6 +115,33 @@ const BoardScreen = () => {
   const residents = useCachedResidents();
   const hoaInfo = useQuery(api.hoaInfo.get) ?? null;
 
+  // Shared board inbox: the HOA email from settings, else the email most members list
+  const boardEmail = useMemo(() => {
+    const configured = hoaInfo?.email?.trim();
+    if (configured) return configured;
+    const counts = new Map<string, { email: string; count: number }>();
+    members.forEach((m: any) => {
+      const email = m.email?.trim();
+      if (!email) return;
+      const key = email.toLowerCase();
+      const entry = counts.get(key) ?? { email, count: 0 };
+      entry.count += 1;
+      counts.set(key, entry);
+    });
+    const [best] = [...counts.values()].sort((x, y) => y.count - x.count);
+    return best?.email ?? '';
+  }, [hoaInfo?.email, members]);
+
+  const [memberGridWidth, setMemberGridWidth] = useState(0);
+  const memberGridInnerWidth = Math.max(0, memberGridWidth - MEMBER_GRID_PADDING * 2);
+  const memberColumns = Math.max(
+    1,
+    Math.floor((memberGridInnerWidth + MEMBER_GRID_GAP) / (MIN_MEMBER_CARD_WIDTH + MEMBER_GRID_GAP))
+  );
+  const memberCardWidth = memberGridInnerWidth
+    ? Math.floor((memberGridInnerWidth - MEMBER_GRID_GAP * (memberColumns - 1)) / memberColumns)
+    : undefined;
+
   // Board page content — fall back to hardcoded defaults when not set by admin
   const boardMeetingsSchedule =
     hoaInfo?.boardMeetingsSchedule ?? 'Second Tuesday of each month at 7:00 PM';
@@ -117,48 +159,17 @@ const BoardScreen = () => {
     hoaInfo?.boardResourceBylaws ?? 'Board decisions are made in accordance with HOA bylaws';
   
   // Rainbow colors for board member cards
-  const borderColors = [
-    '#ef4444', // Red
-    '#f97316', // Orange
-    '#eab308', // Yellow
-    '#22c55e', // Green
-    '#3b82f6', // Blue
-    '#6366f1', // Indigo
-    '#8b5cf6', // Violet
+  // Sidebar color per card; `text` is a darker shade of the same hue so labels stay readable on white
+  const cardColors = [
+    { accent: '#ef4444', text: '#b91c1c' }, // Red
+    { accent: '#f97316', text: '#c2410c' }, // Orange
+    { accent: '#eab308', text: '#a16207' }, // Yellow
+    { accent: '#22c55e', text: '#15803d' }, // Green
+    { accent: '#3b82f6', text: '#1d4ed8' }, // Blue
+    { accent: '#6366f1', text: '#4338ca' }, // Indigo
+    { accent: '#8b5cf6', text: '#6d28d9' }, // Violet
   ];
-
-  // Animation functions
-  const animateStaggeredContent = () => {
-    Animated.stagger(200, [
-      Animated.timing(membersAnim, {
-        toValue: 1,
-        duration: 600,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-      Animated.timing(infoAnim, {
-        toValue: 1,
-        duration: 600,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-    ]).start();
-  };
-
-
-  // Initialize animations on component mount
-  useEffect(() => {
-    animateStaggeredContent();
-  }, []);
-
-  // Listen for window size changes (only on web/desktop)
-  useEffect(() => {
-    if (Platform.OS === 'web') {
-      const subscription = Dimensions.addEventListener('change', ({ window }) => {
-        setScreenWidth(window.width);
-      });
-
-      return () => subscription?.remove();
-    }
-  }, []);
+  const cardColor = (index: number) => cardColors[index % cardColors.length];
 
   useEffect(() => {
     const params = route.params as { activeSubTab?: BoardSubTab } | undefined;
@@ -187,7 +198,9 @@ const BoardScreen = () => {
         document.body.style.cursor = 'default';
       };
     }
-  }, [screenWidth, showMobileNav, showDesktopNav]);
+    // Mount only: re-running on resize scrolled the page back to the top
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <SafeAreaView style={HERO_TAB_SAFE_AREA_STYLE} edges={HERO_TAB_SAFE_AREA_EDGES}>
@@ -237,11 +250,11 @@ const BoardScreen = () => {
         <TabHeroHeader
           screenWidth={screenWidth}
           showMobileNav={showMobileNav}
-          isBoardMember={!!isBoardMember}
+          hasBoardAccess={hasBoardAccess}
           onOpenMenu={() => setIsMenuOpen(true)}
           onOpenMessaging={() => setShowOverlay(true)}
-          title="Board of Directors"
-          subtitle="Your elected representatives serving the community"
+          title="HOA Governance"
+          subtitle="Board members, covenants, and community records"
           animatedOpacity={fadeAnim}
         />
 
@@ -255,29 +268,18 @@ const BoardScreen = () => {
         )}
 
         {/* Board Sub-Tab Bar */}
-        <View style={styles.subTabBar}>
-          {([
-            { id: 'board', label: 'Board Members', icon: 'people' },
-            { id: 'covenants', label: 'Covenants', icon: 'document-text' },
-            { id: 'documents', label: 'Documents', icon: 'folder' },
-          ] as { id: BoardSubTab; label: string; icon: string }[]).map((tab) => (
-            <TouchableOpacity
-              key={tab.id}
-              style={[styles.subTab, activeSubTab === tab.id && styles.subTabActive]}
-              onPress={() => setActiveSubTab(tab.id)}
-            >
-              <Ionicons
-                name={tab.icon as any}
-                size={16}
-                color={activeSubTab === tab.id ? HOA_TAB_ACCENT : '#6b7280'}
-              />
-              <Text style={[styles.subTabText, activeSubTab === tab.id && styles.subTabTextActive]}>
-                {tab.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        <TabEntrance>
+        <SubTabBar
+          tabs={BOARD_SUB_TABS}
+          activeId={activeSubTab}
+          onChange={setActiveSubTab}
+          accent={SECTION_ACCENTS.Board}
+          desktop={showDesktopNav}
+        />
+        </TabEntrance>
 
+        {/* Sub-tab content rises in just after the sub-tab bar */}
+        <TabEntrance delay={70} style={showDesktopNav ? DESKTOP_CONTENT_STYLE : undefined}>
         {/* Covenants Sub-Tab Content */}
         {activeSubTab === 'covenants' && (
           <CovenantsContent isActive={activeSubTab === 'covenants'} />
@@ -292,15 +294,46 @@ const BoardScreen = () => {
         opacity: membersAnim,
         display: activeSubTab === 'board' ? 'flex' : 'none',
       }}>
-        {members.map((member: any, index: number) => (
+        {/* One shared inbox for the whole board, shown once instead of on every card */}
+        {boardEmail ? (
+          <TouchableOpacity
+            style={styles.emailBoardBanner}
+            onPress={() => Linking.openURL(`mailto:${boardEmail}`)}
+            activeOpacity={0.75}
+          >
+            <View style={styles.emailBoardIcon}>
+              <Ionicons name="mail" size={20} color={HOA_TAB_ACCENT} />
+            </View>
+            <View style={styles.emailBoardTextWrap}>
+              <Text style={styles.emailBoardTitle}>Email the Board</Text>
+              <Text style={styles.emailBoardAddress} numberOfLines={1}>
+                {boardEmail}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
+          </TouchableOpacity>
+        ) : null}
+
+        {/* Auto-fit grid: as many columns as fit at MIN_MEMBER_CARD_WIDTH */}
+        <View
+          style={styles.memberGrid}
+          onLayout={(e) => setMemberGridWidth(e.nativeEvent.layout.width)}
+        >
+        {members.map((member: any, index: number) => {
+          const showEmail = !!member.email && !sameContact(member.email, boardEmail);
+          const showPhone = !!member.phone && !sameContact(member.phone, hoaInfo?.phone);
+          const hasDetails = !!member.bio || showEmail || showPhone;
+          return (
           <View key={member._id} style={[
             styles.memberCard,
+            // Full width until the grid has been measured
+            { width: memberCardWidth ?? '100%' },
             {
-              borderLeftColor: borderColors[index % borderColors.length],
+              borderLeftColor: cardColor(index).accent,
             }
           ]}>
             {/* Member Header with Avatar and Basic Info */}
-            <View style={styles.memberHeader}>
+            <View style={[styles.memberHeader, !hasDetails && styles.memberHeaderOnly]}>
               <View style={styles.avatarContainer}>
                 <ProfileImage 
                   source={getBoardMemberPhoto(member, residents)}
@@ -310,7 +343,7 @@ const BoardScreen = () => {
               </View>
               <View style={styles.memberInfo}>
                 <Text style={styles.memberName}>{member.name}</Text>
-                <Text style={styles.memberPosition}>{member.position}</Text>
+                <Text style={[styles.memberPosition, { color: cardColor(index).text }]}>{member.position}</Text>
                 {member.termEnd && (
                   <View style={styles.memberTermContainer}>
                     <Ionicons name="calendar" size={16} color="#6b7280" />
@@ -329,34 +362,33 @@ const BoardScreen = () => {
               </Text>
             )}
 
-            {/* Contact Section */}
-            <View style={styles.contactSection}>
-              <View style={styles.contactHeader}>
-                <Ionicons name="information-circle" size={16} color="#6b7280" />
-                <Text style={styles.contactLabel}>Contact Information</Text>
-              </View>
-              <View style={styles.contactButtons}>
-                {member.phone && (
+            {/* Personal contact only when it differs from the shared board contact */}
+            {(showEmail || showPhone) && (
+              <View style={[styles.contactSection, styles.contactButtons, !!member.bio && styles.contactSectionAfterBio]}>
+                {showPhone && (
                   <TouchableOpacity
                     style={styles.contactButton}
                     onPress={() => handleContact(member, 'phone')}
                   >
-                    <Ionicons name="call" size={20} color="#2563eb" />
+                    <Ionicons name="call" size={20} color={cardColor(index).accent} />
                     <Text style={styles.contactText}>{member.phone}</Text>
                   </TouchableOpacity>
                 )}
-
-                <TouchableOpacity
-                  style={styles.contactButton}
-                  onPress={() => handleContact(member, 'email')}
-                >
-                  <Ionicons name="mail" size={20} color="#2563eb" />
-                  <Text style={styles.contactText} numberOfLines={2}>{member.email}</Text>
-                </TouchableOpacity>
+                {showEmail && (
+                  <TouchableOpacity
+                    style={styles.contactButton}
+                    onPress={() => handleContact(member, 'email')}
+                  >
+                    <Ionicons name="mail" size={20} color={cardColor(index).accent} />
+                    <Text style={styles.contactText} numberOfLines={2}>{member.email}</Text>
+                  </TouchableOpacity>
+                )}
               </View>
-            </View>
+            )}
           </View>
-        ))}
+          );
+        })}
+        </View>
       </Animated.View>
 
       <Animated.View style={{
@@ -365,12 +397,12 @@ const BoardScreen = () => {
       }}>
         {/* Board Meetings Section */}
         <View style={[styles.infoSection, {
-          borderLeftColor: borderColors[(members.length) % borderColors.length], // Next color after last member
+          borderLeftColor: cardColor(members.length).accent, // Next color after last member
         }]}>
           
           <View style={styles.infoHeader}>
-            <View style={styles.infoIconContainer}>
-              <Ionicons name="calendar" size={24} color="#2563eb" />
+            <View style={[styles.infoIconContainer, { backgroundColor: `${cardColor(members.length).accent}1A` }]}>
+              <Ionicons name="calendar" size={24} color={cardColor(members.length).accent} />
             </View>
             <Text style={styles.infoTitle}>Board Meetings</Text>
           </View>
@@ -392,11 +424,11 @@ const BoardScreen = () => {
 
         {/* Contact Information Section */}
         <View style={[styles.infoSection, {
-          borderLeftColor: borderColors[(members.length + 1) % borderColors.length], // Second color after last member
+          borderLeftColor: cardColor(members.length + 1).accent, // Second color after last member
         }]}>
           <View style={styles.infoHeader}>
-            <View style={styles.infoIconContainer}>
-              <Ionicons name="mail" size={24} color="#2563eb" />
+            <View style={[styles.infoIconContainer, { backgroundColor: `${cardColor(members.length + 1).accent}1A` }]}>
+              <Ionicons name="mail" size={24} color={cardColor(members.length + 1).accent} />
             </View>
             <Text style={styles.infoTitle}>Contact the Board</Text>
           </View>
@@ -414,11 +446,11 @@ const BoardScreen = () => {
 
         {/* Additional Resources Section */}
         <View style={[styles.infoSection, {
-          borderLeftColor: borderColors[(members.length + 2) % borderColors.length], // Third color after last member
+          borderLeftColor: cardColor(members.length + 2).accent, // Third color after last member
         }]}>
           <View style={styles.infoHeader}>
-            <View style={styles.infoIconContainer}>
-              <Ionicons name="document-text" size={24} color="#2563eb" />
+            <View style={[styles.infoIconContainer, { backgroundColor: `${cardColor(members.length + 2).accent}1A` }]}>
+              <Ionicons name="document-text" size={24} color={cardColor(members.length + 2).accent} />
             </View>
             <Text style={styles.infoTitle}>Resources</Text>
           </View>
@@ -437,6 +469,7 @@ const BoardScreen = () => {
       
       {/* Additional content to ensure scrollable content */}
       <View style={styles.spacer} />
+        </TabEntrance>
       </ScrollView>
       <ScrollToTopButton visible={showScrollToTop} onPress={scrollToTop} />
       </View>
@@ -474,36 +507,6 @@ const styles = StyleSheet.create({
   },
   spacer: {
     height: Platform.OS === 'web' ? 200 : 100,
-  },
-  subTabBar: {
-    flexDirection: 'row',
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-    paddingHorizontal: 8,
-  },
-  subTab: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    gap: 6,
-    borderBottomWidth: 2,
-    borderBottomColor: 'transparent',
-  },
-  subTabActive: {
-    borderBottomColor: HOA_TAB_ACCENT,
-  },
-  subTabText: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: '#6b7280',
-  },
-  subTabTextActive: {
-    color: HOA_TAB_ACCENT,
-    fontWeight: '600',
   },
   safeArea: {
     flex: 1,
@@ -609,9 +612,49 @@ const styles = StyleSheet.create({
     textShadow: '2px 2px 4px rgba(0, 0, 0, 0.9)' as any,
     textAlign: 'center',
   } as any),
+  emailBoardBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginHorizontal: 15,
+    marginTop: 15,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+    ...(Platform.OS === 'web' && { cursor: 'pointer' as any }),
+  },
+  emailBoardIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff7ed',
+  },
+  emailBoardTextWrap: {
+    flex: 1,
+  },
+  emailBoardTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  emailBoardAddress: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginTop: 2,
+  },
+  memberGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: MEMBER_GRID_GAP,
+    padding: 15,
+  },
   memberCard: {
     backgroundColor: '#ffffff',
-    margin: 15,
     borderRadius: 16,
     padding: 24,
     shadowColor: '#000',
@@ -626,6 +669,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     marginBottom: 20,
     alignItems: 'flex-start',
+  },
+  memberHeaderOnly: {
+    marginBottom: 0,
   },
   avatarContainer: {
     marginRight: 16,
@@ -667,11 +713,15 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#4b5563',
     fontStyle: 'italic',
-    marginTop: 12,
-    marginBottom: 16,
+    // Header's marginBottom already separates the bio; card padding closes the bottom
+    marginTop: 0,
+    marginBottom: 0,
     lineHeight: 22,
     fontWeight: '400',
     paddingHorizontal: 4,
+  },
+  contactSectionAfterBio: {
+    marginTop: 16,
   },
   contactSection: {
     paddingTop: 16,

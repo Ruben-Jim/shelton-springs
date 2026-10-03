@@ -255,6 +255,17 @@ export default defineSchema({
     ),
     fileStorageId: v.string(), // Storage ID for document file (PDF, etc.); first page for multi-photo docs
     imageStorageIds: v.optional(v.array(v.string())), // Ordered photo pages (page 1, 2, ...) for multi-photo docs
+    // Ordered pages that can mix photos and files (PDF/Word); newer clients read this first
+    attachments: v.optional(
+      v.array(
+        v.object({
+          storageId: v.string(),
+          kind: v.union(v.literal("image"), v.literal("file")),
+          name: v.optional(v.string()),
+          mimeType: v.optional(v.string()),
+        })
+      )
+    ),
     uploadedBy: v.string(), // User who uploaded the document
     createdAt: v.number(),
     updatedAt: v.number(),

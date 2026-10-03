@@ -6,14 +6,11 @@ import {
   StyleSheet,
   Text,
   Animated,
-  Dimensions,
   Modal,
   Platform,
   Image,
   ScrollView,
   Alert,
-  KeyboardAvoidingView,
-  ActivityIndicator,
   AppState,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
@@ -34,6 +31,8 @@ import { ensurePhotoLibraryAccess } from '../utils/ensurePhotoLibraryAccess';
 import { promptForNotificationAccess, openNotificationSettings } from '../utils/ensureNotificationAccess';
 import enhancedUnifiedNotificationManager from '../services/EnhancedUnifiedNotificationManager';
 import ProfileSettingsSheet from './profile/ProfileSettingsSheet';
+import IosFormSheet from './ios/IosFormSheet';
+import { isMainTabRoute, switchMainTab } from '../navigation/mainTabs';
 
 interface TabItem {
   name: string;
@@ -81,8 +80,6 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
   
   const slideAnim = useRef(new Animated.Value(-300)).current;
   const overlayOpacity = useRef(new Animated.Value(0)).current;
-  const profileModalOpacity = useRef(new Animated.Value(0)).current;
-  const profileModalTranslateY = useRef(new Animated.Value(300)).current;
 
   const syncNotificationStatus = useCallback(async (shouldSyncToken = false) => {
     if (Platform.OS === 'web') return;
@@ -135,25 +132,6 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
   }, [externalIsMenuOpen]);
 
   // Handle profile modal animation when visibility changes
-  useEffect(() => {
-    if (showProfileModal) {
-      // Make content visible immediately
-      profileModalOpacity.setValue(1);
-      profileModalTranslateY.setValue(0);
-      // Optional: Add a subtle animation
-      profileModalTranslateY.setValue(50);
-      Animated.spring(profileModalTranslateY, {
-        toValue: 0,
-        tension: 100,
-        friction: 8,
-        useNativeDriver: Platform.OS !== 'web',
-      }).start();
-    } else {
-      // Reset animation values when closing
-      profileModalOpacity.setValue(0);
-      profileModalTranslateY.setValue(300);
-    }
-  }, [showProfileModal]);
 
   // Rainbow colors for tabs
   const borderColors = [
@@ -176,7 +154,7 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
   ];
 
   const handleTabPress = (tabName: string) => {
-    navigation.navigate(tabName as never);
+    if (isMainTabRoute(tabName)) switchMainTab(navigation, tabName);
     closeMenu();
   };
 
@@ -292,39 +270,12 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
     }
   };
 
-  const animateProfileModalIn = () => {
-    Animated.parallel([
-      Animated.timing(profileModalOpacity, {
-        toValue: 1,
-        duration: 300,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-      Animated.spring(profileModalTranslateY, {
-        toValue: 0,
-        tension: 100,
-        friction: 8,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-    ]).start();
-  };
+  const busyWithProfile = uploading || removing || deleting;
 
-  const animateProfileModalOut = (callback?: () => void) => {
-    Animated.parallel([
-      Animated.timing(profileModalOpacity, {
-        toValue: 0,
-        duration: 250,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-      Animated.timing(profileModalTranslateY, {
-        toValue: 300,
-        duration: 250,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-    ]).start(() => {
-      if (callback && typeof callback === 'function') {
-        callback();
-      }
-    });
+  /** Close the Account sheet (it slides out on its own) and drop any unsaved photo. */
+  const closeProfileSheet = () => {
+    setShowProfileModal(false);
+    setProfileImage(null);
   };
 
   const handleRemoveProfileImage = async () => {
@@ -403,10 +354,7 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
         hideAlert();
       }, 2000);
 
-      animateProfileModalOut(() => {
-        setShowProfileModal(false);
-        setProfileImage(null);
-      });
+      closeProfileSheet();
     } catch (error) {
     if (isTestUserReadOnlyError(error)) return;
       console.error('Error updating profile image:', error);
@@ -569,11 +517,9 @@ const handleDeleteAccount = () => {
       setNotificationsEnabled(false);
       if (result.needsSettings) {
         if (showProfileModal) {
-          animateProfileModalOut(() => {
-            setShowProfileModal(false);
-            setProfileImage(null);
-            setTimeout(offerNotificationSettings, 300);
-          });
+          closeProfileSheet();
+          // Let the sheet finish sliding out before the settings prompt appears
+          setTimeout(offerNotificationSettings, 350);
         } else {
           offerNotificationSettings();
         }
@@ -635,6 +581,7 @@ const handleDeleteAccount = () => {
             >
               {tabs.map((tab, index) => {
                 const isActive = route.name === tab.name;
+                const tabColor = borderColors[index % borderColors.length];
                 return (
                   <TouchableOpacity
                     key={tab.name}
@@ -642,9 +589,11 @@ const handleDeleteAccount = () => {
                       styles.menuItem, 
                       isActive && styles.activeMenuItem,
                       {
-                        borderLeftColor: borderColors[index % borderColors.length],
+                        borderLeftColor: tabColor,
                         borderLeftWidth: 4,
-                      }
+                      },
+                      // Light tint of the tab's own color (8-digit hex: ~8% opacity)
+                      isActive && { backgroundColor: `${tabColor}14` },
                     ]}
                     onPress={() => handleTabPress(tab.name)}
                   >
@@ -652,17 +601,17 @@ const handleDeleteAccount = () => {
                       <Ionicons
                         name={tab.icon as any}
                         size={24}
-                        color={isActive ? borderColors[index % borderColors.length] : tab.color}
+                        color={isActive ? tabColor : tab.color}
                       />
                       <Text style={[
                         styles.menuItemText, 
-                        isActive && [styles.activeMenuItemText, { color: borderColors[index % borderColors.length] }]
+                        isActive && [styles.activeMenuItemText, { color: tabColor }]
                       ]}>
                         {tab.label}
                       </Text>
                     </View>
                     {isActive && (
-                      <View style={[styles.activeIndicator, { backgroundColor: borderColors[index % borderColors.length] }]} />
+                      <View style={[styles.activeIndicator, { backgroundColor: tabColor }]} />
                     )}
                   </TouchableOpacity>
                 );
@@ -727,79 +676,35 @@ const handleDeleteAccount = () => {
         </Animated.View>
       </Modal>
 
-      {/* Profile Image Edit Modal */}
-      <Modal
-        key={`profile-modal-${showProfileModal ? 'open' : 'closed'}`}
+      {/* Account settings: shared bottom sheet (drag to resize/close; locked while saving) */}
+      <IosFormSheet
         visible={showProfileModal}
-        transparent={true}
-        animationType="none"
-        onRequestClose={() => {
-          if (!uploading && !removing) {
-            animateProfileModalOut(() => {
-              setShowProfileModal(false);
-              setProfileImage(null);
-            });
-          }
-        }}
-        presentationStyle="overFullScreen"
-        statusBarTranslucent={true}
+        onClose={closeProfileSheet}
+        dismissEnabled={!busyWithProfile}
       >
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            style={styles.profileModalKeyboardView}
-          >
-            <View
-              style={[
-                styles.profileModalOverlay,
-                Platform.OS !== 'web' && styles.profileModalOverlayMobile,
-              ]}
-              pointerEvents="auto"
-            >
-              <TouchableOpacity
-                style={styles.profileModalOverlayTouchable}
-                activeOpacity={1}
-                onPress={() => {
-                  if (!uploading && !removing) {
-                    animateProfileModalOut(() => {
-                      setShowProfileModal(false);
-                      setProfileImage(null);
-                    });
-                  }
-                }}
-                disabled={uploading || removing}
-              />
-              <ProfileSettingsSheet
-                onClose={() => {
-                  if (!uploading && !removing) {
-                    animateProfileModalOut(() => {
-                      setShowProfileModal(false);
-                      setProfileImage(null);
-                    });
-                  }
-                }}
-                modalOpacity={profileModalOpacity}
-                modalTranslateY={profileModalTranslateY}
-                currentUser={currentUser}
-                profileImage={profileImage}
-                displayImage={displayImage}
-                uploading={uploading}
-                removing={removing}
-                deleting={deleting}
-                notificationsEnabled={notificationsEnabled}
-                requestingNotifications={requestingNotifications}
-                readOnly={isReadOnly}
-                onPickImage={() => guardPress(pickImage)}
-                onTakePhoto={() => guardPress(takePhoto)}
-                onRemoveProfileImage={() => guardPress(() => { void handleRemoveProfileImage(); })}
-                onSaveProfileImage={() => guardPress(() => { void handleSaveProfileImage(); })}
-                onCancelProfileImage={() => setProfileImage(null)}
-                onEnableNotifications={handleEnableNotifications}
-                onSignOut={handleSignOut}
-                onDeleteAccount={() => guardPress(handleDeleteAccount)}
-              />
-            </View>
-        </KeyboardAvoidingView>
-      </Modal>
+        <ProfileSettingsSheet
+          onClose={() => {
+            if (!busyWithProfile) closeProfileSheet();
+          }}
+          currentUser={currentUser}
+          profileImage={profileImage}
+          displayImage={displayImage}
+          uploading={uploading}
+          removing={removing}
+          deleting={deleting}
+          notificationsEnabled={notificationsEnabled}
+          requestingNotifications={requestingNotifications}
+          readOnly={isReadOnly}
+          onPickImage={() => guardPress(pickImage)}
+          onTakePhoto={() => guardPress(takePhoto)}
+          onRemoveProfileImage={() => guardPress(() => { void handleRemoveProfileImage(); })}
+          onSaveProfileImage={() => guardPress(() => { void handleSaveProfileImage(); })}
+          onCancelProfileImage={() => setProfileImage(null)}
+          onEnableNotifications={handleEnableNotifications}
+          onSignOut={handleSignOut}
+          onDeleteAccount={() => guardPress(handleDeleteAccount)}
+        />
+      </IosFormSheet>
 
       {/* Custom Alert - kept for other potential uses */}
       <CustomAlert
@@ -876,7 +781,6 @@ const styles = StyleSheet.create({
     }),
   },
   activeMenuItem: {
-    backgroundColor: '#f0f9ff',
     borderLeftWidth: 4,
     borderLeftColor: '#ef4444',
   },
@@ -953,66 +857,6 @@ const styles = StyleSheet.create({
   settingsButtonPressed: {
     backgroundColor: '#e5e7eb',
     opacity: 0.8,
-  },
-  profileModalKeyboardView: {
-    flex: 1,
-  },
-  profileModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  profileModalOverlayMobile: {
-    justifyContent: 'flex-end',
-    alignItems: 'stretch',
-  },
-  profileModalOverlayTouchable: {
-    flex: 1,
-  },
-  profileModalContent: {
-    backgroundColor: '#ffffff',
-    borderRadius: 24,
-    padding: 0,
-    width: '90%',
-    maxHeight: '90%',
-    minHeight: '76%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 15,
-    overflow: 'hidden',
-  },
-  profileModalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 20,
-    paddingTop: 24,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-    backgroundColor: '#f8fafc',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-  },
-  profileModalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#1f2937',
-    flex: 1,
-    textAlign: 'center',
-    marginRight: 24,
-  },
-  profileModalBody: {
-    flex: 1,
-  },
-  profileModalBodyContent: {
-    paddingHorizontal: 24,
-    paddingTop: 20,
-    paddingBottom: 40,
-    flexGrow: 1,
   },
   profileImageDisplayContainer: {
     alignItems: 'center',

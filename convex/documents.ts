@@ -1,8 +1,30 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation, QueryCtx } from "./_generated/server";
+import { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { api } from "./_generated/api";
 
 const MAX_DOCUMENT_PAGES = 10;
+
+const attachmentValidator = v.object({
+  storageId: v.string(),
+  kind: v.union(v.literal("image"), v.literal("file")),
+  name: v.optional(v.string()),
+  mimeType: v.optional(v.string()),
+});
+
+/**
+ * Adds the stored file's content type so clients can tell a single photo from a PDF/Word file
+ * (single-file documents only store fileStorageId). Extra field; older clients ignore it.
+ */
+async function withFileContentType(ctx: QueryCtx, documents: Doc<"documents">[]) {
+  return Promise.all(
+    documents.map(async (document) => {
+      const fileId = ctx.db.system.normalizeId("_storage", document.fileStorageId);
+      const file = fileId ? await ctx.db.system.get(fileId) : null;
+      return { ...document, fileContentType: file?.contentType ?? null };
+    })
+  );
+}
 
 export const getAll = query({
   args: {},
@@ -11,7 +33,7 @@ export const getAll = query({
       .query("documents")
       .order("desc")
       .collect();
-    return documents;
+    return withFileContentType(ctx, documents);
   },
 });
 
@@ -36,7 +58,7 @@ export const getPaginated = query({
     const documents = allDocuments.slice(offset, offset + limit);
     
     return {
-      items: documents,
+      items: await withFileContentType(ctx, documents),
       total,
     };
   },
@@ -50,7 +72,7 @@ export const getByType = query({
       .withIndex("by_type", (q) => q.eq("type", args.type))
       .order("desc")
       .collect();
-    return documents;
+    return withFileContentType(ctx, documents);
   },
 });
 
@@ -62,11 +84,16 @@ export const create = mutation({
     fileStorageId: v.string(),
     // Ordered photo pages; fileStorageId should be the first page so older clients still show page 1
     imageStorageIds: v.optional(v.array(v.string())),
+    // Ordered pages mixing photos and files; fileStorageId should match the first one
+    attachments: v.optional(v.array(attachmentValidator)),
     uploadedBy: v.string(),
   },
   handler: async (ctx, args) => {
     if (args.imageStorageIds && args.imageStorageIds.length > MAX_DOCUMENT_PAGES) {
       throw new Error(`A document can have at most ${MAX_DOCUMENT_PAGES} photos.`);
+    }
+    if (args.attachments && args.attachments.length > MAX_DOCUMENT_PAGES) {
+      throw new Error(`A document can have at most ${MAX_DOCUMENT_PAGES} files or photos.`);
     }
     const now = Date.now();
     const documentId = await ctx.db.insert("documents", {
@@ -75,6 +102,7 @@ export const create = mutation({
       type: args.type,
       fileStorageId: args.fileStorageId,
       imageStorageIds: args.imageStorageIds?.length ? args.imageStorageIds : undefined,
+      attachments: args.attachments && args.attachments.length > 1 ? args.attachments : undefined,
       uploadedBy: args.uploadedBy,
       createdAt: now,
       updatedAt: now,
@@ -104,9 +132,13 @@ export const remove = mutation({
     // Get the document to retrieve file storage ID before deletion
     const document = await ctx.db.get(args.id);
     
-    // Delete every storage file associated with the document (main file + photo pages)
+    // Delete every storage file associated with the document (main file + photo/file pages)
     const storageIds = new Set<string>(
-      [document?.fileStorageId, ...(document?.imageStorageIds ?? [])].filter(
+      [
+        document?.fileStorageId,
+        ...(document?.imageStorageIds ?? []),
+        ...(document?.attachments ?? []).map((a) => a.storageId),
+      ].filter(
         (id): id is string => !!id
       )
     );

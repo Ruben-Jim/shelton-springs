@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useMessaging } from '../context/MessagingContext';
+import { useMessaging, getStaffLabel } from '../context/MessagingContext';
 
 interface MinimizedMessageBubbleProps {
   onPress: () => void;
@@ -90,7 +90,8 @@ const MinimizedMessageBubble: React.FC<MinimizedMessageBubbleProps> = ({ onPress
   }
 
   const latestConv = conversations[0];
-  const preview = latestMessagePreview || 'New message from Shelton Springs Board';
+  const staffLabel = getStaffLabel(latestConv?.otherParticipant);
+  const preview = latestMessagePreview || `New message from ${staffLabel}`;
 
   return (
     <Animated.View
@@ -118,7 +119,7 @@ const MinimizedMessageBubble: React.FC<MinimizedMessageBubbleProps> = ({ onPress
           <Ionicons name="chatbubble-ellipses" size={24} color="#2563eb" />
         </View>
         <View style={styles.content}>
-          <Text style={styles.fromText}>From: Shelton Springs Board</Text>
+          <Text style={styles.fromText}>From: {staffLabel}</Text>
           <Text style={styles.previewText} numberOfLines={2}>
             {preview}
           </Text>

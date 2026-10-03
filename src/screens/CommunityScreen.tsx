@@ -36,6 +36,7 @@ import BoardMemberIndicator from '../components/BoardMemberIndicator';
 import DeveloperIndicator from '../components/DeveloperIndicator';
 import CommunityForumHeader from '../components/CommunityForumHeader';
 import { DesktopTabBarSlot, useDesktopTabBarScrollSync } from '../components/DesktopTabBarLayer';
+import { useWindowWidth } from '../hooks/useWindowWidth';
 import MobileTabBar from '../components/MobileTabBar';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
@@ -51,26 +52,17 @@ import { notifyNewCommunityPost, notifyNewComment, notifyNewPoll, notifyResident
 import ScrollToTopButton from '../components/ScrollToTopButton';
 import { useScrollToTop } from '../hooks/useScrollToTop';
 import { HERO_TAB_CONTAINER_STYLE, HERO_TAB_SAFE_AREA_EDGES, HERO_TAB_SAFE_AREA_STYLE } from '../hooks/useHeroHeaderPadding';
+import Reanimated from 'react-native-reanimated';
+import { useTabEntranceStyle } from '../components/motion/TabEntrance';
+import { SECTION_ACCENTS, DESKTOP_CONTENT_STYLE } from '../constants/hoaTheme';
+import { COMMUNITY_SUB_TABS, CommunitySubTabId } from '../navigation/mainTabs';
+import SubTabBar from '../components/SubTabBar';
 
 // Stable component reference so list re-renders don't remount images (prevents image flash)
 const COMMUNITY_DAMAGE_UPDATE_VERSION = '2026-07-community-damage-v1';
 
-type CommunitySubTabId = 'posts' | 'polls' | 'notifications' | 'pets' | 'damage';
-
 const COMMUNITY_DEFAULT_SUB_TAB: CommunitySubTabId = 'posts';
 
-/** Tab bar order only; default subtab when opening Community is still Posts. */
-const COMMUNITY_SUB_TABS: ReadonlyArray<{
-  id: CommunitySubTabId;
-  label: string;
-  icon: keyof typeof Ionicons.glyphMap;
-}> = [
-  { id: 'damage', label: 'Damage Report', icon: 'construct' },
-  { id: 'posts', label: 'Posts', icon: 'chatbubbles' },
-  { id: 'polls', label: 'Polls', icon: 'bar-chart' },
-  { id: 'notifications', label: 'Moving/Leaving', icon: 'home' },
-  { id: 'pets', label: 'Pet Registration', icon: 'paw' },
-];
 
 const PostImage = ({
   storageId,
@@ -106,7 +98,7 @@ const CommunityScreen = () => {
   const { setShowOverlay } = useMessaging();
   const convex = useConvex();
   const { isReadOnly } = useIsTestUserReadOnly();
-  const isBoardMember = user?.isBoardMember && user?.isActive;
+  const hasBoardAccess = Boolean(user?.isActive && (user?.isBoardMember || user?.isDev));
   const route = useRoute();
   const isFocused = useIsFocused();
   const { alertState, showAlert, hideAlert } = useCustomAlert();
@@ -215,7 +207,8 @@ const CommunityScreen = () => {
   ];
 
   // State for dynamic responsive behavior (only for web/desktop)
-  const [screenWidth, setScreenWidth] = useState(Dimensions.get('window').width);
+  // Shared, frame-throttled width; paused while this screen sits under another one
+  const screenWidth = useWindowWidth(isFocused);
   
   // Dynamic responsive check - show mobile nav when screen is too narrow for desktop nav
   // On mobile, always show mobile nav regardless of screen size
@@ -230,7 +223,7 @@ const CommunityScreen = () => {
       activeSubTab === 'damage');
   const showFloatingAddButton =
     !hasDesktopAddButton &&
-    ((activeSubTab === 'polls' && isBoardMember) || activeSubTab !== 'polls');
+    ((activeSubTab === 'polls' && hasBoardAccess) || activeSubTab !== 'polls');
 
   // Animation values
   const postModalOpacity = useRef(new Animated.Value(0)).current;
@@ -244,6 +237,9 @@ const CommunityScreen = () => {
   const imageModalOpacity = useRef(new Animated.Value(0)).current;
   const imageModalTranslateY = useRef(new Animated.Value(300)).current;
   const contentAnim = useRef(new Animated.Value(1)).current;
+  // Tab entrance: sub-tabs rise in first, content a beat later (runs once per tab open, not per sub-tab)
+  const subTabsEntranceStyle = useTabEntranceStyle(0);
+  const contentEntranceStyle = useTabEntranceStyle(70);
   
   // Scroll reference for better control
   const listRef = useRef<FlatList<any>>(null);
@@ -291,17 +287,6 @@ const CommunityScreen = () => {
         }
       : {}),
   };
-
-  // Listen for window size changes (only on web/desktop)
-  useEffect(() => {
-    if (Platform.OS === 'web') {
-      const subscription = Dimensions.addEventListener('change', ({ window }) => {
-        setScreenWidth(window.width);
-      });
-
-      return () => subscription?.remove();
-    }
-  }, []);
 
   // Set initial cursor and cleanup on unmount (web only)
   useEffect(() => {
@@ -2035,30 +2020,18 @@ const CommunityScreen = () => {
 
   const communitySubTabsRow = useMemo(
     () => (
-      <View style={styles.subTabContainer}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.subTabContent}
-          style={styles.subTabScrollView}
-        >
-          {COMMUNITY_SUB_TABS.map(({ id, label, icon }) => {
-            const isActive = activeSubTab === id;
-            return (
-              <TouchableOpacity
-                key={id}
-                style={[styles.subTabButton, isActive && styles.subTabButtonActive]}
-                onPress={() => setActiveSubTab(id)}
-              >
-                <Ionicons name={icon} size={18} color={isActive ? '#eab308' : '#6b7280'} />
-                <Text style={[styles.subTabButtonText, isActive && styles.subTabButtonTextActive]}>{label}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </View>
+      <Reanimated.View style={[styles.subTabContainer, subTabsEntranceStyle]}>
+        <SubTabBar
+          tabs={COMMUNITY_SUB_TABS}
+          activeId={activeSubTab}
+          onChange={setActiveSubTab}
+          accent={SECTION_ACCENTS.Community}
+          desktop={showDesktopNav}
+          scrollOnMobile
+        />
+      </Reanimated.View>
     ),
-    [activeSubTab]
+    [activeSubTab, subTabsEntranceStyle, showDesktopNav]
   );
 
   const communityHeaderBlock = useMemo(
@@ -2067,7 +2040,7 @@ const CommunityScreen = () => {
         <CommunityForumHeader
           screenWidth={screenWidth}
           showMobileNav={showMobileNav}
-          isBoardMember={!!isBoardMember}
+          hasBoardAccess={hasBoardAccess}
           onOpenMenu={openCommunityMenu}
           onOpenMessaging={openMessagingOverlay}
           animatedOpacity={fadeAnim}
@@ -2080,7 +2053,7 @@ const CommunityScreen = () => {
       screenWidth,
       showMobileNav,
       showDesktopNav,
-      isBoardMember,
+      hasBoardAccess,
       openCommunityMenu,
       openMessagingOverlay,
       fadeAnim,
@@ -2090,8 +2063,8 @@ const CommunityScreen = () => {
 
   const postsFilterRow = useMemo(
     () => (
-      <View style={styles.categoryContainer}>
-        <View style={styles.filterRow}>
+      <Reanimated.View style={[styles.categoryContainer, contentEntranceStyle]}>
+        <View style={[styles.filterRow, showDesktopNav && DESKTOP_CONTENT_STYLE]}>
           <View style={styles.filterLabelContainer}>
             <Ionicons name="filter" size={16} color="#6b7280" style={styles.filterIcon} />
             <Text style={styles.filterLabel}>Filter:</Text>
@@ -2136,9 +2109,9 @@ const CommunityScreen = () => {
             </View>
           )}
         </View>
-      </View>
+      </Reanimated.View>
     ),
-    [selectedCategory, categories, showDesktopNav, buttonScale]
+    [selectedCategory, categories, showDesktopNav, buttonScale, contentEntranceStyle]
   );
 
   const postsListHeaderElement = useMemo(
@@ -2170,7 +2143,7 @@ const CommunityScreen = () => {
             },
           ]}
         >
-          <View style={styles.filterRow}>
+          <View style={[styles.filterRow, showDesktopNav && DESKTOP_CONTENT_STYLE]}>
             <View style={styles.filterLabelContainer}>
               <Ionicons name="filter" size={16} color="#6b7280" style={styles.filterIcon} />
               <Text style={styles.filterLabel}>Filter:</Text>
@@ -2245,7 +2218,7 @@ const CommunityScreen = () => {
             },
           ]}
         >
-          <View style={styles.filterRow}>
+          <View style={[styles.filterRow, showDesktopNav && DESKTOP_CONTENT_STYLE]}>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -2383,7 +2356,7 @@ const CommunityScreen = () => {
   };
 
   const renderPostsEmpty = () => (
-    <View style={styles.contentWrapper}>
+    <View style={[styles.contentWrapper, showDesktopNav && DESKTOP_CONTENT_STYLE]}>
       {postsLoading ? (
         <View style={styles.emptyState}>
           <ActivityIndicator size="large" color="#cbd5e1" />
@@ -2399,7 +2372,7 @@ const CommunityScreen = () => {
   );
 
   const renderPostItem = ({ item, index }: { item: any; index: number }) => (
-    <View style={styles.postItemWrapper}>
+    <Reanimated.View style={[styles.postItemWrapper, showDesktopNav && DESKTOP_CONTENT_STYLE, contentEntranceStyle]}>
       <View
         style={[
           styles.postCard,
@@ -2616,7 +2589,7 @@ const CommunityScreen = () => {
           </View>
         )}
       </View>
-    </View>
+    </Reanimated.View>
   );
 
   return (
@@ -2667,7 +2640,7 @@ const CommunityScreen = () => {
           {renderTopContent()}
         
         {/* Content with padding */}
-        <View style={styles.contentWrapper}>
+        <Reanimated.View style={[styles.contentWrapper, showDesktopNav && DESKTOP_CONTENT_STYLE, contentEntranceStyle]}>
           {activeSubTab === 'polls' ? (
             pollsContent.length > 0 ? (
               <View style={styles.postsContainer}>
@@ -3135,7 +3108,7 @@ const CommunityScreen = () => {
               </View>
             )
           ) : null}
-        </View>
+        </Reanimated.View>
         
         {/* Additional content to ensure scrollable content */}
         <View style={styles.spacer} />
@@ -3155,7 +3128,7 @@ const CommunityScreen = () => {
               if (activeSubTab === 'posts') {
                 setShowNewPostModal(true);
                 animateIn('post');
-              } else if (activeSubTab === 'polls' && isBoardMember) {
+              } else if (activeSubTab === 'polls' && hasBoardAccess) {
                 setShowPollModal(true);
               } else if (activeSubTab === 'notifications') {
                 handleAddNotification();
@@ -5193,43 +5166,10 @@ const styles = StyleSheet.create({
   },
   // Sub-tab styles
   subTabContainer: {
+    // SubTabBar draws the strip and its border; this wrapper keeps it above scrolled content
     backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
     zIndex: 10,
     elevation: 5,
-  },
-  subTabRow: {
-    flexDirection: 'row',
-    paddingHorizontal: 8,
-  },
-  subTabScrollView: {
-    // Don't use flex: 1 - it causes the ScrollView to collapse to 0 height on iOS
-    // when the parent derives height from content (circular dependency)
-  },
-  subTabContent: {
-    paddingHorizontal: 8,
-  },
-  subTabButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    gap: 6,
-    borderBottomWidth: 2,
-    borderBottomColor: 'transparent',
-  },
-  subTabButtonActive: {
-    borderBottomColor: '#eab308',
-  },
-  subTabButtonText: {
-    fontSize: 13,
-    color: '#6b7280',
-    fontWeight: '500',
-  },
-  subTabButtonTextActive: {
-    color: '#eab308',
-    fontWeight: '600',
   },
   // Action buttons container
   actionButtonsContainer: {

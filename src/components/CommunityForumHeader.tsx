@@ -5,7 +5,7 @@ import TabHeroHeader from './TabHeroHeader';
 type CommunityForumHeaderProps = {
   screenWidth: number;
   showMobileNav: boolean;
-  isBoardMember: boolean;
+  hasBoardAccess: boolean;
   onOpenMenu: () => void;
   onOpenMessaging: () => void;
   animatedOpacity?: Animated.Value;
@@ -14,7 +14,7 @@ type CommunityForumHeaderProps = {
 function CommunityForumHeader({
   screenWidth,
   showMobileNav,
-  isBoardMember,
+  hasBoardAccess,
   onOpenMenu,
   onOpenMessaging,
   animatedOpacity,
@@ -23,7 +23,7 @@ function CommunityForumHeader({
     <TabHeroHeader
       screenWidth={screenWidth}
       showMobileNav={showMobileNav}
-      isBoardMember={isBoardMember}
+      hasBoardAccess={hasBoardAccess}
       onOpenMenu={onOpenMenu}
       onOpenMessaging={onOpenMessaging}
       title="Community Forum"
