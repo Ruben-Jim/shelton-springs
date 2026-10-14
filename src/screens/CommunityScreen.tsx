@@ -24,7 +24,6 @@ import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useIsFocused } from '@react-navigation/native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery } from 'convex/react';
 import { useGuardedMutation, isTestUserReadOnlyError, useIsTestUserReadOnly } from '../hooks/useGuardedMutation';
 import { useConvex } from 'convex/react';
@@ -58,12 +57,9 @@ import { SECTION_ACCENTS, DESKTOP_CONTENT_STYLE } from '../constants/hoaTheme';
 import { COMMUNITY_SUB_TABS, CommunitySubTabId } from '../navigation/mainTabs';
 import SubTabBar from '../components/SubTabBar';
 
-// Stable component reference so list re-renders don't remount images (prevents image flash)
-const COMMUNITY_DAMAGE_UPDATE_VERSION = '2026-07-community-damage-v1';
-
 const COMMUNITY_DEFAULT_SUB_TAB: CommunitySubTabId = 'posts';
 
-
+// Stable component reference so list re-renders don't remount images (prevents image flash)
 const PostImage = ({
   storageId,
   onPress,
@@ -112,7 +108,6 @@ const CommunityScreen = () => {
   const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
   const [loadedComments, setLoadedComments] = useState<{[postId: string]: any[]}>({});
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [showDamageUpdateNoticeModal, setShowDamageUpdateNoticeModal] = useState(false);
   
   // Pagination state
   const [postsLimit, setPostsLimit] = useState(20);
@@ -502,50 +497,10 @@ const CommunityScreen = () => {
     }
   }, [route.params]);
 
-  // One-time damage report announcement when Community tab is opened
-  useEffect(() => {
-    if (!isFocused) return;
-
-    let cancelled = false;
-    const storageKey = `community_damage_notice_seen_${COMMUNITY_DAMAGE_UPDATE_VERSION}_${user?._id ?? 'guest'}`;
-
-    const maybeShowDamageUpdateNotice = async () => {
-      try {
-        const seen = await AsyncStorage.getItem(storageKey);
-        if (seen === 'true' || cancelled) return;
-        requestAnimationFrame(() => {
-          if (!cancelled) {
-            setShowDamageUpdateNoticeModal(true);
-          }
-        });
-      } catch (error) {
-    if (isTestUserReadOnlyError(error)) return;
-        // Best effort only.
-      }
-    };
-
-    maybeShowDamageUpdateNotice();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isFocused, user?._id]);
-
   useEffect(() => {
     if (!isFocused) return;
     requestAnimationFrame(() => syncDesktopTabBar());
   }, [isFocused, syncDesktopTabBar]);
-
-  const handleDismissDamageUpdateNotice = async () => {
-    const storageKey = `community_damage_notice_seen_${COMMUNITY_DAMAGE_UPDATE_VERSION}_${user?._id ?? 'guest'}`;
-    try {
-      await AsyncStorage.setItem(storageKey, 'true');
-    } catch (error) {
-    if (isTestUserReadOnlyError(error)) return;
-      // Best effort only.
-    }
-    setShowDamageUpdateNoticeModal(false);
-  };
 
   // Clear selected post when navigating away from posts tab
   useEffect(() => {
@@ -3146,54 +3101,6 @@ const CommunityScreen = () => {
       )}
 
       <ScrollToTopButton visible={showScrollToTop} onPress={scrollToTop} />
-
-      <Modal
-        visible={showDamageUpdateNoticeModal}
-        transparent
-        animationType="fade"
-      >
-        <View style={styles.damageUpdateModalOverlay}>
-          <View style={styles.damageUpdateModalContent}>
-            <View style={styles.damageUpdatePreview}>
-              <View style={styles.damageUpdatePreviewHeader}>
-                <Ionicons name="construct" size={18} color="#b45309" />
-                <Text style={styles.damageUpdatePreviewTitle}>Report Damage</Text>
-              </View>
-              <View style={styles.damageUpdatePreviewChipRow}>
-                <View style={[styles.damageUpdatePreviewChip, styles.damageUpdatePreviewChipActive]}>
-                  <Text style={styles.damageUpdatePreviewChipTextActive}>Landscaping</Text>
-                </View>
-                <View style={styles.damageUpdatePreviewChip}>
-                  <Text style={styles.damageUpdatePreviewChipText}>General</Text>
-                </View>
-              </View>
-              <View style={styles.damageUpdatePreviewInput} />
-              <View style={styles.damageUpdatePreviewButton}>
-                <Text style={styles.damageUpdatePreviewButtonText}>Submit Report</Text>
-              </View>
-            </View>
-            <Text style={styles.damageUpdateModalTitle}>New Damage Reports</Text>
-            <Text style={styles.damageUpdateModalMessage}>
-              Open the Damage tab to report issues, add photos, and track status.
-            </Text>
-            <TouchableOpacity
-              style={styles.damageUpdateModalPrimaryButton}
-              onPress={() => {
-                setActiveSubTab('damage');
-                handleDismissDamageUpdateNotice();
-              }}
-            >
-              <Text style={styles.damageUpdateModalPrimaryButtonText}>Open Damage Tab</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.damageUpdateModalSecondaryButton}
-              onPress={handleDismissDamageUpdateNotice}
-            >
-              <Text style={styles.damageUpdateModalSecondaryButtonText}>Got it</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
 
       {/* New Post Modal */}
       <Modal
@@ -6035,117 +5942,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'flex-end',
     gap: 12,
-  },
-  damageUpdateModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  damageUpdateModalContent: {
-    width: '100%',
-    maxWidth: 420,
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 16,
-  },
-  damageUpdatePreview: {
-    backgroundColor: '#fffbeb',
-    borderWidth: 1,
-    borderColor: '#fde68a',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
-  },
-  damageUpdatePreviewHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 10,
-  },
-  damageUpdatePreviewTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#92400e',
-  },
-  damageUpdatePreviewChipRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 10,
-  },
-  damageUpdatePreviewChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: '#f3f4f6',
-  },
-  damageUpdatePreviewChipActive: {
-    backgroundColor: '#eab308',
-  },
-  damageUpdatePreviewChipText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#6b7280',
-  },
-  damageUpdatePreviewChipTextActive: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#ffffff',
-  },
-  damageUpdatePreviewInput: {
-    height: 72,
-    borderRadius: 10,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    marginBottom: 10,
-  },
-  damageUpdatePreviewButton: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#eab308',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  damageUpdatePreviewButtonText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#ffffff',
-  },
-  damageUpdateModalTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#1f2937',
-    marginBottom: 6,
-  },
-  damageUpdateModalMessage: {
-    fontSize: 14,
-    color: '#4b5563',
-    lineHeight: 20,
-    marginBottom: 14,
-  },
-  damageUpdateModalPrimaryButton: {
-    backgroundColor: '#eab308',
-    borderRadius: 10,
-    paddingVertical: 11,
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  damageUpdateModalPrimaryButtonText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#ffffff',
-  },
-  damageUpdateModalSecondaryButton: {
-    borderRadius: 10,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  damageUpdateModalSecondaryButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#6b7280',
   },
 });
 

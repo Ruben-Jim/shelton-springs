@@ -22,6 +22,7 @@ import type * as covenants from "../covenants.js";
 import type * as crons from "../crons.js";
 import type * as damageCategoryUtils from "../damageCategoryUtils.js";
 import type * as damageReports from "../damageReports.js";
+import type * as dataFixes from "../dataFixes.js";
 import type * as documents from "../documents.js";
 import type * as emailTemplates from "../emailTemplates.js";
 import type * as fees from "../fees.js";
@@ -60,6 +61,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   damageCategoryUtils: typeof damageCategoryUtils;
   damageReports: typeof damageReports;
+  dataFixes: typeof dataFixes;
   documents: typeof documents;
   emailTemplates: typeof emailTemplates;
   fees: typeof fees;

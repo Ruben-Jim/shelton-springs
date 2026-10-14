@@ -21,15 +21,17 @@ import { useStorageUrl } from '../../hooks/useStorageUrl';
 import { openDocument } from '../../utils/openDocument';
 import type { DocumentAttachment } from '../../utils/documentUpload';
 import ZoomableImage from './ZoomableImage';
+import WebPdfView from './WebPdfView';
 import IosFormSheet from '../ios/IosFormSheet';
 import { canPreviewInline, getPageFileType, PAGE_FILE_LABELS } from './documentPages';
 
 const ACCENT = '#2563eb';
 /**
  * iOS presents like the in-app browser: the native page sheet Safari's in-app view uses (card
- * slides up, swipe down to dismiss). Android uses the shared bottom sheet; narrow web is full screen.
+ * slides up, swipe down to dismiss). Android and narrow (phone) web use the shared bottom sheet.
  */
 const PRESENT_AS_PAGE_SHEET = Platform.OS === 'ios';
+const PRESENT_AS_BOTTOM_SHEET = Platform.OS === 'android' || Platform.OS === 'web';
 /** How long the sheet takes to slide in; heavy page views mount after it. */
 const SHEET_PRESENT_MS = 340;
 /** One system browser at a time (iOS refuses to present a second one). */
@@ -59,14 +61,6 @@ const openInSystemBrowser = async (url: string | undefined) => {
   }
 };
 
-/** Web inline PDF: the browser's own viewer in an iframe. */
-const WebFrame = ({ url, title }: { url: string; title: string }) =>
-  React.createElement('iframe', {
-    src: url,
-    title,
-    style: { border: 0, width: '100%', height: '100%', backgroundColor: '#ffffff' },
-  });
-
 /** iOS inline PDF/Word via WKWebView. Only required on iOS builds that include it. */
 const NativeDocView = ({ url }: { url: string }) => {
   const { WebView } = require('react-native-webview') as typeof import('react-native-webview');
@@ -85,13 +79,14 @@ const NativeDocView = ({ url }: { url: string }) => {
 };
 
 /**
- * Pages the viewer can't draw (Word on Android/web, or PDFs before the native renderer is in
- * the build): a file view that opens the in-app browser / Chrome tab (new tab on web) on tap.
+ * Pages the viewer can't draw (Word on Android/web, a PDF phone web couldn't render, or PDFs
+ * before the native renderer is in the build): a file view that opens the in-app browser /
+ * Chrome tab (new tab on web) on tap.
  */
 const ExternalPage = ({ page }: { page: DocumentAttachment }) => {
   const type = getPageFileType(page);
   const url = useStorageUrl(page.storageId);
-  const hint = !url ? 'Loading…' : Platform.OS === 'web' ? 'Click to open in a new tab' : 'Tap to open';
+  const hint = !url ? 'Loading…' : Platform.OS === 'web' ? 'Open in a new tab' : 'Tap to open';
 
   return (
     <Pressable
@@ -136,7 +131,7 @@ const AndroidPdfView = ({ page, url }: { page: DocumentAttachment; url: string }
   );
 };
 
-const InlineDocPage = ({ page, title }: { page: DocumentAttachment; title: string }) => {
+const InlineDocPage = ({ page }: { page: DocumentAttachment }) => {
   const url = useStorageUrl(page.storageId);
   if (!url) {
     return (
@@ -145,23 +140,35 @@ const InlineDocPage = ({ page, title }: { page: DocumentAttachment; title: strin
       </View>
     );
   }
-  if (Platform.OS === 'web') return <WebFrame url={url} title={title} />;
   if (Platform.OS === 'android') return <AndroidPdfView page={page} url={url} />;
   return <NativeDocView url={url} />;
+};
+
+/** Phone web PDF: pdf.js's page viewer (scroll through pages, pinch to zoom), or the open-in-new-tab page if it fails. */
+const WebPdfPage = ({ page, onZoomChange }: { page: DocumentAttachment; onZoomChange: (zoomed: boolean) => void }) => {
+  const url = useStorageUrl(page.storageId);
+  const [failed, setFailed] = useState(false);
+  if (failed) return <ExternalPage page={page} />;
+  if (!url) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator color={ACCENT} />
+      </View>
+    );
+  }
+  return <WebPdfView url={url} onZoomChange={onZoomChange} onError={() => setFailed(true)} />;
 };
 
 const BrowserPage = ({
   page,
   isCurrent,
   presented,
-  title,
   onZoomChange,
 }: {
   page: DocumentAttachment;
   isCurrent: boolean;
   /** False while the sheet is still sliding in */
   presented: boolean;
-  title: string;
   onZoomChange: (zoomed: boolean) => void;
 }) => {
   if (page.kind === 'image') {
@@ -177,7 +184,16 @@ const BrowserPage = ({
       </View>
     );
   }
-  return canPreviewInline(page) ? <InlineDocPage page={page} title={title} /> : <ExternalPage page={page} />;
+  // This browser only runs on narrow (phone) screens on web, whose browsers can't draw a PDF
+  // inside the page, so pdf.js does; Word opens in a new tab. Desktop uses DocumentViewer.
+  if (Platform.OS === 'web') {
+    return getPageFileType(page) === 'pdf' ? (
+      <WebPdfPage page={page} onZoomChange={onZoomChange} />
+    ) : (
+      <ExternalPage page={page} />
+    );
+  }
+  return canPreviewInline(page) ? <InlineDocPage page={page} /> : <ExternalPage page={page} />;
 };
 
 /**
@@ -191,6 +207,7 @@ export default function DocumentPageBrowser({ visible, title, pages, initialInde
   const [index, setIndex] = useState(initialIndex);
   const [zoomed, setZoomed] = useState(false);
   const [presented, setPresented] = useState(false);
+  const [stageHeight, setStageHeight] = useState(0);
   const current = pages[index];
   const currentUrl = useStorageUrl(visible ? current?.storageId : null);
 
@@ -253,17 +270,19 @@ export default function DocumentPageBrowser({ visible, title, pages, initialInde
         initialScrollIndex={Math.min(initialIndex, Math.max(0, pages.length - 1))}
         getItemLayout={(_, i) => ({ length: width, offset: width * i, index: i })}
         onMomentumScrollEnd={onScrollEnd}
-        // Swiping pauses while a photo is zoomed so panning moves the photo
+        // Swiping pauses while a photo or PDF is zoomed so panning moves the page
         scrollEnabled={!zoomed && pages.length > 1}
-        // Re-render when the current page changes (documents mount only when current)
-        extraData={index}
+        // Re-render when the current page changes (documents mount only when current) or the stage resizes
+        extraData={`${index}:${stageHeight}`}
+        // Pages get the measured stage height: on web a horizontal list's cells don't stretch,
+        // so flex: 1 collapsed pages to their content height
+        onLayout={(e) => setStageHeight(e.nativeEvent.layout.height)}
         renderItem={({ item, index: i }) => (
-          <View style={{ width, flex: 1 }}>
+          <View style={[{ width }, stageHeight > 0 ? { height: stageHeight } : styles.fill]}>
             <BrowserPage
               page={item}
               isCurrent={i === index}
               presented={presented}
-              title={title}
               onZoomChange={setZoomed}
             />
           </View>
@@ -314,9 +333,10 @@ export default function DocumentPageBrowser({ visible, title, pages, initialInde
     </TouchableOpacity>
   );
 
-  // Android: the shared bottom sheet (drag the grabber to resize or close; Back closes) with a
-  // Material-style header. The sheet pads the bottom safe area itself.
-  if (Platform.OS === 'android') {
+  // Android and phone web: the shared bottom sheet (Android: drag the grabber to resize or close,
+  // Back closes; web: tap the backdrop or X) with a Material-style header. The sheet pads the
+  // bottom safe area itself.
+  if (PRESENT_AS_BOTTOM_SHEET) {
     return (
       <IosFormSheet
         visible={visible}
@@ -326,7 +346,8 @@ export default function DocumentPageBrowser({ visible, title, pages, initialInde
         minHeightPercent={0.5}
         keyboardAware={false}
       >
-        <View style={styles.materialHeader}>
+        {/* Web sheets have no grabber above the header, so it needs its own top padding */}
+        <View style={[styles.materialHeader, Platform.OS === 'web' && styles.materialHeaderWeb]}>
           <TouchableOpacity
             onPress={onClose}
             style={styles.materialClose}
@@ -488,6 +509,9 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#d1d5db',
+  },
+  materialHeaderWeb: {
+    paddingTop: 12,
   },
   materialClose: {
     width: 40,

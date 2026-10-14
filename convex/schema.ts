@@ -29,6 +29,8 @@ export default defineSchema({
     pdfUrl: v.optional(v.string()),
     /** Convex file storage ID for attached document or optimized image */
     fileStorageId: v.optional(v.string()),
+    /** Admin-set display position (lower first). Unset = newest first, above ordered ones */
+    sortOrder: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_category", ["category"]),

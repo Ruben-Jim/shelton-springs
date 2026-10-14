@@ -18,14 +18,24 @@ async function withFileContentType(ctx: QueryCtx, covenants: Doc<"covenants">[])
   );
 }
 
+/**
+ * Display order: covenants the admin hasn't positioned yet (new ones) come first, newest
+ * first, then the admin's arrangement by sortOrder. With no sortOrder set anywhere this is
+ * the original newest-first order.
+ */
+async function getOrderedCovenants(ctx: QueryCtx) {
+  const covenants = await ctx.db.query("covenants").order("desc").collect();
+  const unordered = covenants.filter((covenant) => covenant.sortOrder === undefined);
+  const ordered = covenants
+    .filter((covenant) => covenant.sortOrder !== undefined)
+    .sort((a, b) => a.sortOrder! - b.sortOrder!);
+  return [...unordered, ...ordered];
+}
+
 export const getAll = query({
   args: {},
   handler: async (ctx) => {
-    const covenants = await ctx.db
-      .query("covenants")
-      .order("desc")
-      .collect();
-    return covenants;
+    return await getOrderedCovenants(ctx);
   },
 });
 
@@ -40,10 +50,7 @@ export const getPaginated = query({
     const offset = args.offset ?? 0;
     
     // Get total count
-    const allCovenants = await ctx.db
-      .query("covenants")
-      .order("desc")
-      .collect();
+    const allCovenants = await getOrderedCovenants(ctx);
     const total = allCovenants.length;
     
     // Get paginated covenants
@@ -152,9 +159,40 @@ export const update = mutation({
       lastUpdated: updates.lastUpdated ?? existing.lastUpdated,
       pdfUrl: nextPdfUrl,
       fileStorageId: nextFileStorageId,
+      sortOrder: existing.sortOrder,
       createdAt: existing.createdAt,
       updatedAt: now,
     });
+  },
+});
+
+// Move a covenant one place up or down in the display order (admin arrows)
+export const move = mutation({
+  args: {
+    id: v.id("covenants"),
+    direction: v.union(v.literal("up"), v.literal("down")),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const covenants = await getOrderedCovenants(ctx);
+    const index = covenants.findIndex((covenant) => covenant._id === args.id);
+    if (index === -1) {
+      throw new Error("Covenant not found");
+    }
+    const target = args.direction === "up" ? index - 1 : index + 1;
+    if (target < 0 || target >= covenants.length) return null;
+
+    [covenants[index], covenants[target]] = [covenants[target], covenants[index]];
+
+    // Number the whole list so every covenant has a fixed position from now on
+    await Promise.all(
+      covenants.map((covenant, position) =>
+        covenant.sortOrder === position
+          ? null
+          : ctx.db.patch(covenant._id, { sortOrder: position })
+      )
+    );
+    return null;
   },
 });
 

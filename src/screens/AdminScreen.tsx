@@ -605,6 +605,7 @@ const AdminScreen = () => {
   // Covenant management mutations
   const createCovenant = useGuardedMutation(api.covenants.create);
   const updateCovenant = useGuardedMutation(api.covenants.update);
+  const moveCovenant = useGuardedMutation(api.covenants.move);
   const updateCcrsPdf = useGuardedMutation(api.hoaInfo.updateCcrsPdf);
   
   // Poll management mutations
@@ -2093,6 +2094,16 @@ const AdminScreen = () => {
     animateIn('covenant');
   };
 
+  // Arrows on the admin cards set the order residents see on HOA > Covenants
+  const handleMoveCovenant = async (covenant: any, direction: 'up' | 'down') => {
+    try {
+      await moveCovenant({ id: covenant._id, direction });
+    } catch (error) {
+    if (isTestUserReadOnlyError(error)) return;
+      Alert.alert('Error', 'Failed to move covenant. Please try again.');
+    }
+  };
+
   const handleUpdateCovenant = async () => {
     try {
       if (!covenantForm.title || !covenantForm.description) {
@@ -3225,6 +3236,9 @@ const AdminScreen = () => {
             ) : (
               <AdminGrid>
                 {covenants.map((item: any, index: number) => {
+                  // Ends of the full list (the server moves across all covenants, not just this page)
+                  const isFirstCovenant = index === 0;
+                  const isLastCovenant = index === (covenantsData?.total ?? covenants.length) - 1;
                   // Determine covenant icon and color based on category
                   let covenantIcon = 'document-text';
                   let covenantColor = '#6b7280';
@@ -3303,6 +3317,22 @@ const AdminScreen = () => {
                           {/* Action Buttons */}
                           <View style={[styles.residentGridActions, styles.covenantGridActions]}>
                             <View style={styles.boardActionButtons}>
+                              <TouchableOpacity
+                                style={[styles.boardActionButton, styles.covenantMoveButton, isFirstCovenant && styles.covenantMoveButtonDisabled]}
+                                onPress={() => handleMoveCovenant(item, 'up')}
+                                disabled={isFirstCovenant}
+                                accessibilityLabel={`Move ${item.title} up`}
+                              >
+                                <Ionicons name="arrow-up" size={14} color={isFirstCovenant ? '#d1d5db' : '#374151'} />
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={[styles.boardActionButton, styles.covenantMoveButton, isLastCovenant && styles.covenantMoveButtonDisabled]}
+                                onPress={() => handleMoveCovenant(item, 'down')}
+                                disabled={isLastCovenant}
+                                accessibilityLabel={`Move ${item.title} down`}
+                              >
+                                <Ionicons name="arrow-down" size={14} color={isLastCovenant ? '#d1d5db' : '#374151'} />
+                              </TouchableOpacity>
                               <AttachmentViewButton
                                 fileStorageId={item.fileStorageId}
                                 pdfUrl={item.pdfUrl}
@@ -8858,6 +8888,12 @@ const styles = StyleSheet.create({
   covenantCategoryBadge: {
     marginTop: 4,
     marginBottom: 4,
+  },
+  covenantMoveButton: {
+    backgroundColor: '#f3f4f6',
+  },
+  covenantMoveButtonDisabled: {
+    backgroundColor: '#f9fafb',
   },
   covenantGridActions: {
     marginTop: 'auto',
