@@ -33,7 +33,7 @@
     "production": {
       "android": {
         "track": "production",
-        "serviceAccountKeyPath": "./credentials/shelton-springs-35b0fbc3c527.json"
+        "serviceAccountKeyPath": "/Users/ruben/keys/shelton-springs-play-service-account.json"
       },
       "ios": {
         "appleId": "ruben0574846@icloud.com",
