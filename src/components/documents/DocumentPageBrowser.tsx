@@ -22,6 +22,7 @@ import { openDocument } from '../../utils/openDocument';
 import type { DocumentAttachment } from '../../utils/documentUpload';
 import ZoomableImage from './ZoomableImage';
 import WebPdfView from './WebPdfView';
+import AndroidPdfView from './AndroidPdfView';
 import IosFormSheet from '../ios/IosFormSheet';
 import { canPreviewInline, getPageFileType, PAGE_FILE_LABELS } from './documentPages';
 
@@ -114,21 +115,12 @@ const ExternalPage = ({ page }: { page: DocumentAttachment }) => {
   );
 };
 
-/** Android inline PDF via react-native-pdf (PDFium): fast scroll and pinch zoom. */
-const AndroidPdfView = ({ page, url }: { page: DocumentAttachment; url: string }) => {
-  const Pdf = require('react-native-pdf').default as typeof import('react-native-pdf').default;
+/** Android inline PDF (PDFium, see AndroidPdfView.android.tsx). */
+const AndroidPdfPage = ({ page, url }: { page: DocumentAttachment; url: string }) => {
   const [failed, setFailed] = useState(false);
   // If the renderer can't open this file, fall back to the Chrome tab
   if (failed) return <ExternalPage page={page} />;
-  return (
-    <Pdf
-      source={{ uri: url, cache: true }}
-      style={styles.pdf}
-      trustAllCerts={false}
-      renderActivityIndicator={() => <ActivityIndicator color={ACCENT} />}
-      onError={() => setFailed(true)}
-    />
-  );
+  return <AndroidPdfView url={url} onError={() => setFailed(true)} />;
 };
 
 const InlineDocPage = ({ page }: { page: DocumentAttachment }) => {
@@ -140,7 +132,7 @@ const InlineDocPage = ({ page }: { page: DocumentAttachment }) => {
       </View>
     );
   }
-  if (Platform.OS === 'android') return <AndroidPdfView page={page} url={url} />;
+  if (Platform.OS === 'android') return <AndroidPdfPage page={page} url={url} />;
   return <NativeDocView url={url} />;
 };
 
@@ -591,10 +583,5 @@ const styles = StyleSheet.create({
   hintAction: {
     color: ACCENT,
     fontWeight: '600',
-  },
-  pdf: {
-    flex: 1,
-    width: '100%',
-    backgroundColor: '#f3f4f6',
   },
 });

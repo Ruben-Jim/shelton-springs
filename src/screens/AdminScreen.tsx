@@ -32,6 +32,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery } from 'convex/react';
 import { useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
+import { addressLabel, householdKey, matchesSearch } from '../../convex/householdKey';
 import { useAuth } from '../context/AuthContext';
 import { useGuardedMutation, useIsTestUserReadOnly, isTestUserReadOnlyError } from '../hooks/useGuardedMutation';
 import { useCachedResidents, useCachedHoaInfo } from '../context/QueryCacheContext';
@@ -296,10 +297,10 @@ const AdminScreen = () => {
   const feesByUserId = useMemo(() => {
     const map = new Map<string, any[]>();
     
-    // First, build address map for homeowners
+    // First, build household map for homeowners (spellings of one address share a key)
     const addressMap = new Map<string, string[]>();
     homeownersList.forEach((homeowner: any) => {
-      const addressKey = `${homeowner.address}${homeowner.unitNumber ? ` Unit ${homeowner.unitNumber}` : ''}`;
+      const addressKey = householdKey(homeowner.address, homeowner.unitNumber);
       if (!addressMap.has(addressKey)) {
         addressMap.set(addressKey, []);
       }
@@ -312,7 +313,7 @@ const AdminScreen = () => {
       
       // If fee has an address, add it to all homeowners at that address
       if (fee.address) {
-        const homeownerIds = addressMap.get(fee.address) || [];
+        const homeownerIds = addressMap.get(householdKey(fee.address)) || [];
         homeownerIds.forEach((homeownerId: string) => {
           const userIdString = String(homeownerId);
           const existing = map.get(userIdString) || [];
@@ -392,22 +393,21 @@ const AdminScreen = () => {
     });
   }, [homeownersPaymentStatus, feesByUserId, finesByResidentId]);
 
-  // Group homeowners by address (including unit number)
+  // Group homeowners by household (address + unit, however each person typed it)
   const homeownersGroupedByAddress = useMemo(() => {
     const addressMap = new Map<string, any[]>();
-    
+
     homeownersPaymentStatus.forEach((homeowner: any) => {
-      // Create address key: address + unitNumber (if present)
-      const addressKey = `${homeowner.address}${homeowner.unitNumber ? ` Unit ${homeowner.unitNumber}` : ''}`;
-      
-      if (!addressMap.has(addressKey)) {
-        addressMap.set(addressKey, []);
+      const key = householdKey(homeowner.address, homeowner.unitNumber);
+
+      if (!addressMap.has(key)) {
+        addressMap.set(key, []);
       }
-      addressMap.get(addressKey)!.push(homeowner);
+      addressMap.get(key)!.push(homeowner);
     });
-    
+
     // Convert map to array of grouped addresses
-    return Array.from(addressMap.entries()).map(([addressKey, homeowners]) => {
+    return Array.from(addressMap.entries()).map(([key, homeowners]) => {
       // Aggregate records for all homeowners at this address.
       // Use maps keyed by _id to prevent duplicates when household-level
       // records (e.g., address-based annual fees) are attached to each homeowner.
@@ -493,7 +493,9 @@ const AdminScreen = () => {
       });
       
       return {
-        addressKey,
+        householdKey: key,
+        // Display text (and what new fee rows store); the first resident's spelling
+        addressKey: addressLabel(homeowners[0]),
         address: homeowners[0].address,
         unitNumber: homeowners[0].unitNumber,
         homeowners,
@@ -776,12 +778,12 @@ const AdminScreen = () => {
 
   // Keep homeowner full-record modal data in sync when fees/payments/fines update (e.g. admin edit)
   useEffect(() => {
-    if (!showHomeownerRecordsModal || !selectedHomeownerGroup?.addressKey) return;
+    if (!showHomeownerRecordsModal || !selectedHomeownerGroup?.householdKey) return;
     const next = homeownersGroupedByAddress.find(
-      (g: any) => g.addressKey === selectedHomeownerGroup.addressKey,
+      (g: any) => g.householdKey === selectedHomeownerGroup.householdKey,
     );
     if (next) setSelectedHomeownerGroup(next);
-  }, [homeownersGroupedByAddress, showHomeownerRecordsModal, selectedHomeownerGroup?.addressKey]);
+  }, [homeownersGroupedByAddress, showHomeownerRecordsModal, selectedHomeownerGroup?.householdKey]);
 
   const [paymentForm, setPaymentForm] = useState({
     homeownerId: '',
@@ -799,8 +801,10 @@ const AdminScreen = () => {
 
   // Homeowners grid sort (client-side only - no Convex cost)
   const [feesGridSortOrder, setFeesGridSortOrder] = useState<'alphabet' | 'paid' | 'pending' | 'clear'>('alphabet');
+  // Find a house by any resident's name or the address, however it was typed
+  const [feesGridSearch, setFeesGridSearch] = useState('');
 
-  // Sorted and filtered homeowners grid (client-side only - no Convex cost)
+  // Sorted, filtered and searched homeowners grid (client-side only - no Convex cost)
   const sortedHomeownersGroupedByAddress = useMemo(() => {
     const getSortKey = (g: (typeof homeownersGroupedByAddress)[0]) => {
       const isClear = g.fees.length === 0 && g.fines.length === 0;
@@ -812,20 +816,27 @@ const AdminScreen = () => {
     const nameSort = (a: (typeof homeownersGroupedByAddress)[0], b: (typeof homeownersGroupedByAddress)[0]) =>
       getSortKey(a).firstNameKey.localeCompare(getSortKey(b).firstNameKey);
 
+    const matching = homeownersGroupedByAddress.filter((g) =>
+      matchesSearch(feesGridSearch, [
+        g.householdKey,
+        ...g.homeowners.map((h: any) => `${h.firstName} ${h.lastName} ${addressLabel(h)}`),
+      ]),
+    );
+
     if (feesGridSortOrder === 'alphabet') {
-      return [...homeownersGroupedByAddress].sort(nameSort);
+      return [...matching].sort(nameSort);
     }
     if (feesGridSortOrder === 'paid') {
-      return [...homeownersGroupedByAddress].filter((g) => getSortKey(g).isPaid).sort(nameSort);
+      return matching.filter((g) => getSortKey(g).isPaid).sort(nameSort);
     }
     if (feesGridSortOrder === 'pending') {
-      return [...homeownersGroupedByAddress].filter((g) => getSortKey(g).isPending).sort(nameSort);
+      return matching.filter((g) => getSortKey(g).isPending).sort(nameSort);
     }
     if (feesGridSortOrder === 'clear') {
-      return [...homeownersGroupedByAddress].filter((g) => getSortKey(g).isClear).sort(nameSort);
+      return matching.filter((g) => getSortKey(g).isClear).sort(nameSort);
     }
-    return homeownersGroupedByAddress;
-  }, [homeownersGroupedByAddress, feesGridSortOrder]);
+    return matching;
+  }, [homeownersGroupedByAddress, feesGridSortOrder, feesGridSearch]);
 
   // Residents grid sort (client-side only - no Convex cost)
   const [residentsGridSortOrder, setResidentsGridSortOrder] = useState<'alphabet' | 'blocked' | 'board' | 'homeowner' | 'renter' | 'developer'>('alphabet');
@@ -1828,8 +1839,8 @@ const AdminScreen = () => {
       }
 
       // Find the homeowner ID for the selected address
-      const selectedHomeowner = homeownersPaymentStatus?.find(homeowner => 
-        `${homeowner.address}${homeowner.unitNumber ? ` Unit ${homeowner.unitNumber}` : ''}` === fineForm.selectedAddress
+      const selectedHomeowner = homeownersPaymentStatus?.find(homeowner =>
+        addressLabel(homeowner) === fineForm.selectedAddress
       );
 
       if (!selectedHomeowner) {
@@ -2012,15 +2023,16 @@ const AdminScreen = () => {
     if (!homeownersPaymentStatus) return [];
     
     const addresses = homeownersPaymentStatus.map(homeowner => ({
-      address: `${homeowner.address}${homeowner.unitNumber ? ` Unit ${homeowner.unitNumber}` : ''}`,
-      fullAddress: `${homeowner.address}${homeowner.unitNumber ? ` Unit ${homeowner.unitNumber}` : ''}`,
+      address: addressLabel(homeowner),
+      fullAddress: addressLabel(homeowner),
+      household: householdKey(homeowner.address, homeowner.unitNumber),
       homeownerId: homeowner._id,
       homeownerName: `${homeowner.firstName} ${homeowner.lastName}`
     }));
-    
-    // Remove duplicates based on address
-    const uniqueAddresses = addresses.filter((address, index, self) => 
-      index === self.findIndex(a => a.address === address.address)
+
+    // One entry per household, however each resident typed the address
+    const uniqueAddresses = addresses.filter((address, index, self) =>
+      index === self.findIndex(a => a.household === address.household)
     );
     
     return uniqueAddresses;
@@ -4329,46 +4341,97 @@ const AdminScreen = () => {
             
             {/* Fees and Fines Status Grid */}
             <View style={isMobileDevice || screenWidth < 768 ? styles.feesGridContainerMobile : {}}>
-              {sortedHomeownersGroupedByAddress.length > 0 && (
-                <View style={styles.feesGridSortRow}>
-                  <Text style={styles.feesGridSortLabel}>Sort:</Text>
-                  <TouchableOpacity
-                    style={[styles.feesGridSortOption, feesGridSortOrder === 'alphabet' && styles.feesGridSortOptionActive]}
-                    onPress={() => setFeesGridSortOrder('alphabet')}
-                  >
-                    <Ionicons name="reorder-three" size={16} color={feesGridSortOrder === 'alphabet' ? '#ffffff' : '#6b7280'} />
-                    <Text style={[styles.feesGridSortOptionText, feesGridSortOrder === 'alphabet' && styles.feesGridSortOptionTextActive]}>Alphabet</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.feesGridSortOption, feesGridSortOrder === 'paid' && styles.feesGridSortOptionActive]}
-                    onPress={() => setFeesGridSortOrder('paid')}
-                  >
-                    <Ionicons name="checkmark-circle" size={16} color={feesGridSortOrder === 'paid' ? '#ffffff' : '#10b981'} />
-                    <Text style={[styles.feesGridSortOptionText, feesGridSortOrder === 'paid' && styles.feesGridSortOptionTextActive]}>Paid</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.feesGridSortOption, feesGridSortOrder === 'pending' && styles.feesGridSortOptionActive]}
-                    onPress={() => setFeesGridSortOrder('pending')}
-                  >
-                    <Ionicons name="time" size={16} color={feesGridSortOrder === 'pending' ? '#ffffff' : '#f59e0b'} />
-                    <Text style={[styles.feesGridSortOptionText, feesGridSortOrder === 'pending' && styles.feesGridSortOptionTextActive]}>Pending</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.feesGridSortOption, feesGridSortOrder === 'clear' && styles.feesGridSortOptionActive]}
-                    onPress={() => setFeesGridSortOrder('clear')}
-                  >
-                    <Ionicons name="card" size={16} color={feesGridSortOrder === 'clear' ? '#ffffff' : '#6b7280'} />
-                    <Text style={[styles.feesGridSortOptionText, feesGridSortOrder === 'clear' && styles.feesGridSortOptionTextActive]}>Clear</Text>
-                  </TouchableOpacity>
+              {/* Shown whenever any house exists, so a search or filter with no matches can be undone */}
+              {homeownersGroupedByAddress.length > 0 && (
+                <View style={styles.feesGridToolbar}>
+                  {/* Phone: its own full-width row; desktop: fixed width beside the sort buttons */}
+                  <View style={[styles.feesGridSearch, !isMobileDevice && screenWidth >= 768 && styles.feesGridSearchWide]}>
+                    <Ionicons name="search" size={18} color="#6b7280" />
+                    <TextInput
+                      style={styles.feesGridSearchInput}
+                      placeholder="Search name or address"
+                      placeholderTextColor="#9ca3af"
+                      value={feesGridSearch}
+                      onChangeText={setFeesGridSearch}
+                      autoCorrect={false}
+                      autoCapitalize="none"
+                      returnKeyType="search"
+                      accessibilityLabel="Search houses by resident name or address"
+                    />
+                    {feesGridSearch.length > 0 && (
+                      <TouchableOpacity
+                        onPress={() => setFeesGridSearch('')}
+                        hitSlop={10}
+                        accessibilityRole="button"
+                        accessibilityLabel="Clear search"
+                      >
+                        <Ionicons name="close-circle" size={20} color="#9ca3af" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <View style={[styles.feesGridSortRow, styles.feesGridSortRowInToolbar]}>
+                    <Text style={styles.feesGridSortLabel}>Sort:</Text>
+                    <TouchableOpacity
+                      style={[styles.feesGridSortOption, feesGridSortOrder === 'alphabet' && styles.feesGridSortOptionActive]}
+                      onPress={() => setFeesGridSortOrder('alphabet')}
+                    >
+                      <Ionicons name="reorder-three" size={16} color={feesGridSortOrder === 'alphabet' ? '#ffffff' : '#6b7280'} />
+                      <Text style={[styles.feesGridSortOptionText, feesGridSortOrder === 'alphabet' && styles.feesGridSortOptionTextActive]}>Alphabet</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.feesGridSortOption, feesGridSortOrder === 'paid' && styles.feesGridSortOptionActive]}
+                      onPress={() => setFeesGridSortOrder('paid')}
+                    >
+                      <Ionicons name="checkmark-circle" size={16} color={feesGridSortOrder === 'paid' ? '#ffffff' : '#10b981'} />
+                      <Text style={[styles.feesGridSortOptionText, feesGridSortOrder === 'paid' && styles.feesGridSortOptionTextActive]}>Paid</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.feesGridSortOption, feesGridSortOrder === 'pending' && styles.feesGridSortOptionActive]}
+                      onPress={() => setFeesGridSortOrder('pending')}
+                    >
+                      <Ionicons name="time" size={16} color={feesGridSortOrder === 'pending' ? '#ffffff' : '#f59e0b'} />
+                      <Text style={[styles.feesGridSortOptionText, feesGridSortOrder === 'pending' && styles.feesGridSortOptionTextActive]}>Pending</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.feesGridSortOption, feesGridSortOrder === 'clear' && styles.feesGridSortOptionActive]}
+                      onPress={() => setFeesGridSortOrder('clear')}
+                    >
+                      <Ionicons name="card" size={16} color={feesGridSortOrder === 'clear' ? '#ffffff' : '#6b7280'} />
+                      <Text style={[styles.feesGridSortOptionText, feesGridSortOrder === 'clear' && styles.feesGridSortOptionTextActive]}>Clear</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               )}
-              {sortedHomeownersGroupedByAddress.length === 0 ? (
+              {homeownersGroupedByAddress.length > 0 &&
+                (feesGridSearch.trim() !== '' || feesGridSortOrder !== 'alphabet') && (
+                  <Text style={styles.feesGridResultCount}>
+                    {sortedHomeownersGroupedByAddress.length} of {homeownersGroupedByAddress.length} houses
+                  </Text>
+                )}
+              {homeownersGroupedByAddress.length === 0 ? (
                 <View style={styles.emptyState}>
                   <Ionicons name="card" size={48} color="#9ca3af" />
                   <Text style={styles.emptyStateText}>No homeowners found</Text>
                   <Text style={styles.emptyStateSubtext}>
                     Homeowners will appear here once they are registered in the system
                   </Text>
+                </View>
+              ) : sortedHomeownersGroupedByAddress.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <Ionicons name="search" size={40} color="#9ca3af" />
+                  <Text style={styles.emptyStateText}>
+                    {feesGridSearch.trim() ? `No houses match "${feesGridSearch.trim()}"` : 'No houses in this view'}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.feesGridShowAll}
+                    onPress={() => {
+                      setFeesGridSearch('');
+                      setFeesGridSortOrder('alphabet');
+                    }}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.feesGridShowAllText}>Show all houses</Text>
+                  </TouchableOpacity>
                 </View>
               ) : (
                 <AdminGrid>
@@ -4413,7 +4476,7 @@ const AdminScreen = () => {
                     
                     return (
                       <Pressable
-                      key={addressGroup.addressKey}
+                      key={addressGroup.householdKey}
                       style={({ pressed }) => ({
                         width: itemWidth as any,
                         padding: isSingleColumn ? 0 : 8,
@@ -9255,6 +9318,63 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 16,
     marginHorizontal: 16,
+  },
+  feesGridToolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 16,
+    marginHorizontal: 16,
+  },
+  feesGridSortRowInToolbar: {
+    marginBottom: 0,
+    marginHorizontal: 0,
+  },
+  feesGridSearch: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    // Phone: the search gets its own row; the sort buttons wrap below it
+    flexBasis: '100%',
+    flexGrow: 1,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
+  feesGridSearchWide: {
+    flexBasis: 340,
+    flexGrow: 0,
+  },
+  feesGridSearchInput: {
+    flex: 1,
+    minWidth: 0,
+    // 16px keeps iPhone Safari from zooming the page when the field is tapped
+    fontSize: 16,
+    color: '#1f2937',
+    paddingVertical: 10,
+  },
+  feesGridResultCount: {
+    fontSize: 13,
+    color: '#6b7280',
+    marginTop: -6,
+    marginBottom: 12,
+    marginHorizontal: 16,
+  },
+  feesGridShowAll: {
+    marginTop: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    backgroundColor: '#eff6ff',
+  },
+  feesGridShowAllText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#2563eb',
   },
   feesGridSortLabel: {
     fontSize: 14,

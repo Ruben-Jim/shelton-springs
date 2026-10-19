@@ -1,7 +1,26 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation, DatabaseReader } from "./_generated/server";
 import { v } from "convex/values";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { api } from "./_generated/api";
+import { addressLabel, householdKey, isHouseholdFee } from "./householdKey";
+
+// A $0 row (e.g. a duplicate the treasurer zeroed out) owes nothing, whatever its status says
+const isFeeSettled = (fee: Doc<"fees">) => fee.status === "Paid" || fee.amount <= 0.01;
+
+/** Ids of the homeowners living in this household (plus `includeId`, if given). */
+async function householdMemberIds(
+  ctx: { db: DatabaseReader },
+  household: string,
+  includeId?: string
+) {
+  const residents = await ctx.db.query("residents").collect();
+  const members = residents
+    .filter(
+      (r) => r.isResident && !r.isRenter && householdKey(r.address, r.unitNumber) === household
+    )
+    .map((r) => String(r._id));
+  return new Set(includeId ? [includeId, ...members] : members);
+}
 
 export const getAll = query({
   args: {},
@@ -101,7 +120,7 @@ export const remove = mutation({
 
     const linkedPayments = await ctx.db
       .query("payments")
-      .filter((q) => q.eq(q.field("feeId"), args.id))
+      .withIndex("by_fee", (q) => q.eq("feeId", args.id))
       .collect();
 
     const now = Date.now();
@@ -199,56 +218,51 @@ export const hasPaidAnnualFee = query({
   handler: async (ctx, args) => {
     const currentYear = new Date().getFullYear();
     // If there are any unpaid fines, the user is not fully paid
-    const unpaidFines = await ctx.db
-      .query("fines")
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("residentId"), args.userId),
-          q.neq(q.field("status"), "Paid")
-        )
-      )
-      .collect();
+    const unpaidFines = (
+      await ctx.db
+        .query("fines")
+        .withIndex("by_resident", (q) => q.eq("residentId", args.userId))
+        .collect()
+    ).filter((fine) => fine.status !== "Paid");
     if (unpaidFines.length > 0) return false;
 
     // Resolve resident for address-based fee lookup. Demo/review string ids
     // (e.g. "demo_user_board_1") are not Convex document ids — skip db.get.
     const residentId = ctx.db.normalizeId("residents", args.userId);
     const user = residentId ? await ctx.db.get(residentId) : null;
-    const addressKey = user
-      ? `${user.address}${user.unitNumber ? ` Unit ${user.unitNumber}` : ''}`
-      : null;
+    const userHousehold = user ? householdKey(user.address, user.unitNumber) : null;
+    const memberIds =
+      user && userHousehold
+        ? await householdMemberIds(ctx, userHousehold, String(user._id))
+        : new Set<string>();
+    const isUserHousehold = (fee: Doc<"fees">) =>
+      !!userHousehold && isHouseholdFee(fee, userHousehold, memberIds);
 
-    // Prefer explicit fee records when present (check by address first, then userId)
-    let userAnnualFees = addressKey
-      ? await ctx.db
-          .query("fees")
-          .filter((q) =>
-            q.and(
-              q.eq(q.field("address"), addressKey),
-              q.eq(q.field("frequency"), "Annually"),
-              q.eq(q.field("year"), currentYear)
+    // Prefer explicit fee records when present (check by household first, then userId)
+    let userAnnualFees = userHousehold
+      ? (
+          await ctx.db
+            .query("fees")
+            .withIndex("by_frequency_year", (q) =>
+              q.eq("frequency", "Annually").eq("year", currentYear)
             )
-          )
-          .collect()
+            .collect()
+        ).filter(isUserHousehold)
       : [];
 
     // Fall back to userId if no address-based fees found (backward compatibility)
     if (userAnnualFees.length === 0) {
-      userAnnualFees = await ctx.db
-        .query("fees")
-        .filter((q) =>
-          q.and(
-            q.eq(q.field("userId"), args.userId),
-            q.eq(q.field("frequency"), "Annually"),
-            q.eq(q.field("year"), currentYear)
-          )
-        )
-        .collect();
+      userAnnualFees = (
+        await ctx.db
+          .query("fees")
+          .withIndex("by_user", (q) => q.eq("userId", args.userId))
+          .collect()
+      ).filter((fee) => fee.frequency === "Annually" && fee.year === currentYear);
     }
 
     if (userAnnualFees.length > 0) {
       // User is fully paid only if all annual fees for the year are Paid
-      const allAnnualFeesPaid = userAnnualFees.every((fee) => fee.status === "Paid");
+      const allAnnualFeesPaid = userAnnualFees.every(isFeeSettled);
       return allAnnualFeesPaid;
     }
 
@@ -268,24 +282,22 @@ export const hasPaidAnnualFee = query({
 
     // Check if all fees for the user are covered by verified payments
     // Check fees by address first, then userId
-    let userFees = addressKey
-      ? await ctx.db
-          .query("fees")
-          .filter((q) => q.eq(q.field("address"), addressKey))
-          .collect()
+    let userFees = userHousehold
+      ? (await ctx.db.query("fees").collect()).filter(isUserHousehold)
       : [];
-    
+
     if (userFees.length === 0) {
       userFees = await ctx.db
         .query("fees")
-        .filter((q) => q.eq(q.field("userId"), args.userId))
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
         .collect();
     }
 
     // If user has fees, check if all are paid via verified payments
     if (userFees.length > 0) {
-      const allFeesCovered = userFees.every((fee) => 
-        verifiedPaidPayments.some((payment) => 
+      const allFeesCovered = userFees.every((fee) =>
+        fee.amount <= 0.01 ||
+        verifiedPaidPayments.some((payment) =>
           payment.feeId === fee._id && payment.status === "Paid" && payment.verificationStatus === "Verified"
         )
       );
@@ -320,11 +332,10 @@ export const getAllHomeownersPaymentStatus = query({
     // Filter to only include homeowners (isResident = true and not renters)
     const homeowners = residents.filter(resident => resident.isResident && !resident.isRenter);
     
-    // Build address key for each homeowner
+    // Build household key for each homeowner (spellings of one address share a key)
     const addressKeyMap = new Map<string, string>();
     for (const homeowner of homeowners) {
-      const addressKey = `${homeowner.address}${homeowner.unitNumber ? ` Unit ${homeowner.unitNumber}` : ''}`;
-      addressKeyMap.set(homeowner._id, addressKey);
+      addressKeyMap.set(homeowner._id, householdKey(homeowner.address, homeowner.unitNumber));
     }
     
     // Get all homeowners at each address
@@ -340,23 +351,23 @@ export const getAllHomeownersPaymentStatus = query({
     const homeownersWithPaymentStatus = await Promise.all(
       homeowners.map(async (homeowner) => {
         // Determine paid status based on unpaid items (fees + fines)
-        const unpaidFines = await ctx.db
-          .query("fines")
-          .filter((q) =>
-            q.and(
-              q.eq(q.field("residentId"), homeowner._id),
-              q.neq(q.field("status"), "Paid")
-            )
-          )
-          .collect();
+        const unpaidFines = (
+          await ctx.db
+            .query("fines")
+            .withIndex("by_resident", (q) => q.eq("residentId", homeowner._id))
+            .collect()
+        ).filter((fine) => fine.status !== "Paid");
 
         // Get address key for this homeowner
         const addressKey = addressKeyMap.get(homeowner._id)!;
         
-        // Find fees by address (for households with multiple residents)
+        // Find the household's fees (for households with multiple residents)
+        const memberIds = new Set(
+          (homeownersByAddress.get(addressKey) ?? [homeowner]).map((h) => String(h._id))
+        );
         const addressAnnualFees = allFees.filter(
           (fee) =>
-            fee.address === addressKey &&
+            isHouseholdFee(fee, addressKey, memberIds) &&
             fee.year === currentYear &&
             fee.frequency === "Annually"
         );
@@ -374,7 +385,7 @@ export const getAllHomeownersPaymentStatus = query({
         // If there are explicit annual fee records, require all to be Paid
         let hasPaid = false;
         if (userAnnualFees.length > 0) {
-          const allAnnualFeesPaid = userAnnualFees.every((fee) => fee.status === "Paid");
+          const allAnnualFeesPaid = userAnnualFees.every(isFeeSettled);
           hasPaid = allAnnualFeesPaid && unpaidFines.length === 0;
         } else {
           // Fallback to payment records
@@ -450,11 +461,10 @@ export const createYearFeesForAllHomeowners = mutation({
     // Filter to only include homeowners (isResident = true and not renters)
     const homeowners = residents.filter(resident => resident.isResident && !resident.isRenter);
     
-    // Group homeowners by address (including unit number)
+    // Group homeowners by household (address + unit, however it was typed)
     const addressMap = new Map<string, typeof homeowners>();
     for (const homeowner of homeowners) {
-      // Create address key: address + unitNumber (if present)
-      const addressKey = `${homeowner.address}${homeowner.unitNumber ? ` Unit ${homeowner.unitNumber}` : ''}`;
+      const addressKey = householdKey(homeowner.address, homeowner.unitNumber);
       
       if (!addressMap.has(addressKey)) {
         addressMap.set(addressKey, []);
@@ -465,18 +475,15 @@ export const createYearFeesForAllHomeowners = mutation({
     // Check for existing fees for this year to avoid duplicates
     const existingFees = await ctx.db
       .query("fees")
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("frequency"), "Annually"),
-          q.eq(q.field("year"), args.year)
-        )
+      .withIndex("by_frequency_year", (q) =>
+        q.eq("frequency", "Annually").eq("year", args.year)
       )
       .collect();
     
     const existingAddresses = new Set(
       existingFees
         .filter(fee => fee.address)
-        .map(fee => fee.address!)
+        .map(fee => householdKey(fee.address))
     );
     const existingUserIds = new Set(
       existingFees
@@ -511,7 +518,7 @@ export const createYearFeesForAllHomeowners = mutation({
         description: args.description,
         isLate: false, // Initially not late
         userId: primaryHomeownerId, // Link to primary homeowner for backward compatibility
-        address: addressKey, // Store address to group fees by household
+        address: addressLabel(homeownersAtAddress[0]), // Matched to the household via householdKey()
         year: args.year,
         createdAt: now,
         updatedAt: now,
@@ -558,15 +565,14 @@ export const createAnnualFeeForAddress = mutation({
   handler: async (ctx, args) => {
     const existingFees = await ctx.db
       .query("fees")
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("frequency"), "Annually"),
-          q.eq(q.field("year"), args.year)
-        )
+      .withIndex("by_frequency_year", (q) =>
+        q.eq("frequency", "Annually").eq("year", args.year)
       )
       .collect();
 
-    if (existingFees.some((f) => f.address === args.addressKey)) {
+    const household = householdKey(args.addressKey);
+    const memberIds = await householdMemberIds(ctx, household, String(args.primaryResidentId));
+    if (existingFees.some((f) => isHouseholdFee(f, household, memberIds))) {
       throw new Error(
         `An annual fee for ${args.year} already exists for this address.`
       );
@@ -638,19 +644,16 @@ export const ensureAnnualFeeForHomeowner = mutation({
     const year = args.year ?? new Date().getFullYear();
     const amount = args.amount ?? 300;
     const description = args.description ?? "Annual HOA Fee";
-    const addressKey = `${resident.address}${resident.unitNumber ? ` Unit ${resident.unitNumber}` : ""}`;
+    const household = householdKey(resident.address, resident.unitNumber);
 
     const annualForYear = await ctx.db
       .query("fees")
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("frequency"), "Annually"),
-          q.eq(q.field("year"), year)
-        )
-      )
+      .withIndex("by_frequency_year", (q) => q.eq("frequency", "Annually").eq("year", year))
       .collect();
 
-    const hasForAddress = annualForYear.some((f) => f.address === addressKey);
+    // Includes older rows saved without an address but billed to someone else in the house
+    const memberIds = await householdMemberIds(ctx, household, String(resident._id));
+    const hasForAddress = annualForYear.some((f) => isHouseholdFee(f, household, memberIds));
     const hasForUser = annualForYear.some(
       (f) => f.userId && String(f.userId) === String(resident._id)
     );
@@ -668,7 +671,7 @@ export const ensureAnnualFeeForHomeowner = mutation({
       description,
       isLate: false,
       userId: resident._id,
-      address: addressKey,
+      address: addressLabel(resident),
       year,
       createdAt: now,
       updatedAt: now,
@@ -787,7 +790,7 @@ export const getFinesForHomeowner = query({
   handler: async (ctx, args) => {
     return await ctx.db
       .query("fines")
-      .filter((q) => q.eq(q.field("residentId"), args.homeownerId))
+      .withIndex("by_resident", (q) => q.eq("residentId", args.homeownerId))
       .order("desc")
       .collect();
   },

@@ -60,7 +60,8 @@ export default defineSchema({
     )),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_user", ["userId"]).index("by_type", ["type"]),
+  }).index("by_user", ["userId"]).index("by_type", ["type"])
+    .index("by_frequency_year", ["frequency", "year"]),
 
   fines: defineTable({
     violation: v.string(),
@@ -76,7 +77,7 @@ export default defineSchema({
     residentId: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }),
+  }).index("by_resident", ["residentId"]),
 
   communityPosts: defineTable({
     author: v.string(),
@@ -200,7 +201,8 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_user", ["userId"])
-    .index("by_transaction", ["transactionId"]),
+    .index("by_transaction", ["transactionId"])
+    .index("by_fee", ["feeId"]),
 
   polls: defineTable({
     title: v.string(),

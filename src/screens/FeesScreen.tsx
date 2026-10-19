@@ -21,6 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
+import { householdKey, isHouseholdFee } from '../../convex/householdKey';
 import { useAuth } from '../context/AuthContext';
 import { useCachedResidents } from '../context/QueryCacheContext';
 import BoardMemberIndicator from '../components/BoardMemberIndicator';
@@ -232,20 +233,35 @@ const FeesScreen = () => {
   );
   const allFeesFromDatabase = feesData?.items ?? [];
   const currentUserAddressKey = currentUser
-    ? `${currentUser.address}${currentUser.unitNumber ? ` Unit ${currentUser.unitNumber}` : ''}`
+    ? householdKey(currentUser.address, currentUser.unitNumber)
     : null;
-  
+  // Homeowners in this household, so older dues rows billed to a spouse show up too
+  const householdMemberIds = useMemo(() => {
+    const ids = new Set<string>(user?._id ? [String(user._id)] : []);
+    if (currentUserAddressKey) {
+      residents.forEach((resident: any) => {
+        if (
+          resident.isResident &&
+          !resident.isRenter &&
+          householdKey(resident.address, resident.unitNumber) === currentUserAddressKey
+        ) {
+          ids.add(String(resident._id));
+        }
+      });
+    }
+    return ids;
+  }, [residents, currentUserAddressKey, user?._id]);
+
   // Filter fees for the current user (direct userId) plus household fees (address-based annual dues).
   // Annual fees are one-per-address for homeowners only — not for pure developer / guest accounts.
   const isHomeowner = Boolean(user?.isResident && !user?.isRenter);
   const fees = user && isHomeowner
     ? allFeesFromDatabase.filter((fee: any) => {
         const matchesUser = fee.userId === user._id;
-        const matchesAddress =
+        const matchesHousehold =
           !!currentUserAddressKey &&
-          !!fee.address &&
-          fee.address === currentUserAddressKey;
-        return matchesUser || matchesAddress;
+          isHouseholdFee(fee, currentUserAddressKey, householdMemberIds);
+        return matchesUser || matchesHousehold;
       })
     : [];
 

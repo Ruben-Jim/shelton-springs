@@ -28,6 +28,7 @@ import type * as emailTemplates from "../emailTemplates.js";
 import type * as fees from "../fees.js";
 import type * as fines from "../fines.js";
 import type * as hoaInfo from "../hoaInfo.js";
+import type * as householdKey from "../householdKey.js";
 import type * as http from "../http.js";
 import type * as messages from "../messages.js";
 import type * as notifications from "../notifications.js";
@@ -67,6 +68,7 @@ declare const fullApi: ApiFromModules<{
   fees: typeof fees;
   fines: typeof fines;
   hoaInfo: typeof hoaInfo;
+  householdKey: typeof householdKey;
   http: typeof http;
   messages: typeof messages;
   notifications: typeof notifications;
