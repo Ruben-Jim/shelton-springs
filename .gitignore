@@ -44,3 +44,6 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+
+# App Store asset build inputs (large; kept local, rebuilt via store-assets/app-store/build-header.sh)
+store-assets/app-store/source/
