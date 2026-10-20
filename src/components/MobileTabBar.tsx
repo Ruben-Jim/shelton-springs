@@ -66,9 +66,10 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
   const displayImage = currentUser?.profileImage;
   
   // Convex mutations
-  const updateResident = useGuardedMutation(api.residents.update);
   const generateUploadUrl = useGuardedMutation(api.storage.generateUploadUrl);
   const deleteStorageFile = useGuardedMutation(api.storage.deleteStorageFile);
+  const saveProfilePhoto = useGuardedMutation(api.residents.saveProfilePhoto);
+  const removeProfilePhoto = useGuardedMutation(api.residents.removeProfilePhoto);
   const deleteResident = useGuardedMutation(api.residents.remove);
   // Push token updates stay allowed for test / review devices
   const updatePushToken = useMutation(api.residents.updatePushToken);
@@ -261,6 +262,9 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
         headers: { 'Content-Type': mimeType },
         body: blob,
       });
+      if (!uploadResponse.ok) {
+        throw new Error(`Upload failed with status ${uploadResponse.status}`);
+      }
       const { storageId } = await uploadResponse.json();
       return storageId;
     } catch (error) {
@@ -285,17 +289,9 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
 
     try {
       setRemoving(true);
-      
-      // Delete the image from Convex storage
-      if (!currentUser.profileImage.startsWith('http')) {
-        await deleteStorageFile({ storageId: currentUser.profileImage as any });
-      }
-      
-      // Update the resident to remove the profile image reference
-      await updateResident({
-        id: currentUser._id as any,
-        profileImage: undefined,
-      });
+
+      // Clears the photo and deletes its file together on the server
+      await removeProfilePhoto({ id: currentUser._id as any });
 
       showAlert({
         title: 'Success',
@@ -331,17 +327,13 @@ const MobileTabBar = ({ isMenuOpen: externalIsMenuOpen, onMenuClose }: MobileTab
 
     try {
       setUploading(true);
-      
-      // Delete old image from storage if it exists
-      if (currentUser.profileImage && !currentUser.profileImage.startsWith('http')) {
-        await deleteStorageFile({ storageId: currentUser.profileImage as any });
-      }
-      
-      // Upload new image
+
+      // Upload first; the server then saves the new photo and deletes the old file together,
+      // so a failed upload never leaves the account pointing at a deleted file
       const storageId = await uploadImage(profileImage);
-      await updateResident({
+      await saveProfilePhoto({
         id: currentUser._id as any,
-        profileImage: storageId,
+        storageId: storageId as any,
       });
 
       showAlert({
@@ -443,18 +435,20 @@ const handleDeleteAccount = () => {
       setShowProfileModal(false);
       setProfileImage(null);
       
-      // Delete profile image from storage if exists
-      if (currentUser.profileImage && !currentUser.profileImage.startsWith('http')) {
+      const photo = currentUser.profileImage;
+
+      // Delete the resident first, so a failure here never leaves the account without its photo
+      await deleteResident({ id: currentUser._id as any });
+
+      // Then delete the profile image from storage if it exists
+      if (photo && !photo.startsWith('http')) {
         try {
-          await deleteStorageFile({ storageId: currentUser.profileImage as any });
+          await deleteStorageFile({ storageId: photo as any });
         } catch (error) {
     if (isTestUserReadOnlyError(error)) return;
-          console.log('Error deleting profile image (continuing with account deletion):', error);
+          console.log('Error deleting profile image (account already deleted):', error);
         }
       }
-      
-      // Delete the resident from Convex
-      await deleteResident({ id: currentUser._id as any });
       
       // Sign out and clear local storage
       await signOut();

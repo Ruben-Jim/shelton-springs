@@ -18,8 +18,12 @@ const CACHE_DURATION = 55 * 60 * 1000; // 55 minutes (slightly less than Convex'
  * 
  * This is especially important for components like ProfileImage that are rendered
  * many times (posts, comments, etc.) with the same storageId
+ *
+ * Returns null when the file no longer exists and undefined while loading, so an image can
+ * show its fallback instead of a spinner that never stops. useStorageUrl folds both into
+ * undefined for callers that don't need the difference.
  */
-export const useStorageUrl = (storageId: string | null | undefined): string | undefined => {
+export const useStorageUrlState = (storageId: string | null | undefined): string | null | undefined => {
   const [cachedUrl, setCachedUrl] = useState<string | undefined>(undefined);
   
   // Check cache FIRST synchronously - this is our primary check
@@ -83,13 +87,15 @@ export const useStorageUrl = (storageId: string | null | undefined): string | un
     }
   }, [storageId, urlFromQuery, cachedResult.isValid, cachedResult.url]);
 
-  // Return cached URL immediately if available (cache checked FIRST), 
-  // otherwise return from state or query result
+  // Return cached URL immediately if available (cache checked FIRST),
+  // otherwise return from state or query result (null: the file is gone)
   // Priority: cachedResult (sync check) > cachedUrl (state) > urlFromQuery (async)
-  const resolvedUrl = cachedResult.url || cachedUrl || urlFromQuery;
-
-  return resolvedUrl ?? undefined;
+  return cachedResult.url || cachedUrl || urlFromQuery;
 };
+
+/** Storage file URL, or undefined while loading or when the file no longer exists. */
+export const useStorageUrl = (storageId: string | null | undefined): string | undefined =>
+  useStorageUrlState(storageId) ?? undefined;
 
 /**
  * Batch version to get multiple URLs at once

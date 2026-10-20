@@ -1,7 +1,7 @@
 import React, { ReactNode, useMemo } from 'react';
 import { View, ActivityIndicator, StyleSheet, ViewStyle, Platform } from 'react-native';
 import { Image as ExpoImage, ImageProps as ExpoImageProps } from 'expo-image';
-import { useStorageUrl } from '../hooks/useStorageUrl';
+import { useStorageUrlState } from '../hooks/useStorageUrl';
 
 type CachePolicy = NonNullable<ExpoImageProps['cachePolicy']>;
 
@@ -63,7 +63,8 @@ const OptimizedImage = React.forwardRef<ExpoImage, OptimizedImageProps>(
       (source.includes('/') && !source.includes('://') && source.length > 20) // Likely a local file path
     );
     const directUri = isDirectUri ? source : undefined;
-    const storageUri = useStorageUrl(resolvedStorageId);
+    // null when the file was deleted: show the fallback (e.g. initials), not a spinner forever
+    const storageUri = useStorageUrlState(resolvedStorageId);
     const resolvedUri = directUri ?? storageUri;
 
     const resolvedPlaceholder = useMemo(() => {

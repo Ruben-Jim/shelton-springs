@@ -167,7 +167,8 @@ export default defineSchema({
     expoPushToken: v.optional(v.string()), // Expo push token for mobile push notifications
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_email", ["email"]),
+  }).index("by_email", ["email"])
+    .index("by_active", ["isActive"]),
 
   payments: defineTable({
     userId: v.string(),

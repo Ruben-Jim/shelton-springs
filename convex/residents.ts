@@ -1,4 +1,4 @@
-import { query, mutation, internalQuery } from "./_generated/server";
+import { query, mutation, internalQuery, MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { api } from "./_generated/api";
@@ -134,6 +134,47 @@ export const update = mutation({
   },
 });
 
+/** Deletes a stored file by id; skips legacy URLs and files that are already gone. */
+async function deleteStoredFile(ctx: MutationCtx, fileId: string) {
+  const storageId = ctx.db.system.normalizeId("_storage", fileId);
+  if (!storageId || !(await ctx.db.system.get(storageId))) return;
+  await ctx.storage.delete(storageId);
+}
+
+/**
+ * Saves a resident's new profile photo and deletes the old file in the same transaction, so
+ * the account can never be left pointing at a deleted file.
+ */
+export const saveProfilePhoto = mutation({
+  args: { id: v.id("residents"), storageId: v.id("_storage") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const resident = await ctx.db.get(args.id);
+    if (!resident) throw new Error("Resident not found");
+    const previous = resident.profileImage;
+    await ctx.db.patch(args.id, { profileImage: args.storageId, updatedAt: Date.now() });
+    if (previous && previous !== args.storageId) await deleteStoredFile(ctx, previous);
+    return null;
+  },
+});
+
+/**
+ * Clears a resident's profile photo and deletes its file. update() with profileImage: undefined
+ * can't do this: Convex drops undefined fields from function arguments, so nothing is cleared.
+ */
+export const removeProfilePhoto = mutation({
+  args: { id: v.id("residents") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const resident = await ctx.db.get(args.id);
+    if (!resident) throw new Error("Resident not found");
+    if (!resident.profileImage) return null;
+    await ctx.db.patch(args.id, { profileImage: undefined, updatedAt: Date.now() });
+    await deleteStoredFile(ctx, resident.profileImage);
+    return null;
+  },
+});
+
 // Delete resident
 export const remove = mutation({
   args: { id: v.id("residents") },
@@ -178,7 +219,7 @@ export const getActive = query({
   handler: async (ctx) => {
     const residents = await ctx.db
       .query("residents")
-      .filter((q) => q.eq(q.field("isActive"), true))
+      .withIndex("by_active", (q) => q.eq("isActive", true))
       .collect();
 
     // Return residents with profileImage storage ID (frontend will resolve URLs)
